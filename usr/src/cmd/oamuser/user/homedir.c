@@ -32,17 +32,26 @@
 #pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <userdefs.h>
 #include <errno.h>
 #include <strings.h>
+#include <string.h>
+#include <sys/mntent.h>
+#include <libgen.h>
+#include <limits.h>
 #include "messages.h"
 
-#define 	SBUFSZ	256
+#define 	SBUFSZ	(2 * PATH_MAX + 1)
+#define 	EXPORTDIR	"/export"
 
 extern int rm_homedir();
 
 static char cmdbuf[ SBUFSZ ];	/* buffer for system call */
+static char dhome[ PATH_MAX + 1 ]; /* buffer for dirname */
+static char bhome[ PATH_MAX + 1 ]; /* buffer for basename */
 
 /*
 	Create a home directory and populate with files from skeleton
@@ -55,6 +64,26 @@ create_home(char *homedir, char *skeldir, uid_t uid, gid_t gid)
 		/* uid of new user */
 		/* group id of new user */
 {
+	struct stat stbuf;
+	char *dname, *bname;
+	char *dataset = NULL;
+	FILE *fp;
+
+	(void) strcpy(dhome, homedir);
+	(void) strcpy(bhome, homedir);
+	dname = dirname(dhome);
+	bname = basename(bhome);
+
+	if ((stat(dname, &stbuf) != 0) || !S_ISDIR(stbuf.st_mode)) {
+		errmsg(M_OOPS, "access the parent directory", strerror(errno));
+		return (EX_HOMEDIR);
+	}
+
+	if (strcmp(stbuf.st_fstype, MNTTYPE_AUTOFS) == 0) {
+		(void) snprintf(homedir, PATH_MAX + 1, "%s%s/%s", EXPORTDIR,
+		    dname, bname);
+	}
+
 	if( mkdir(homedir, 0775) != 0 ) {
 		errmsg(M_OOPS, "create the home directory", strerror(errno));
 		return( EX_HOMEDIR );
