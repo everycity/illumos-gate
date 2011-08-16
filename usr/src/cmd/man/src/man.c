@@ -153,8 +153,8 @@ static const struct preprocessor {
 		*p_stdin_char;
 } preprocessors [] = {
 	{'c',	"cw",				"cw",		"-"},
-	{'e',	"neqn /usr/share/lib/pub/eqnchar",
-			"eqn /usr/share/lib/pub/eqnchar",	"-"},
+	{'e',	"/usr/bin/neqn /usr/share/lib/pub/eqnchar",
+			"/usr/bin/neqn /usr/share/lib/pub/eqnchar",	"-"},
 	{'p',	"gpic",				"gpic",		"-"},
 	{'r',	"refer",			"refer",	"-"},
 	{'t',	"tbl",				"tbl",		""},
@@ -2781,21 +2781,21 @@ so_again:	if (++socount > SOLIMIT) {
 					(void) sprintf(cmdbuf, "cat %s > %s",
 					    tmpdir, manpname_sgml);
 				else
-	(void) sprintf(cmdbuf, " cat %s | tbl | eqn | %s %s - %s > %s",
-	    tmpdir, troffit ? troffcmd : "nroff -u0 -Tlp",
+	(void) sprintf(cmdbuf, " cat %s | tbl | /usr/bin/eqn | %s %s - %s > %s",
+	    tmpdir, troffit ? troffcmd : "/usr/bin/nroff -u1 -Tlp",
 	    macros, troffit ? "" : " | col -x", tmpname);
 			} else
 				if (catmando && compargs)
 					(void) sprintf(cbp, " > %s",
 					    manpname_sgml);
 				else
-	(void) sprintf(cbp, " | tbl | eqn | %s %s - %s > %s",
-	    troffit ? troffcmd : "nroff -u0 -Tlp",
+	(void) sprintf(cbp, " | tbl | /usr/bin/eqn | %s %s - %s > %s",
+	    troffit ? troffcmd : "/usr/bin/nroff -u1 -Tlp",
 	    macros, troffit ? "" : " | col -x", tmpname);
 
 		} else
 	(void) sprintf(cbp, "%s %s %s%s > %s",
-	    troffit ? troffcmd : "nroff -u0 -Tlp",
+	    troffit ? troffcmd : "/usr/bin/nroff -u1 -Tlp",
 	    macros, pipestage == 0 ? manpname : "-",
 	    troffit ? "" : " | col -x", tmpname);
 
