@@ -472,6 +472,9 @@ char **argv;
 	}
 
 	if (mflag) {
+		/* nudge autofs */
+		(void) access(dir, R_OK);
+
 		if (stat(dir, &statbuf) == 0) {
 			/* Home directory exists */
 			if (check_perm(statbuf, pstruct->pw_uid,

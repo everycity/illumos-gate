@@ -42,14 +42,18 @@
 #include <sys/mnttab.h>
 #include <libzfs.h>
 #include <sys/mntent.h>
+#include <sys/mount.h>
 #include <libgen.h>
 #include <limits.h>
 #include "messages.h"
 
 #define 	SBUFSZ	(2 * PATH_MAX + 1)
 #define 	EXPORTDIR	"/export"
+#define		AUTOFS_HOME	"/etc/auto_home"
+#define		AUTOFS_LINESZ	4096
 
 extern int rm_files();
+extern int edit_autofs_home();
 static int rm_homedir();
 static char *get_mnt_special();
 
@@ -94,7 +98,8 @@ create_home(char *homedir, char *skeldir, uid_t uid, gid_t gid, int newfs)
 		(void) strcpy(pdir, EXPORTDIR);
 		(void) strlcat(pdir, dname, PATH_MAX + 1);
 		(void) snprintf(homedir, PATH_MAX + 1, "%s/%s", pdir, bname);
-		(void) stat(pdir, &stbuf);
+		if (stat(pdir, &stbuf) == 0)
+			(void) edit_autofs_home(bname, bname, pdir);
 	}
 
 	if ((strcmp(stbuf.st_fstype, MNTTYPE_ZFS) == 0) &&
@@ -215,10 +220,36 @@ rm_homedir(char *dir)
 int
 rm_files(char *homedir, char *user)
 {
+	struct stat stbuf;
+	char *dname, *bname;
+	int autofs = 0;
+
+	(void) strcpy(dhome, homedir);
+	(void) strcpy(bhome, homedir);
+	dname = dirname(dhome);
+	bname = basename(bhome);
+
+	(void) strcpy(pdir, dname);
+	if ((stat(pdir, &stbuf) != 0) || !S_ISDIR(stbuf.st_mode))
+		return (EX_SUCCESS);
+
+	if (strcmp(stbuf.st_fstype, MNTTYPE_AUTOFS) == 0)
+		autofs = 1;
+
+	if (autofs) {
+		(void) umount2(homedir, 0);
+		(void) strcpy(pdir, EXPORTDIR);
+		(void) strlcat(pdir, dname, PATH_MAX + 1);
+		(void) snprintf(homedir, PATH_MAX + 1, "%s/%s", pdir, bname);
+	}
+
         if (rm_homedir(homedir) != 0) {
                 errmsg(M_RMFILES);
                 return (EX_HOMEDIR);
         }
+
+	if (autofs)
+		(void) edit_autofs_home(bname, (char *)NULL, (char *) NULL);
 
         return (EX_SUCCESS);
 }
@@ -243,4 +274,103 @@ get_mnt_special(char *mountp, char *fstype)
 	}
 
 	return special;
+}
+
+/* Modify autofs map for home directories */
+int
+edit_autofs_home(char *dir, char *new_dir, char *new_pdir)
+{
+	char t_name[] = "/etc/htmp.XXXXXX";
+	char *first;
+	FILE *e_fp, *t_fp;
+	struct stat stbuf;
+	char workbuf[AUTOFS_LINESZ];
+	char linebuf[AUTOFS_LINESZ];
+	int fd, modified = 0;
+
+	if ((e_fp = fopen(AUTOFS_HOME, "r")) == NULL)
+		return (EX_UPDATE);
+
+	if (fstat(fileno(e_fp), &stbuf) != 0) {
+		(void) fclose(e_fp);
+		return (EX_UPDATE);
+	}
+
+	/* Make sure it's not an executable map */
+	if (stbuf.st_mode & S_IXUSR) {
+		(void) fclose(e_fp);
+		return (EX_SUCCESS);
+	}
+
+	if ((fd = mkstemp(t_name)) == -1) {
+		(void) fclose(e_fp);
+		return (EX_UPDATE);
+	}
+
+	if ((t_fp = fdopen(fd, "w")) == NULL) {
+		(void) close(fd);
+		(void) unlink(t_name);
+		(void) fclose(e_fp);
+		return (EX_UPDATE);
+	}
+	
+	/*
+	 * Get ownership and permissions corrrect
+	 */
+
+	if (fchmod(fd, stbuf.st_mode) != 0 ||
+	    fchown(fd, stbuf.st_uid, stbuf.st_gid) != 0) {
+		(void) fclose(t_fp);
+		(void) fclose(e_fp);
+		(void) unlink(t_name);
+		return (EX_UPDATE);
+	}
+
+	/* Make TMP file look like we want auto_home to look */
+	while (fgets(linebuf, AUTOFS_LINESZ, e_fp) != NULL) {
+		if (dir) {
+			(void) strcpy(workbuf, linebuf);
+			first = strtok(workbuf, " 	\\\"");
+			if ((first != NULL) && (strcmp(first, dir) == 0)) {
+				modified++;
+				if (new_dir != NULL) {
+		   	 		(void) snprintf(linebuf, AUTOFS_LINESZ,
+					    "%s	localhost:%s/&\n",
+					    new_dir, new_pdir);
+				} else {
+					continue;
+				}
+			}
+		}
+		if (fputs(linebuf, t_fp) == EOF) {
+			(void) fclose(t_fp);
+			(void) fclose(e_fp);
+			(void) unlink(t_name);
+			return (EX_UPDATE);
+		}
+	}
+
+	if (!modified && (new_dir != NULL)) {
+		modified++;
+		(void) snprintf(linebuf, AUTOFS_LINESZ, "%s	localhost:%s/&\n",
+		    new_dir, new_pdir);
+		if (fputs(linebuf, t_fp) == EOF) {
+			(void) fclose(t_fp);
+			(void) fclose(e_fp);
+			(void) unlink(t_name);
+			return (EX_UPDATE);
+		}
+	}
+
+	(void) fclose(e_fp);
+	(void) fclose(t_fp);
+
+	/* Now, update auto_home, if it was modified */
+	if (modified && rename(t_name, AUTOFS_HOME) < 0) {
+		(void) unlink(t_name);
+		return (EX_UPDATE);
+	}
+
+	(void) unlink(t_name);
+	return (EX_SUCCESS);
 }
