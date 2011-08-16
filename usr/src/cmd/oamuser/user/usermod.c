@@ -480,7 +480,7 @@ char **argv;
 				exit(EX_NO_PERM);
 			}
 
-		} else ret = create_home(dir, NULL, uid, gid);
+		} else ret = create_home(dir, NULL, uid, gid, mflag < 2);
 
 		if (ret == EX_SUCCESS)
 			ret = move_dir(pstruct->pw_dir, dir, logname);

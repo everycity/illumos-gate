@@ -39,6 +39,8 @@
 #include <errno.h>
 #include <strings.h>
 #include <string.h>
+#include <sys/mnttab.h>
+#include <libzfs.h>
 #include <sys/mntent.h>
 #include <libgen.h>
 #include <limits.h>
@@ -47,46 +49,90 @@
 #define 	SBUFSZ	(2 * PATH_MAX + 1)
 #define 	EXPORTDIR	"/export"
 
-extern int rm_homedir();
+extern int rm_files();
+static int rm_homedir();
+static char *get_mnt_special();
 
 static char cmdbuf[ SBUFSZ ];	/* buffer for system call */
 static char dhome[ PATH_MAX + 1 ]; /* buffer for dirname */
 static char bhome[ PATH_MAX + 1 ]; /* buffer for basename */
+static char pdir[ PATH_MAX + 1 ]; /* parent directory */
+static libzfs_handle_t *g_zfs = NULL;
 
 /*
 	Create a home directory and populate with files from skeleton
 	directory.
 */
 int
-create_home(char *homedir, char *skeldir, uid_t uid, gid_t gid)
+create_home(char *homedir, char *skeldir, uid_t uid, gid_t gid, int newfs)
 		/* home directory to create */
 		/* skel directory to copy if indicated */
 		/* uid of new user */
 		/* group id of new user */
+		/* allow filesystem creation */
 {
 	struct stat stbuf;
 	char *dname, *bname;
-	char *dataset = NULL;
+	char *dataset;
 	FILE *fp;
+
+	if (g_zfs == NULL)
+		g_zfs = libzfs_init();
 
 	(void) strcpy(dhome, homedir);
 	(void) strcpy(bhome, homedir);
 	dname = dirname(dhome);
 	bname = basename(bhome);
 
-	if ((stat(dname, &stbuf) != 0) || !S_ISDIR(stbuf.st_mode)) {
+	(void) strcpy(pdir, dname);
+	if ((stat(pdir, &stbuf) != 0) || !S_ISDIR(stbuf.st_mode)) {
 		errmsg(M_OOPS, "access the parent directory", strerror(errno));
 		return (EX_HOMEDIR);
 	}
 
 	if (strcmp(stbuf.st_fstype, MNTTYPE_AUTOFS) == 0) {
-		(void) snprintf(homedir, PATH_MAX + 1, "%s%s/%s", EXPORTDIR,
-		    dname, bname);
+		(void) strcpy(pdir, EXPORTDIR);
+		(void) strlcat(pdir, dname, PATH_MAX + 1);
+		(void) snprintf(homedir, PATH_MAX + 1, "%s/%s", pdir, bname);
+		(void) stat(pdir, &stbuf);
 	}
 
-	if( mkdir(homedir, 0775) != 0 ) {
-		errmsg(M_OOPS, "create the home directory", strerror(errno));
-		return( EX_HOMEDIR );
+	if ((strcmp(stbuf.st_fstype, MNTTYPE_ZFS) == 0) &&
+	    (g_zfs != NULL) && newfs &&
+	    ((dataset = get_mnt_special(pdir, stbuf.st_fstype)) != NULL)) {
+		char nm[ZFS_MAXNAMELEN];
+		zfs_handle_t *zhp;
+
+	    	(void) snprintf(nm, ZFS_MAXNAMELEN, "%s/%s", dataset, bname);
+
+		if ((zfs_create(g_zfs, nm, ZFS_TYPE_FILESYSTEM, NULL) != 0) ||
+	    	    ((zhp = zfs_open(g_zfs, nm, ZFS_TYPE_FILESYSTEM)) ==
+		    NULL)) {
+			errmsg(M_OOPS, "create the home directory",
+			    libzfs_error_description(g_zfs));
+			return (EX_HOMEDIR);
+		}
+
+		if (zfs_mount(zhp, NULL, 0) != 0) {
+			errmsg(M_OOPS, "mount the home directory",
+			    libzfs_error_description(g_zfs));
+			(void) zfs_destroy(zhp, B_FALSE);
+			return (EX_HOMEDIR);
+		}
+
+		zfs_close(zhp);
+
+		if (chmod(homedir, S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH) != 0) {
+			errmsg(M_OOPS, "change permissions of home directory",
+			    strerror(errno));
+			return (EX_HOMEDIR);
+		}
+	} else {
+		if (mkdir(homedir, S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH) != 0) {
+			errmsg(M_OOPS, "create the home directory",
+			    strerror(errno));
+			return (EX_HOMEDIR);
+		}
 	}
 
 	if( chown(homedir, uid, gid) != 0 ) {
@@ -135,7 +181,66 @@ create_home(char *homedir, char *skeldir, uid_t uid, gid_t gid)
 int
 rm_homedir(char *dir)
 {
-	(void) sprintf( cmdbuf, "rm -rf %s", dir );
-		
-	return( system( cmdbuf ) );
+	struct stat stbuf;
+	char *nm;
+
+	if ((stat(dir, &stbuf) != 0) || !S_ISDIR(stbuf.st_mode))
+		return 0;
+
+	if (g_zfs == NULL)
+		g_zfs = libzfs_init();
+
+	if ((strcmp(stbuf.st_fstype, MNTTYPE_ZFS) == 0) && 
+	    (g_zfs != NULL) &&
+	    ((nm = get_mnt_special(dir, stbuf.st_fstype)) != NULL)) {
+		zfs_handle_t *zhp;
+
+	    	if ((zhp = zfs_open(g_zfs, nm, ZFS_TYPE_FILESYSTEM)) != NULL) {
+			if ((zfs_unmount(zhp, NULL, 0) == 0) &&
+			    (zfs_destroy(zhp, B_FALSE) == 0)) {
+				zfs_close(zhp);
+				return 0;
+			}
+
+			(void) zfs_mount(zhp, NULL, 0);
+			zfs_close(zhp);
+		}
+	}
+
+	(void) sprintf(cmdbuf, "rm -rf %s", dir);
+
+	return (system(cmdbuf));
+}
+
+int
+rm_files(char *homedir, char *user)
+{
+        if (rm_homedir(homedir) != 0) {
+                errmsg(M_RMFILES);
+                return (EX_HOMEDIR);
+        }
+
+        return (EX_SUCCESS);
+}
+
+/* Get the name of a mounted filesytem */
+char *
+get_mnt_special(char *mountp, char *fstype)
+{
+	struct mnttab entry, search;
+	char *special = NULL;
+	FILE *fp;
+
+	search.mnt_special = search.mnt_mntopts = search.mnt_time = NULL;
+	search.mnt_mountp = mountp;
+	search.mnt_fstype = fstype;
+
+	if ((fp = fopen(MNTTAB, "r")) != NULL) {
+		if (getmntany(fp, &entry, &search) == 0)
+			special = entry.mnt_special;
+
+		(void) fclose(fp);
+	}
+
+	return special;
 }

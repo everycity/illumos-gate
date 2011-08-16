@@ -676,8 +676,12 @@ char *argv[];
 	}
 
 	/* create home directory */
-	if (mflag &&
-	    (create_home(homedir, skel_dir, uid, gid) != EX_SUCCESS)) {
+	if (mflag)
+		ret = create_home(homedir, skel_dir, uid, gid, mflag < 2);
+
+	if (ret != EX_SUCCESS) {
+	    	(void) edit_project(logname, (char *)NULL, (projid_t **)NULL,
+		    0);
 		(void) edit_group(logname, (char *)0, (int **)0, 1);
 		cleanup(logname);
 		exit(EX_HOMEDIR);

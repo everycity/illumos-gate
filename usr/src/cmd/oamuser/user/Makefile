@@ -46,11 +46,11 @@ ADD_OBJ=	useradd.o     uid.o        homedir.o \
 		groups.o      call_pass.o      userdefs.o   messages.o \
 		val_lgrp.o    funcs.o	       val_lprj.o   proj.o
 
-DEL_OBJ=	userdel.o     call_pass.o      rmfiles.o    isbusy.o \
+DEL_OBJ=	userdel.o     call_pass.o      homedir.o    isbusy.o \
 		groups.o      messages.o       funcs.o      proj.o
 
 MOD_OBJ=	usermod.o     uid.o            movedir.o    groups.o \
-		rmfiles.o     call_pass.o      isbusy.o     homedir.o \
+		homedir.o     call_pass.o      isbusy.o \
 		userdefs.o    messages.o       val_lgrp.o   funcs.o \
 		val_lprj.o    proj.o
 
@@ -84,7 +84,7 @@ $(USERDEL) :=	LIBS = $(LIBUSRGRP)
 $(USERMOD) :=	OBJS = $(MOD_OBJ)
 $(USERMOD) :=	LIBS = $(LIBUSRGRP)
 
-LDLIBS +=	-lbsm -lnsl -lsecdb -lproject -ltsol
+LDLIBS +=	-lbsm -lnsl -lsecdb -lproject -lzfs -ltsol
 
 .PARALLEL: $(OBJECTS)
 
