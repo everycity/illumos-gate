@@ -1944,14 +1944,13 @@ lxml_label_to_groupname(const char *prefix, const char *in)
 	char *out, *cp;
 	size_t len, piece_len;
 
-	out = uu_zalloc(2 * scf_limit(SCF_LIMIT_MAX_NAME_LENGTH) + 1);
+	out = uu_zalloc(2 * max_scf_name_len + 1);
 	if (out == NULL)
 		return (NULL);
 
-	(void) strcpy(out, prefix);
-	(void) strcat(out, in);
+	(void) strlcpy(out, prefix, 2 * max_scf_name_len + 1);
 
-	len = strlen(out);
+	len = strlcat(out, in, 2 * max_scf_name_len + 1);
 	if (len > max_scf_name_len) {
 		/* Use the first half and the second half. */
 		piece_len = (max_scf_name_len - 2) / 2;
@@ -2083,15 +2082,29 @@ lxml_get_tm_manpage(entity_t *service, xmlNodePtr manpage)
 {
 	pgroup_t *pg;
 	char *pgname;
+	char *name;
 	xmlChar *title;
+	xmlChar *section;
 
 	/*
 	 * Fetch title attribute, convert to something sanitized, and create
 	 * property group.
 	 */
 	title = xmlGetProp(manpage, (xmlChar *)title_attr);
-	pgname = (char *)lxml_label_to_groupname(SCF_PG_TM_MAN_PREFIX,
-	    (const char *)title);
+	if (title == NULL)
+		return (-1);
+	section = xmlGetProp(manpage, (xmlChar *)section_attr);
+	if (section == NULL) {
+		xmlFree(title);
+		return (-1);
+	}
+
+	name = safe_malloc(max_scf_name_len + 1);
+	(void) snprintf(name, max_scf_name_len + 1, "%s_%s", title, section);
+	pgname = (char *)lxml_label_to_groupname(SCF_PG_TM_MAN_PREFIX, name);
+
+	free(name);
+	xmlFree(section);
 	xmlFree(title);
 
 	pg = internal_pgroup_find_or_create(service, pgname,
@@ -2123,6 +2136,8 @@ lxml_get_tm_doclink(entity_t *service, xmlNodePtr doc_link)
 	 * property group.
 	 */
 	name = xmlGetProp(doc_link, (xmlChar *)name_attr);
+	if (name == NULL)
+		return (-1);
 
 	pgname = (char *)lxml_label_to_groupname(SCF_PG_TM_DOC_PREFIX,
 	    (const char *)name);
