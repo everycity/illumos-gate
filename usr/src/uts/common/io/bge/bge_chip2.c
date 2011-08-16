@@ -1897,9 +1897,13 @@ bge_nvmem_id(bge_t *bgep)
 	case DEVICE_ID_5717:
 	case DEVICE_ID_5718:
 	case DEVICE_ID_5724:
+	case DEVICE_ID_57760:
 	case DEVICE_ID_57780:
+	case DEVICE_ID_57788:
+	case DEVICE_ID_57790:
 	case DEVICE_ID_5780:
 	case DEVICE_ID_5782:
+	case DEVICE_ID_5784M:
 	case DEVICE_ID_5785:
 	case DEVICE_ID_5787:
 	case DEVICE_ID_5787M:
@@ -1918,6 +1922,8 @@ bge_nvmem_id(bge_t *bgep)
 	case DEVICE_ID_5723:
 	case DEVICE_ID_5761:
 	case DEVICE_ID_5761E:
+	case DEVICE_ID_5761S:
+	case DEVICE_ID_5761SE:
 	case DEVICE_ID_5764:
 	case DEVICE_ID_5714C:
 	case DEVICE_ID_5714S:
@@ -2220,7 +2226,13 @@ bge_chip_id_init(bge_t *bgep)
 	case DEVICE_ID_5723:
 	case DEVICE_ID_5761:
 	case DEVICE_ID_5761E:
+	case DEVICE_ID_5761S:
+	case DEVICE_ID_5761SE:
+	case DEVICE_ID_5784M:
+	case DEVICE_ID_57760:
 	case DEVICE_ID_57780:
+	case DEVICE_ID_57788:
+	case DEVICE_ID_57790:
 		cidp->msi_enabled = bge_enable_msi;
 		/*
 		 * We don't use MSI for BCM5764 and BCM5785, as the
@@ -2234,10 +2246,18 @@ bge_chip_id_init(bge_t *bgep)
 			cidp->chip_label = 5723;
 		else if (cidp->device == DEVICE_ID_5764)
 			cidp->chip_label = 5764;
+		else if (cidp->device == DEVICE_ID_5784M)
+			cidp->chip_label = 5784;
 		else if (cidp->device == DEVICE_ID_5785)
 			cidp->chip_label = 5785;
+		else if (cidp->device == DEVICE_ID_57760)
+			cidp->chip_label = 57760;
 		else if (cidp->device == DEVICE_ID_57780)
 			cidp->chip_label = 57780;
+		else if (cidp->device == DEVICE_ID_57788)
+			cidp->chip_label = 57788;
+		else if (cidp->device == DEVICE_ID_57790)
+			cidp->chip_label = 57790;
 		else
 			cidp->chip_label = 5761;
 		cidp->bge_dma_rwctrl = bge_dma_rwctrl_5721;
@@ -3401,10 +3421,13 @@ bge_chip_reset(bge_t *bgep, boolean_t enable_dma)
 		mhcr = MHCR_ENABLE_INDIRECT_ACCESS |
 			MHCR_ENABLE_TAGGED_STATUS_MODE |
 			MHCR_MASK_INTERRUPT_MODE |
-			MHCR_MASK_PCI_INT_OUTPUT |
 			MHCR_CLEAR_INTERRUPT_INTA |
 			MHCR_ENABLE_ENDIAN_WORD_SWAP |
 			MHCR_ENABLE_ENDIAN_BYTE_SWAP;
+
+		if (bgep->intr_type == DDI_INTR_TYPE_FIXED)
+			mhcr |= MHCR_MASK_PCI_INT_OUTPUT;
+
 		if (DEVICE_5717_SERIES_CHIPSETS(bgep))
 			pci_config_put32(bgep->cfg_handle, PCI_CONF_BGE_MHCR,
 					0);
@@ -3437,8 +3460,11 @@ bge_chip_reset(bge_t *bgep, boolean_t enable_dma)
 	mhcr = MHCR_ENABLE_INDIRECT_ACCESS |
 	    MHCR_ENABLE_TAGGED_STATUS_MODE |
 	    MHCR_MASK_INTERRUPT_MODE |
-	    MHCR_MASK_PCI_INT_OUTPUT |
 	    MHCR_CLEAR_INTERRUPT_INTA;
+
+	if (bgep->intr_type == DDI_INTR_TYPE_FIXED)
+		mhcr |= MHCR_MASK_PCI_INT_OUTPUT;
+
 #ifdef  _BIG_ENDIAN
 	mhcr |= MHCR_ENABLE_ENDIAN_WORD_SWAP | MHCR_ENABLE_ENDIAN_BYTE_SWAP;
 #endif  /* _BIG_ENDIAN */
@@ -4070,10 +4096,8 @@ bge_chip_start(bge_t *bgep, boolean_t reset_phys)
 	    ALL_DMA_ATTN_BITS;
 	if ((MHCR_CHIP_ASIC_REV(bgep->chipid.asic_rev) ==
 	    MHCR_CHIP_ASIC_REV_5755) ||
-	    (MHCR_CHIP_ASIC_REV(bgep->chipid.asic_rev) ==
-	    MHCR_CHIP_ASIC_REV_5723) ||
-	    (MHCR_CHIP_ASIC_REV(bgep->chipid.asic_rev) ==
-	    MHCR_CHIP_ASIC_REV_5906)) {
+	    DEVICE_5723_SERIES_CHIPSETS(bgep) ||
+	    DEVICE_5906_SERIES_CHIPSETS(bgep)) {
 		dma_wrprio |= DMA_STATUS_TAG_FIX_CQ12384;
 	}
 	if (!bge_chip_enable_engine(bgep, WRITE_DMA_MODE_REG,

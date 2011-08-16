@@ -71,6 +71,7 @@ extern "C" {
 #define	DEVICE_ID_5705F			0x166e
 #define	DEVICE_ID_5780			0x166a
 #define	DEVICE_ID_5782			0x1696
+#define	DEVICE_ID_5784M			0x1698
 #define	DEVICE_ID_5785			0x1699
 #define	DEVICE_ID_5787			0x169b
 #define	DEVICE_ID_5787M			0x1693
@@ -92,12 +93,17 @@ extern "C" {
 #define	DEVICE_ID_5714S			0x1669
 #define	DEVICE_ID_5715C			0x1678
 #define	DEVICE_ID_5715S			0x1679
-#define	DEVICE_ID_5761E			0x1680
 #define	DEVICE_ID_5761			0x1681
+#define	DEVICE_ID_5761E			0x1680
+#define	DEVICE_ID_5761S			0x1688
+#define	DEVICE_ID_5761SE		0x1689
 #define	DEVICE_ID_5764			0x1684
 #define	DEVICE_ID_5906			0x1712
 #define	DEVICE_ID_5906M			0x1713
+#define	DEVICE_ID_57760			0x1690
 #define	DEVICE_ID_57780			0x1692
+#define	DEVICE_ID_57788			0x1691
+#define	DEVICE_ID_57790			0x1694
 
 #define	REVISION_ID_5700_B0		0x10
 #define	REVISION_ID_5700_B2		0x12
@@ -195,9 +201,15 @@ extern "C" {
 		((bgep->chipid.device == DEVICE_ID_5723) ||\
 		(bgep->chipid.device == DEVICE_ID_5761) ||\
 		(bgep->chipid.device == DEVICE_ID_5761E) ||\
+		(bgep->chipid.device == DEVICE_ID_5761S) ||\
+		(bgep->chipid.device == DEVICE_ID_5761SE) ||\
 		(bgep->chipid.device == DEVICE_ID_5764) ||\
+		(bgep->chipid.device == DEVICE_ID_5784M) ||\
 		(bgep->chipid.device == DEVICE_ID_5785) ||\
-		(bgep->chipid.device == DEVICE_ID_57780))
+		(bgep->chipid.device == DEVICE_ID_57760) ||\
+		(bgep->chipid.device == DEVICE_ID_57780) ||\
+		(bgep->chipid.device == DEVICE_ID_57788) ||\
+		(bgep->chipid.device == DEVICE_ID_57790))
 
 #define	DEVICE_5714_SERIES_CHIPSETS(bgep) \
 		((bgep->chipid.device == DEVICE_ID_5714C) ||\
