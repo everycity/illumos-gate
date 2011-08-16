@@ -32,6 +32,20 @@
 
 smf_is_globalzone || exit $SMF_EXIT_OK
 
+set_keymap_prop()
+{
+	val="$3"
+
+	[ -z "$val" ] && return 0
+
+	if [ "$type" = "boolean" ]; then
+		[ "$val" = "on" ] && val="true"
+		[ "$val" = "off" ] && val="false"
+	fi
+
+	/usr/sbin/svccfg -s $SMF_FMRI setprop keymap/$1 = $2: "$val"
+}
+
 #
 # Systems with no hardware keyboard ID may provide an eeprom value,
 # or the value can be supplied in svc:/system/keymap:default. A value
@@ -39,6 +53,25 @@ smf_is_globalzone || exit $SMF_EXIT_OK
 # supplied in eeprom.
 #
 [ -x /usr/lib/set_keyboard_layout ] && /usr/lib/set_keyboard_layout
+
+# Import legacy keyboard configuration
+
+/usr/bin/svcprop -q -c -p keymap/imported $SMF_FMRI
+if [ $? -ne 0 ]; then
+	if [ -r /etc/default/kbd ]; then
+		. /etc/default/kbd
+		set_keymap_prop keyboard_abort astring "$KEYBOARD_ABORT"
+		set_keymap_prop keyclick boolean "$KEYCLICK"
+		set_keymap_prop repeat_delay integer "$REPEAT_DELAY"
+		set_keymap_prop repeat_rate integer "$REPEAT_RATE"
+		set_keymap_prop layout astring "$LAYOUT"
+		set_keymap_prop kbd_beeper_freq integer "$KBD_BEEPER_FREQ"
+		set_keymap_prop console_beeper_freq integer \
+			"$CONSOLE_BEEPER_FREQ"
+	fi
+	set_keymap_prop imported boolean true
+	/usr/sbin/svccfg -s $SMF_FMRI refresh
+fi
 
 # Initialize the keyboard defaults
 
