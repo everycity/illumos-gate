@@ -12031,7 +12031,7 @@ mptsas_add_intrs(mptsas_t *mpt, int intr_type)
 		return (DDI_FAILURE);
 	}
 
-	if (avail < count) {
+	if (0 && avail < count) {
 		mptsas_log(mpt, CE_NOTE, "ddi_intr_get_nvail returned %d, "
 		    "navail() returned %d", count, avail);
 	}
