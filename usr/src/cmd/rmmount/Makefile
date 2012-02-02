@@ -43,6 +43,8 @@ CPPFLAGS +=	-I$(ROOT)/usr/include/hal
 CPPFLAGS +=	-I$(SRC)/cmd/rmvolmgr
 C99MODE =	$(C99_ENABLE)
 
+CFLAGS += -erroff=E_INTEGER_OVERFLOW_DETECTED
+
 .KEEP_STATE:
 
 all: $(PROG)

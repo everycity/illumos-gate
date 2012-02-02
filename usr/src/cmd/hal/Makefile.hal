@@ -60,3 +60,4 @@ HAL_GLIB_CPPFLAGS = 	-I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include
 
 HAL_GETTEXT_PACKAGE =	$(TEXT_DOMAIN)
 
+CFLAGS += -erroff=E_INTEGER_OVERFLOW_DETECTED
