@@ -127,13 +127,15 @@ create_home(char *homedir, char *skeldir, uid_t uid, gid_t gid, int newfs)
 
 		zfs_close(zhp);
 
-		if (chmod(homedir, S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH) != 0) {
+		if (chmod(homedir, S_IRWXU|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH) !=
+		    0) {
 			errmsg(M_OOPS, "change permissions of home directory",
 			    strerror(errno));
 			return (EX_HOMEDIR);
 		}
 	} else {
-		if (mkdir(homedir, S_IRWXU|S_IRWXG|S_IROTH|S_IXOTH) != 0) {
+		if (mkdir(homedir, S_IRWXU|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH) !=
+		    0) {
 			errmsg(M_OOPS, "create the home directory",
 			    strerror(errno));
 			return (EX_HOMEDIR);
