@@ -3176,9 +3176,7 @@ mac_promisc_add(mac_client_handle_t mch, mac_client_promisc_type_t type,
 		 * of a VNIC. The VNIC should only see the traffic
 		 * it is entitled to.
 		 */
-#if 0
 		type = MAC_CLIENT_PROMISC_FILTERED;
-#endif
 	}
 
 
