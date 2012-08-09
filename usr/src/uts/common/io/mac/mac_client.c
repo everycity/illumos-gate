@@ -3931,9 +3931,6 @@ mac_promisc_dispatch(mac_impl_t *mip, mblk_t *mp_chain,
 
 			if (is_sender ||
 			    mpip->mpi_type == MAC_CLIENT_PROMISC_ALL ||
-			    (mpip->mpi_type == MAC_CLIENT_PROMISC_FILTERED &&
-			    mac_client_check_flow_vid(mpip->mpi_mcip,
-			    mac_ether_vid(mp))) ||
 			    is_mcast)
 				mac_promisc_dispatch_one(mpip, mp, is_sender);
 		}
@@ -3962,12 +3959,10 @@ mac_promisc_client_dispatch(mac_client_impl_t *mcip, mblk_t *mp_chain)
 		for (mcb = mcip->mci_promisc_list; mcb != NULL;
 		    mcb = mcb->mcb_nextp) {
 			mpip = (mac_promisc_impl_t *)mcb->mcb_objp;
-/*
 			if (mpip->mpi_type == MAC_CLIENT_PROMISC_FILTERED &&
 			    !is_mcast) {
 				mac_promisc_dispatch_one(mpip, mp, B_FALSE);
 			}
-*/
 		}
 	}
 	MAC_PROMISC_WALKER_DCR(mip);
