@@ -1,3 +1,28 @@
+#
+# CDDL HEADER START
+#
+# The contents of this file are subject to the terms of the
+# Common Development and Distribution License (the "License").
+# You may not use this file except in compliance with the License.
+#
+# You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+# or http://www.opensolaris.org/os/licensing.
+# See the License for the specific language governing permissions
+# and limitations under the License.
+#
+# When distributing Covered Code, include this CDDL HEADER in each
+# file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+# If applicable, add the following below this CDDL HEADER, with the
+# fields enclosed by brackets "[]" replaced with your own identifying
+# information: Portions Copyright [yyyy] [name of copyright owner]
+#
+# CDDL HEADER END
+#
+#
+# Copyright (c) 2012, Joyent, Inc. All rights reserved.
+#
+# This lists all the files that illumos-joyent delivers as part of a build.
+#
 s bin=usr/bin
 d boot 0755 root sys
 d boot/acpi 0755 root sys
@@ -329,13 +354,11 @@ d etc/init.d 0755 root sys
 f etc/init.d/PRESERVE 0744 root sys
 f etc/init.d/README 0644 root sys
 f etc/init.d/acct 0744 root sys
-f etc/init.d/cachefs.daemon 0744 root sys
 f etc/init.d/devlinks 0744 root sys
 f etc/init.d/dhcp 0744 root sys
 f etc/init.d/dodatadm.udaplt 0744 root sys
 f etc/init.d/drvconfig 0744 root sys
 f etc/init.d/ldap.client 0744 root sys
-f etc/init.d/mkdtab 0744 root sys
 f etc/init.d/nfs.server 0744 root sys
 f etc/init.d/nscd 0744 root sys
 f etc/init.d/pppd 0744 root sys
@@ -360,6 +383,19 @@ f etc/logindevperm 0644 root sys
 f etc/mach 0644 root sys
 f etc/magic 0444 root bin
 f etc/mailcap 0644 root bin
+d etc/mail 0755 root sys
+f etc/mail/aliases 0644 root mail
+d etc/mail/cf 0755 root mail
+f etc/mail/helpfile 0644 root mail
+f etc/mail/local-host-names 0644 root mail
+f etc/mail/Mail.rc 0644 root mail
+f etc/mail/mailx.rc 0644 root mail
+s etc/mail/main.cf=sendmail.cf
+f etc/mail/sendmail.cf 0444 root mail
+s etc/mail/sendmail.hf=helpfile
+f etc/mail/submit.cf 0444 root mail
+s etc/mail/subsidiary.cf=sendmail.cf
+f etc/mail/trusted-users 0644 root mail
 f etc/mime.types 0644 root bin
 f etc/mnttab 0444 root root
 f etc/mpapi.conf 0644 root bin
@@ -410,7 +446,6 @@ d etc/rc2.d 0755 root sys
 f etc/rc2.d/README 0644 root sys
 f etc/rc2.d/S20sysetup 0744 root sys
 h etc/rc2.d/S47pppd=etc/init.d/pppd
-f etc/rc2.d/S73cachefs.daemon 0744 root sys
 f etc/rc2.d/S81dodatadm.udaplt 0744 root sys
 f etc/rc2.d/S89PRESERVE 0744 root sys
 d etc/rc3.d 0755 root sys
@@ -474,6 +509,7 @@ f etc/sock2path.d/system%2Fkernel 0644 root sys
 d etc/ssh 0755 root sys
 f etc/ssh/moduli 0644 root sys
 f etc/ssh/ssh_config 0644 root sys
+s etc/sulogin=../sbin/sulogin
 d etc/svc 0755 root sys
 d etc/svc/volatile 0755 root sys
 d etc/sysconfig 0755 root root
@@ -496,7 +532,6 @@ d etc/xdg 0755 root sys
 d etc/xdg/autostart 0755 root sys
 d etc/zfs 0755 root sys
 d etc/zones 0755 root sys
-f etc/zones/Joyent.xml 0444 root bin
 f etc/zones/SUNWblank.xml 0444 root bin
 f etc/zones/index 0644 root sys
 s etc/zprofile=profile
@@ -829,6 +864,7 @@ f kernel/fs/amd64/fifofs 0755 root sys
 f kernel/fs/amd64/hsfs 0755 root sys
 f kernel/fs/amd64/hyprlofs 0755 root sys
 f kernel/fs/amd64/lofs 0755 root sys
+f kernel/fs/amd64/lxprocfs 0755 root sys
 f kernel/fs/amd64/mntfs 0755 root sys
 f kernel/fs/amd64/namefs 0755 root sys
 f kernel/fs/amd64/nfs 0755 root sys
@@ -1180,7 +1216,7 @@ f lib/amd64/libsocket.so.1 0755 root bin
 s lib/amd64/libsocket.so=libsocket.so.1
 f lib/amd64/libsysevent.so.1 0755 root bin
 s lib/amd64/libsysevent.so=libsysevent.so.1
-s lib/amd64/libtermcap.so.1=libcurses.so.1
+f lib/amd64/libtermcap.so.1 0755 root bin
 s lib/amd64/libtermcap.so=libtermcap.so.1
 s lib/amd64/libtermlib.so.1=libcurses.so.1
 s lib/amd64/libtermlib.so=libtermlib.so.1
@@ -1194,6 +1230,8 @@ f lib/amd64/libtsol.so.2 0755 root bin
 s lib/amd64/libtsol.so=libtsol.so.2
 f lib/amd64/libumem.so.1 0755 root bin
 s lib/amd64/libumem.so=libumem.so.1
+f lib/amd64/libumem_trampoline.so.1 0755 root bin
+s lib/amd64/libumem_trampoline.so=libumem_trampoline.so.1
 f lib/amd64/libuuid.so.1 0755 root bin
 s lib/amd64/libuuid.so=libuuid.so.1
 f lib/amd64/libuutil.so.1 0755 root bin
@@ -1212,7 +1250,6 @@ f lib/amd64/nss_files.so.1 0755 root bin
 f lib/amd64/nss_nis.so.1 0755 root bin
 f lib/amd64/nss_user.so.1 0755 root bin
 f lib/c_synonyms.so.1 0755 root bin
-s lib/cpp=../usr/lib/cpp
 d lib/crypto 0755 root bin
 s lib/crypto/32=.
 s lib/crypto/64=amd64
@@ -1372,7 +1409,7 @@ f lib/libsocket.so.1 0755 root bin
 s lib/libsocket.so=libsocket.so.1
 f lib/libsysevent.so.1 0755 root bin
 s lib/libsysevent.so=libsysevent.so.1
-s lib/libtermcap.so.1=libcurses.so.1
+f lib/libtermcap.so.1 0755 root bin
 s lib/libtermcap.so=libtermcap.so.1
 s lib/libtermlib.so.1=libcurses.so.1
 s lib/libtermlib.so=libtermlib.so.1
@@ -1386,6 +1423,8 @@ f lib/libtsol.so.2 0755 root bin
 s lib/libtsol.so=libtsol.so.2
 f lib/libumem.so.1 0755 root bin
 s lib/libumem.so=libumem.so.1
+f lib/libumem_trampoline.so.1 0755 root bin
+s lib/libumem_trampoline.so=libumem_trampoline.so.1
 f lib/libuuid.so.1 0755 root bin
 s lib/libuuid.so=libuuid.so.1
 f lib/libuutil.so.1 0755 root bin
@@ -1408,7 +1447,9 @@ f lib/nss_user.so.1 0755 root bin
 d lib/secure 0755 root bin
 s lib/secure/32=.
 s lib/secure/64=amd64
+s lib/secure/libumem_trampoline.so.1=../../lib/libumem_trampoline.so.1
 d lib/secure/amd64 0755 root bin
+s lib/secure/amd64/libumem_trampoline.so.1=../../../lib/amd64/libumem_trampoline.so.1
 d lib/svc 0755 root bin
 d lib/svc/bin 0755 root bin
 f lib/svc/bin/lsvcrun 0555 root sys
@@ -1477,12 +1518,16 @@ f lib/svc/manifest/network/routing/route.xml 0444 root sys
 d lib/svc/manifest/network/rpc 0755 root sys
 f lib/svc/manifest/network/rpc/bind.xml 0444 root sys
 d lib/svc/manifest/network/security 0755 root sys
+f lib/svc/manifest/network/sendmail-client.xml 0444 root sys
 d lib/svc/manifest/network/shares 0755 root sys
 f lib/svc/manifest/network/shares/group.xml 0444 root sys
 f lib/svc/manifest/network/shares/reparsed.xml 0444 root sys
 f lib/svc/manifest/network/shell.xml 0444 root sys
 f lib/svc/manifest/network/slp.xml 0444 root sys
 d lib/svc/manifest/network/smb 0755 root sys
+f lib/svc/manifest/network/smb/client.xml 0444 root sys
+f lib/svc/manifest/network/smb/server.xml 0444 root sys
+f lib/svc/manifest/network/smtp-sendmail.xml 0444 root sys
 f lib/svc/manifest/network/ssh.xml 0444 root sys
 f lib/svc/manifest/network/time.xml 0444 root sys
 f lib/svc/manifest/network/vrrp.xml 0444 root sys
@@ -1510,12 +1555,10 @@ f lib/svc/manifest/system/extended-accounting.xml 0444 root sys
 d lib/svc/manifest/system/filesystem 0755 root sys
 f lib/svc/manifest/system/filesystem/autofs.xml 0444 root sys
 f lib/svc/manifest/system/filesystem/local-fs.xml 0444 root sys
-f lib/svc/manifest/system/filesystem/rmvolmgr.xml 0444 root sys
 f lib/svc/manifest/system/filesystem/root-fs.xml 0444 root sys
 f lib/svc/manifest/system/filesystem/usr-fs.xml 0444 root sys
 f lib/svc/manifest/system/filesystem/vscan.xml 0444 root sys
 f lib/svc/manifest/system/fmd.xml 0444 root sys
-f lib/svc/manifest/system/hal.xml 0444 root sys
 f lib/svc/manifest/system/hostid.xml 0444 root sys
 f lib/svc/manifest/system/hotplug.xml 0444 root sys
 d lib/svc/manifest/system/ibsrp 0755 root sys
@@ -1609,7 +1652,6 @@ f lib/svc/method/svc-fcoei 0555 root sys
 f lib/svc/method/svc-fcoet 0555 root sys
 f lib/svc/method/svc-forwarding 0555 root bin
 f lib/svc/method/svc-ftp 0555 root sys
-f lib/svc/method/svc-hal 0555 root sys
 f lib/svc/method/svc-hostid 0555 root bin
 f lib/svc/method/svc-hotplug 0555 root bin
 f lib/svc/method/svc-ii 0744 root sys
@@ -1630,7 +1672,6 @@ f lib/svc/method/svc-rdcsyncd 0744 root sys
 f lib/svc/method/svc-rdisc 0555 root bin
 f lib/svc/method/svc-resource-mgmt 0555 root sys
 f lib/svc/method/svc-ripng 0555 root bin
-f lib/svc/method/svc-rmvolmgr 0555 root sys
 f lib/svc/method/svc-route 0555 root bin
 f lib/svc/method/svc-scheduler 0555 root sys
 f lib/svc/method/svc-scm 0744 root sys
@@ -1795,6 +1836,7 @@ f sbin/soconfig 0555 root bin
 f sbin/su.static 0555 root sys
 s sbin/su=../usr/bin/su
 f sbin/sulogin 0555 root bin
+f sbin/svcadm 0555 root bin
 f sbin/swapadd 0744 root sys
 f sbin/sync 0555 root bin
 f sbin/tzreload 0555 root bin
@@ -1815,10 +1857,10 @@ s usr/adm=../var/adm
 d usr/bin 0755 root bin
 h usr/bin/[=usr/bin/alias
 f usr/bin/addbadsec 0555 root bin
-f usr/bin/addbib 0555 root bin
 f usr/bin/alias 0555 root bin
 d usr/bin/amd64 0755 root bin
 f usr/bin/amd64/amt 0555 root bin
+f usr/bin/amd64/cputrack 0555 root bin
 f usr/bin/amd64/crle 0555 root bin
 h usr/bin/amd64/decrypt=usr/bin/amd64/encrypt
 h usr/bin/amd64/digest=usr/bin/amd64/mac
@@ -1831,6 +1873,7 @@ f usr/bin/amd64/ld 0755 root bin
 f usr/bin/amd64/ldd 0555 root bin
 f usr/bin/amd64/ls 0555 root bin
 f usr/bin/amd64/mac 0555 root bin
+f usr/bin/amd64/mcs 0555 root bin
 f usr/bin/amd64/mdb 0555 root bin
 f usr/bin/amd64/moe 0555 root bin
 f usr/bin/amd64/newtask 4555 root sys
@@ -1888,8 +1931,6 @@ f usr/bin/bdiff 0755 root bin
 f usr/bin/bfs 0555 root bin
 h usr/bin/bg=usr/bin/alias
 f usr/bin/busstat 0555 root bin
-s usr/bin/cachefspack=../lib/fs/cachefs/cachefspack
-s usr/bin/cachefsstat=../lib/fs/cachefs/cachefsstat
 f usr/bin/cal 0555 root bin
 f usr/bin/calendar 0555 root bin
 f usr/bin/captoinfo 0555 root bin
@@ -1923,6 +1964,7 @@ f usr/bin/compress 0555 root bin
 f usr/bin/coreadm 0555 root bin
 f usr/bin/cp 0555 root bin
 f usr/bin/cpio 0555 root bin
+h usr/bin/cputrack=usr/lib/isaexec
 f usr/bin/crle 0555 root bin
 f usr/bin/crontab 4555 root bin
 f usr/bin/crypt 0555 root bin
@@ -1948,6 +1990,7 @@ f usr/bin/diffmk 0555 root bin
 h usr/bin/digest=usr/lib/isaexec
 f usr/bin/dircmp 0555 root bin
 f usr/bin/dirname 0555 root bin
+f usr/bin/dis 0555 root bin
 f usr/bin/diskscan 0555 root bin
 h usr/bin/dispgid=usr/bin/ckgid
 h usr/bin/dispuid=usr/bin/ckuid
@@ -2014,6 +2057,7 @@ h usr/bin/i386=usr/bin/sun
 h usr/bin/i486=usr/bin/sun
 d usr/bin/i86 0755 root bin
 f usr/bin/i86/amt 0555 root bin
+f usr/bin/i86/cputrack 0555 root bin
 h usr/bin/i86/decrypt=usr/bin/i86/encrypt
 h usr/bin/i86/digest=usr/bin/i86/mac
 f usr/bin/i86/encrypt 0555 root bin
@@ -2056,17 +2100,13 @@ f usr/bin/i86/strings 0555 root bin
 f usr/bin/i86/truss 0555 root bin
 h usr/bin/i86/uptime=usr/bin/i86/w
 f usr/bin/i86/w 4555 root bin
-h usr/bin/i860=usr/bin/sun
 h usr/bin/i86pc=usr/bin/sun
-h usr/bin/iAPX286=usr/bin/sun
 f usr/bin/iconv 0555 root bin
 f usr/bin/id 0555 root bin
-f usr/bin/indxbib 0555 root bin
 f usr/bin/infocmp 0555 root bin
 f usr/bin/iostat 0555 root bin
 f usr/bin/isainfo 0555 root bin
 f usr/bin/isalist 0555 root bin
-f usr/bin/itu 0555 root bin
 h usr/bin/jobs=usr/bin/alias
 h usr/bin/join=usr/bin/alias
 s usr/bin/jsh=ksh93
@@ -2107,8 +2147,10 @@ f usr/bin/login 4555 root bin
 f usr/bin/logins 0750 root bin
 h usr/bin/logname=usr/bin/alias
 f usr/bin/look 0755 root bin
-f usr/bin/lookbib 0555 root bin
 f usr/bin/lorder 0555 root bin
+# We want ls to be the 32bit binary (not a link to isaexec) so we don't blow
+# out memory sorting entries - we just die if we need too much memory.  This
+# also matches the setup on a stock solaris box.
 f usr/bin/ls 0555 root bin
 f usr/bin/m4 0555 root bin
 f usr/bin/m68k 0555 root bin
@@ -2118,14 +2160,9 @@ f usr/bin/mail 2511 root mail
 f usr/bin/mailx 2511 root mail
 f usr/bin/makedev 0555 root bin
 f usr/bin/man 0555 root bin
-h usr/bin/mc68000=usr/bin/sun
-h usr/bin/mc68010=usr/bin/sun
-h usr/bin/mc68020=usr/bin/sun
-h usr/bin/mc68030=usr/bin/sun
-h usr/bin/mc68040=usr/bin/sun
+f usr/bin/mcs 0555 root bin
 h usr/bin/mdb=usr/lib/isaexec
 f usr/bin/mesg 0555 root bin
-f usr/bin/mkbootmedia 0555 root bin
 f usr/bin/mkdir 0555 root bin
 f usr/bin/mkfifo 0555 root bin
 f usr/bin/mkmsgs 0555 root root
@@ -2165,7 +2202,6 @@ f usr/bin/pathchk 0555 root bin
 f usr/bin/pax 0555 root bin
 s usr/bin/pcat=unpack
 h usr/bin/pcred=usr/lib/isaexec
-h usr/bin/pdp11=usr/bin/sun
 h usr/bin/pfbash=usr/bin/pfexec
 h usr/bin/pfcsh=usr/bin/pfexec
 f usr/bin/pfexec 0555 root bin
@@ -2182,7 +2218,6 @@ f usr/bin/pg 0555 root bin
 f usr/bin/pginfo 0555 root bin
 f usr/bin/pgrep 0555 root bin
 f usr/bin/pgstat 0555 root bin
-f usr/bin/pkg2du 0555 root bin
 f usr/bin/pkgtrans 0555 root bin
 h usr/bin/pkill=usr/bin/pgrep
 f usr/bin/pktool 0555 root bin
@@ -2235,7 +2270,6 @@ f usr/bin/rm 0555 root bin
 s usr/bin/rmail=mail
 f usr/bin/rmdir 0555 root bin
 f usr/bin/rmformat 0555 root bin
-f usr/bin/roffbib 0555 root bin
 f usr/bin/roles 0555 root bin
 f usr/bin/rpcinfo 0555 root bin
 f usr/bin/rsh 4555 root bin
@@ -2257,9 +2291,9 @@ s usr/bin/sh=ksh93
 f usr/bin/shcomp 0555 root bin
 f usr/bin/size 0555 root bin
 h usr/bin/sleep=usr/bin/alias
+f usr/bin/smbutil 0555 root bin
 f usr/bin/soelim 0555 root bin
 h usr/bin/sort=usr/lib/isaexec
-f usr/bin/sortbib 0555 root bin
 f usr/bin/sotruss 0755 root bin
 h usr/bin/sparc=usr/bin/sun
 f usr/bin/spell 0555 root bin
@@ -2315,11 +2349,6 @@ f usr/bin/tsort 0555 root bin
 f usr/bin/tty 0555 root bin
 h usr/bin/type=usr/bin/alias
 f usr/bin/tzselect 0555 root bin
-h usr/bin/u370=usr/bin/sun
-h usr/bin/u3b15=usr/bin/sun
-h usr/bin/u3b2=usr/bin/sun
-h usr/bin/u3b5=usr/bin/sun
-h usr/bin/u3b=usr/bin/sun
 f usr/bin/ul 0555 root bin
 h usr/bin/ulimit=usr/bin/alias
 h usr/bin/umask=usr/bin/alias
@@ -2331,12 +2360,10 @@ h usr/bin/uniq=usr/bin/alias
 f usr/bin/units 0555 root bin
 f usr/bin/unix2dos 0555 root bin
 f usr/bin/unpack 0555 root bin
-f usr/bin/updatemedia 0555 root bin
 h usr/bin/uptime=usr/lib/isaexec
 f usr/bin/userattr 0555 root bin
 f usr/bin/uudecode 0555 root uucp
 f usr/bin/uuencode 0555 root uucp
-h usr/bin/vax=usr/bin/sun
 h usr/bin/vedit=usr/bin/edit
 f usr/bin/vfsstat 0555 root bin
 f usr/bin/vgrind 0555 root bin
@@ -2368,32 +2395,32 @@ d usr/ccs 0755 root bin
 d usr/ccs/bin 0755 root bin
 d usr/ccs/bin/amd64 0755 root bin
 s usr/ccs/bin/amd64/ld=../../../bin/amd64/ld
+s usr/ccs/bin/ar=../../bin/ar
 s usr/ccs/bin/ld=../../bin/ld
 s usr/ccs/bin/m4=../../bin/m4
 s usr/ccs/bin/regcmp=../../bin/regcmp
 d usr/ccs/lib 0755 root bin
 d usr/ccs/lib/amd64 0755 root bin
-s usr/ccs/lib/amd64/libcurses.so=../../../../lib/amd64/libcurses.so.1
-s usr/ccs/lib/amd64/libform.so=../../../lib/amd64/libform.so.1
-s usr/ccs/lib/amd64/libgen.so=../../../../lib/amd64/libgen.so.1
-s usr/ccs/lib/amd64/libl.so=../../../lib/amd64/libl.so.1
-s usr/ccs/lib/amd64/libmalloc.so=../../../lib/amd64/libmalloc.so.1
-s usr/ccs/lib/amd64/libmenu.so=../../../lib/amd64/libmenu.so.1
-s usr/ccs/lib/amd64/libpanel.so=../../../lib/amd64/libpanel.so.1
-s usr/ccs/lib/amd64/libtermcap.so=../../../../lib/amd64/libcurses.so.1
-s usr/ccs/lib/amd64/libtermlib.so=../../../../lib/amd64/libcurses.so.1
-s usr/ccs/lib/amd64/liby.so=../../../lib/amd64/liby.so.1
-s usr/ccs/lib/cpp=../../../lib/cpp
-s usr/ccs/lib/libcurses.so=../../../lib/libcurses.so.1
-s usr/ccs/lib/libform.so=../../lib/libform.so.1
-s usr/ccs/lib/libgen.so=../../../lib/libgen.so.1
-s usr/ccs/lib/libl.so=../../lib/libl.so.1
-s usr/ccs/lib/libmalloc.so=../../lib/libmalloc.so.1
-s usr/ccs/lib/libmenu.so=../../lib/libmenu.so.1
-s usr/ccs/lib/libpanel.so=../../lib/libpanel.so.1
-s usr/ccs/lib/libtermcap.so=../../../lib/libcurses.so.1
-s usr/ccs/lib/libtermlib.so=../../../lib/libcurses.so.1
-s usr/ccs/lib/liby.so=../../lib/liby.so.1
+s usr/ccs/lib/amd64/libcurses.so.1=../../../../lib/amd64/libcurses.so.1
+s usr/ccs/lib/amd64/libform.so.1=../../../lib/amd64/libform.so.1
+s usr/ccs/lib/amd64/libgen.so.1=../../../../lib/amd64/libgen.so.1
+s usr/ccs/lib/amd64/libl.so.1=../../../lib/amd64/libl.so.1
+s usr/ccs/lib/amd64/libmalloc.so.1=../../../lib/amd64/libmalloc.so.1
+s usr/ccs/lib/amd64/libmenu.so.1=../../../lib/amd64/libmenu.so.1
+s usr/ccs/lib/amd64/libpanel.so.1=../../../lib/amd64/libpanel.so.1
+s usr/ccs/lib/amd64/libtermcap.so.1=../../../../lib/amd64/libtermcap.so.1
+s usr/ccs/lib/amd64/libtermlib.so.1=../../../../lib/amd64/libcurses.so.1
+s usr/ccs/lib/amd64/liby.so.1=../../../lib/amd64/liby.so.1
+s usr/ccs/lib/libcurses.so.1=../../../lib/libcurses.so.1
+s usr/ccs/lib/libform.so.1=../../lib/libform.so.1
+s usr/ccs/lib/libgen.so.1=../../../lib/libgen.so.1
+s usr/ccs/lib/libl.so.1=../../lib/libl.so.1
+s usr/ccs/lib/libmalloc.so.1=../../lib/libmalloc.so.1
+s usr/ccs/lib/libmenu.so.1=../../lib/libmenu.so.1
+s usr/ccs/lib/libpanel.so.1=../../lib/libpanel.so.1
+s usr/ccs/lib/libtermcap.so.1=../../../lib/libtermcap.so.1
+s usr/ccs/lib/libtermlib.so.1=../../../lib/libcurses.so.1
+s usr/ccs/lib/liby.so.1=../../lib/liby.so.1
 s usr/ccs/lib/link_audit=../../lib/link_audit
 s usr/dict=share/lib/dict
 d usr/gnu 0755 root bin
@@ -2405,7 +2432,6 @@ d usr/gnu/share/man/man1 0755 root bin
 d usr/gnu/share/man/man3 0755 root bin
 d usr/gnu/share/man/man5 0755 root bin
 d usr/gnu/share/man/man7 0755 root bin
-
 d usr/include 0755 root bin
 f usr/include/aclutils.h 0644 root bin
 f usr/include/aio.h 0644 root bin
@@ -2659,9 +2685,6 @@ f usr/include/grp.h 0644 root bin
 d usr/include/gssapi 0755 root bin
 f usr/include/gssapi/gssapi.h 0644 root bin
 f usr/include/gssapi/gssapi_ext.h 0644 root bin
-d usr/include/hal 0755 root bin
-f usr/include/hal/libhal-storage.h 0644 root bin
-f usr/include/hal/libhal.h 0644 root bin
 f usr/include/hbaapi.h 0644 root bin
 d usr/include/ia32 0755 root bin
 d usr/include/ia32/sys 0755 root bin
@@ -2859,8 +2882,6 @@ f usr/include/libnvpair.h 0644 root bin
 f usr/include/libnwam.h 0644 root bin
 f usr/include/libnwam_priv.h 0644 root bin
 f usr/include/libpctx.h 0644 root bin
-d usr/include/libpolkit 0755 root bin
-f usr/include/libpolkit/libpolkit.h 0644 root bin
 f usr/include/libproc.h 0644 root bin
 f usr/include/librcm.h 0644 root bin
 f usr/include/librcm_event.h 0644 root bin
@@ -3787,6 +3808,7 @@ f usr/include/sys/iommulib.h 0644 root bin
 f usr/include/sys/ipc.h 0644 root bin
 f usr/include/sys/ipc_impl.h 0644 root bin
 f usr/include/sys/ipc_rctl.h 0644 root bin
+f usr/include/sys/ipmi.h 0644 root bin
 f usr/include/sys/isa_defs.h 0644 root bin
 f usr/include/sys/iscsi_authclient.h 0644 root bin
 f usr/include/sys/iscsi_authclientglue.h 0644 root bin
@@ -4521,6 +4543,7 @@ f usr/kernel/drv/amd64/bpf 0755 root sys
 f usr/kernel/drv/amd64/dump 0755 root sys
 f usr/kernel/drv/amd64/fssnap 0755 root sys
 f usr/kernel/drv/amd64/ipf 0755 root sys
+f usr/kernel/drv/amd64/ipmi 0755 root sys
 f usr/kernel/drv/amd64/kstat 0755 root sys
 f usr/kernel/drv/amd64/ksyms 0755 root sys
 f usr/kernel/drv/amd64/logindmux 0755 root sys
@@ -4537,6 +4560,7 @@ f usr/kernel/drv/bpf.conf 0644 root sys
 f usr/kernel/drv/dump.conf 0644 root sys
 f usr/kernel/drv/fssnap.conf 0644 root sys
 f usr/kernel/drv/ipf.conf 0644 root sys
+f usr/kernel/drv/ipmi.conf 0644 root sys
 f usr/kernel/drv/kstat.conf 0644 root sys
 f usr/kernel/drv/ksyms.conf 0644 root sys
 f usr/kernel/drv/logindmux.conf 0644 root sys
@@ -4552,8 +4576,10 @@ d usr/kernel/fs 0755 root sys
 d usr/kernel/fs/amd64 0755 root sys
 f usr/kernel/fs/amd64/fdfs 0755 root sys
 f usr/kernel/fs/amd64/pcfs 0755 root sys
+f usr/kernel/fs/amd64/smbfs 0755 root sys
 d usr/kernel/kmdb 0755 root sys
 d usr/kernel/kmdb/amd64 0755 root sys
+f usr/kernel/kmdb/amd64/smbfs 0555 root sys
 f usr/kernel/kmdb/amd64/smbsrv 0555 root sys
 d usr/kernel/sched 0755 root sys
 d usr/kernel/sched/amd64 0755 root sys
@@ -4657,6 +4683,7 @@ f usr/lib/amd64/lddstub 0555 root bin
 f usr/lib/amd64/libHBAAPI.so.1 0755 root bin
 s usr/lib/amd64/libHBAAPI.so=libHBAAPI.so.1
 s usr/lib/amd64/libMPAPI.so=../../../lib/amd64/libMPAPI.so.1
+s usr/lib/amd64/libMPAPI.so.1=../../../lib/amd64/libMPAPI.so.1
 f usr/lib/amd64/libSMHBAAPI.so.1 0755 root bin
 s usr/lib/amd64/libSMHBAAPI.so=libSMHBAAPI.so.1
 s usr/lib/amd64/libadm.so.1=../../../lib/amd64/libadm.so.1
@@ -4701,6 +4728,7 @@ s usr/lib/amd64/libcrypt_d.so=libcrypt.so
 s usr/lib/amd64/libcrypt_i.so.1=libcrypt.so.1
 s usr/lib/amd64/libcrypt_i.so=libcrypt.so
 s usr/lib/amd64/libcryptoutil.so=../../../lib/amd64/libcryptoutil.so.1
+s usr/lib/amd64/libcryptoutil.so.1=../../../lib/amd64/libcryptoutil.so.1
 s usr/lib/amd64/libctf.so.1=../../../lib/amd64/libctf.so.1
 s usr/lib/amd64/libctf.so=../../../lib/amd64/libctf.so.1
 s usr/lib/amd64/libcurses.so.1=../../../lib/amd64/libcurses.so.1
@@ -4720,6 +4748,7 @@ s usr/lib/amd64/libdiskmgt.so=libdiskmgt.so.1
 s usr/lib/amd64/libdl.so.1=../../../lib/amd64/libdl.so.1
 s usr/lib/amd64/libdl.so=../../../lib/amd64/libdl.so.1
 s usr/lib/amd64/libdladm.so=../../../lib/amd64/libdladm.so.1
+s usr/lib/amd64/libdladm.so.1=../../../lib/amd64/libdladm.so.1
 f usr/lib/amd64/libdll.so.1 0755 root bin
 s usr/lib/amd64/libdll.so=libdll.so.1
 s usr/lib/amd64/libdlpi.so.1=../../../lib/amd64/libdlpi.so.1
@@ -4756,12 +4785,6 @@ s usr/lib/amd64/libgen.so.1=../../../lib/amd64/libgen.so.1
 s usr/lib/amd64/libgen.so=../../../lib/amd64/libgen.so.1
 f usr/lib/amd64/libgss.so.1 0755 root bin
 s usr/lib/amd64/libgss.so=libgss.so.1
-f usr/lib/amd64/libhal-storage.so.1.0.0 0755 root bin
-s usr/lib/amd64/libhal-storage.so.1=libhal-storage.so.1.0.0
-s usr/lib/amd64/libhal-storage.so=libhal-storage.so.1.0.0
-f usr/lib/amd64/libhal.so.1.0.0 0755 root bin
-s usr/lib/amd64/libhal.so.1=libhal.so.1.0.0
-s usr/lib/amd64/libhal.so=libhal.so.1.0.0
 f usr/lib/amd64/libhotplug.so.1 0755 root bin
 s usr/lib/amd64/libhotplug.so=libhotplug.so.1
 f usr/lib/amd64/libidmap.so.1 0755 root bin
@@ -4787,8 +4810,7 @@ s usr/lib/amd64/libiscsit.so=libiscsit.so.1
 f usr/lib/amd64/libjdns_sd.so.1 0755 root bin
 s usr/lib/amd64/libjdns_sd.so=libjdns_sd.so.1
 s usr/lib/amd64/libkmfberder.so=../../../lib/amd64/libkmfberder.so.1
-f usr/lib/amd64/libkmsagent.so.1 0755 root bin
-s usr/lib/amd64/libkmsagent.so=libkmsagent.so.1
+s usr/lib/amd64/libkmfberder.so.1=../../../lib/amd64/libkmfberder.so.1
 f usr/lib/amd64/libkrb5.so.1 0755 root bin
 s usr/lib/amd64/libkrb5.so=libkrb5.so.1
 s usr/lib/amd64/libkstat.so.1=../../../lib/amd64/libkstat.so.1
@@ -4797,7 +4819,6 @@ f usr/lib/amd64/libkvm.so.1 0755 root bin
 s usr/lib/amd64/libkvm.so=libkvm.so.1
 f usr/lib/amd64/libl.so.1 0755 root bin
 s usr/lib/amd64/libl.so=libl.so.1
-f usr/lib/amd64/libldap.so.4 0755 root bin
 f usr/lib/amd64/libldap.so.5 0755 root bin
 s usr/lib/amd64/libldap.so=libldap.so.5
 s usr/lib/amd64/liblddbg.so.4=../../../lib/amd64/liblddbg.so.4
@@ -4822,6 +4843,7 @@ s usr/lib/amd64/libmenu.so=libmenu.so.1
 s usr/lib/amd64/libmp.so.2=../../../lib/amd64/libmp.so.2
 s usr/lib/amd64/libmp.so=../../../lib/amd64/libmp.so.2
 s usr/lib/amd64/libmpscsi_vhci.so=../../../lib/amd64/libmpscsi_vhci.so.1
+s usr/lib/amd64/libmpscsi_vhci.so.1=../../../lib/amd64/libmpscsi_vhci.so.1
 f usr/lib/amd64/libmtmalloc.so.1 0755 root bin
 s usr/lib/amd64/libmtmalloc.so=libmtmalloc.so.1
 f usr/lib/amd64/libndmp.so.1 0755 root bin
@@ -4838,6 +4860,7 @@ s usr/lib/amd64/libpam.so.1=../../../lib/amd64/libpam.so.1
 s usr/lib/amd64/libpam.so=../../../lib/amd64/libpam.so.1
 f usr/lib/amd64/libpanel.so.1 0755 root bin
 s usr/lib/amd64/libpanel.so=libpanel.so.1
+f usr/lib/amd64/libpcidb.so.1 0755 root bin
 f usr/lib/amd64/libpctx.so.1 0755 root bin
 s usr/lib/amd64/libpctx.so=libpctx.so.1
 f usr/lib/amd64/libpicl.so.1 0755 root bin
@@ -4941,9 +4964,13 @@ s usr/lib/amd64/libtnfctl.so=libtnfctl.so.1
 f usr/lib/amd64/libtnfprobe.so.1 0755 root bin
 s usr/lib/amd64/libtnfprobe.so=libtnfprobe.so.1
 s usr/lib/amd64/libtsnet.so=../../../lib/amd64/libtsnet.so.1
+s usr/lib/amd64/libtsnet.so.1=../../../lib/amd64/libtsnet.so.1
 s usr/lib/amd64/libtsol.so=../../../lib/amd64/libtsol.so.2
+s usr/lib/amd64/libtsol.so.2=../../../lib/amd64/libtsol.so.2
 s usr/lib/amd64/libumem.so.1=../../../lib/amd64/libumem.so.1
 s usr/lib/amd64/libumem.so=../../../lib/amd64/libumem.so.1
+s usr/lib/amd64/libumem_trampoline.so.1=../../../lib/amd64/libumem_trampoline.so.1
+s usr/lib/amd64/libumem_trampoline.so=../../../lib/amd64/libumem_trampoline.so.1
 s usr/lib/amd64/libuuid.so.1=../../../lib/amd64/libuuid.so.1
 s usr/lib/amd64/libuuid.so=../../../lib/amd64/libuuid.so.1
 s usr/lib/amd64/libuutil.so.1=../../../lib/amd64/libuutil.so.1
@@ -4982,8 +5009,6 @@ s usr/lib/amd64/nss_nis.so.1=../../../lib/amd64/nss_nis.so.1
 s usr/lib/amd64/nss_user.so.1=../../../lib/amd64/nss_user.so.1
 f usr/lib/amd64/passwdutil.so.1 0755 root bin
 d usr/lib/amd64/pkgconfig 0755 root other
-f usr/lib/amd64/pkgconfig/hal-storage.pc 0644 root bin
-f usr/lib/amd64/pkgconfig/hal.pc 0644 root bin
 f usr/lib/amd64/rpcsec.so.1 0755 root bin
 s usr/lib/amd64/rpcsec.so=rpcsec.so.1
 f usr/lib/amd64/straddr.so.2 0755 root bin
@@ -5001,29 +5026,6 @@ f usr/lib/audit/audit_record_attr 0444 root bin
 d usr/lib/autofs 0755 root sys
 f usr/lib/autofs/automountd 0555 root bin
 d usr/lib/brand 0755 root bin
-d usr/lib/brand/joyent 0755 root bin
-f usr/lib/brand/joyent/common.ksh 0444 root root
-f usr/lib/brand/joyent/config.xml 0444 root root
-f usr/lib/brand/joyent/jattach 0755 root root
-f usr/lib/brand/joyent/jdetach 0755 root root
-f usr/lib/brand/joyent/jinstall 0755 root root
-f usr/lib/brand/joyent/juninstall 0755 root root
-f usr/lib/brand/joyent/platform.xml 0444 root root
-f usr/lib/brand/joyent/poststate 0755 root root
-f usr/lib/brand/joyent/prestate 0755 root root
-f usr/lib/brand/joyent/query 0755 root root
-f usr/lib/brand/joyent/statechange 0755 root root
-d usr/lib/brand/kvm 0755 root bin
-f usr/lib/brand/kvm/common.ksh 0444 root root
-f usr/lib/brand/kvm/config.xml 0444 root root
-f usr/lib/brand/kvm/kattach 0755 root root
-f usr/lib/brand/kvm/kdetach 0755 root root
-f usr/lib/brand/kvm/kinstall 0755 root root
-f usr/lib/brand/kvm/kuninstall 0755 root root
-f usr/lib/brand/kvm/platform.xml 0444 root root
-f usr/lib/brand/kvm/poststate 0755 root root
-f usr/lib/brand/kvm/prestate 0755 root root
-f usr/lib/brand/kvm/statechange 0755 root root
 d usr/lib/brand/shared 0755 root sys
 f usr/lib/brand/shared/common.ksh 0444 root bin
 f usr/lib/brand/shared/query 0755 root bin
@@ -5079,7 +5081,6 @@ f usr/lib/class/SDC/SDCpriocntl 0555 root bin
 d usr/lib/class/TS 0755 root bin
 f usr/lib/class/TS/TSdispadmin 0555 root bin
 f usr/lib/class/TS/TSpriocntl 0555 root bin
-f usr/lib/cpp 0555 root bin
 s usr/lib/cron=../../etc/cron.d
 f usr/lib/crt1.o 0644 root bin
 f usr/lib/crti.o 0644 root bin
@@ -5327,21 +5328,6 @@ s usr/lib/fs/autofs/libshare_autofs.so=libshare_autofs.so.1
 f usr/lib/fs/autofs/mount 0555 root bin
 f usr/lib/fs/autofs/share 0555 root bin
 f usr/lib/fs/autofs/unshare 0555 root bin
-d usr/lib/fs/cachefs 0755 root sys
-f usr/lib/fs/cachefs/cachefsd 0555 root bin
-f usr/lib/fs/cachefs/cachefslog 0555 root bin
-f usr/lib/fs/cachefs/cachefspack 0555 root bin
-f usr/lib/fs/cachefs/cachefsstat 0555 root bin
-f usr/lib/fs/cachefs/cachefswssize 0555 root bin
-f usr/lib/fs/cachefs/cfsadmin 0555 root bin
-f usr/lib/fs/cachefs/cfsfstype 0555 root bin
-f usr/lib/fs/cachefs/cfstagchk 0555 root bin
-f usr/lib/fs/cachefs/dfshares 0555 root bin
-f usr/lib/fs/cachefs/fsck 0555 root bin
-f usr/lib/fs/cachefs/mount 0555 root bin
-f usr/lib/fs/cachefs/share 0555 root bin
-f usr/lib/fs/cachefs/umount 0555 root bin
-f usr/lib/fs/cachefs/unshare 0555 root bin
 d usr/lib/fs/ctfs 0755 root sys
 f usr/lib/fs/ctfs/mount 0555 root bin
 d usr/lib/fs/dev 0755 root sys
@@ -5358,6 +5344,8 @@ f usr/lib/fs/hyprlofs/hlcfg 0555 root bin
 f usr/lib/fs/hyprlofs/mount 0555 root bin
 d usr/lib/fs/lofs 0755 root sys
 f usr/lib/fs/lofs/mount 0555 root bin
+d usr/lib/fs/lxproc 0755 root sys
+f usr/lib/fs/lxproc/mount 0555 root bin
 d usr/lib/fs/mntfs 0755 root sys
 f usr/lib/fs/mntfs/mount 0555 root bin
 d usr/lib/fs/nfs 0755 root sys
@@ -5384,6 +5372,21 @@ d usr/lib/fs/proc 0755 root sys
 f usr/lib/fs/proc/mount 0555 root bin
 d usr/lib/fs/sharefs 0755 root sys
 f usr/lib/fs/sharefs/mount 0555 root bin
+d usr/lib/fs/smb 0755 root sys
+d usr/lib/fs/smb/amd64 0755 root sys
+f usr/lib/fs/smb/amd64/libshare_smb.so.1 0755 root sys
+f usr/lib/fs/smb/libshare_smb.so.1 0755 root sys
+d usr/lib/fs/smbfs 0755 root sys
+d usr/lib/fs/smbfs/amd64 0755 root sys
+f usr/lib/fs/smbfs/amd64/libshare_smbfs.so.1 0755 root sys
+s usr/lib/fs/smbfs/amd64/libshare_smbfs.so=libshare_smbfs.so.1
+f usr/lib/fs/smbfs/dfshares 0555 root bin
+f usr/lib/fs/smbfs/libshare_smbfs.so.1 0755 root sys
+s usr/lib/fs/smbfs/libshare_smbfs.so=libshare_smbfs.so.1
+f usr/lib/fs/smbfs/mount 0555 root bin
+f usr/lib/fs/smbfs/share 0555 root bin
+f usr/lib/fs/smbfs/umount 0555 root bin
+f usr/lib/fs/smbfs/unshare 0555 root bin
 d usr/lib/fs/tmpfs 0755 root sys
 f usr/lib/fs/tmpfs/mount 0555 root bin
 d usr/lib/fs/ufs 0755 root sys
@@ -5454,40 +5457,6 @@ s usr/lib/gss/mech_dh.so=mech_dh.so.1
 f usr/lib/gss/mech_krb5.so.1 0755 root bin
 s usr/lib/gss/mech_krb5.so=mech_krb5.so.1
 f usr/lib/gss/mech_spnego.so.1 0755 root bin
-d usr/lib/hal 0755 root bin
-f usr/lib/hal/hal-functions 0555 root bin
-f usr/lib/hal/hal-is-caller-privileged 0555 root bin
-f usr/lib/hal/hal-storage-cleanup-all-mountpoints 0555 root bin
-f usr/lib/hal/hal-storage-cleanup-mountpoint 0555 root bin
-f usr/lib/hal/hal-storage-closetray 0555 root bin
-f usr/lib/hal/hal-storage-eject 0555 root bin
-f usr/lib/hal/hal-storage-mount 0555 root bin
-f usr/lib/hal/hal-storage-unmount 0555 root bin
-f usr/lib/hal/hal-storage-zpool-export 0555 root bin
-f usr/lib/hal/hal-storage-zpool-import 0555 root bin
-f usr/lib/hal/hal-system-lcd-get-brightness 0555 root bin
-f usr/lib/hal/hal-system-lcd-set-brightness 0555 root bin
-f usr/lib/hal/hal-system-power-hibernate 0555 root bin
-f usr/lib/hal/hal-system-power-reboot 0555 root bin
-f usr/lib/hal/hal-system-power-shutdown 0555 root bin
-f usr/lib/hal/hal-system-power-suspend 0555 root bin
-f usr/lib/hal/hald 0555 root bin
-f usr/lib/hal/hald-addon-acpi 0555 root bin
-f usr/lib/hal/hald-addon-cpufreq 0555 root bin
-f usr/lib/hal/hald-addon-network-discovery 0555 root bin
-f usr/lib/hal/hald-addon-storage 0555 root bin
-f usr/lib/hal/hald-probe-acpi 0555 root bin
-f usr/lib/hal/hald-probe-storage 0555 root bin
-f usr/lib/hal/hald-probe-volume 0555 root bin
-f usr/lib/hal/hald-probe-xkb 0555 root bin
-f usr/lib/hal/hald-runner 0555 root bin
-d usr/lib/hal/sunos 0755 root bin
-f usr/lib/hal/sunos/hal-system-lcd-get-brightness-sunos 0555 root bin
-f usr/lib/hal/sunos/hal-system-lcd-set-brightness-sunos 0555 root bin
-f usr/lib/hal/sunos/hal-system-power-hibernate-sunos 0555 root bin
-f usr/lib/hal/sunos/hal-system-power-reboot-sunos 0555 root bin
-f usr/lib/hal/sunos/hal-system-power-shutdown-sunos 0555 root bin
-f usr/lib/hal/sunos/hal-system-power-suspend-sunos 0555 root bin
 d usr/lib/help 0755 root bin
 d usr/lib/help/auths 0755 root bin
 d usr/lib/help/auths/locale 0755 root bin
@@ -6188,12 +6157,6 @@ s usr/lib/libgrubmgmt.so=../../lib/libgrubmgmt.so.1
 s usr/lib/libgrubmgmt.so.1=../../lib/libgrubmgmt.so.1
 f usr/lib/libgss.so.1 0755 root bin
 s usr/lib/libgss.so=libgss.so.1
-f usr/lib/libhal-storage.so.1.0.0 0755 root bin
-s usr/lib/libhal-storage.so.1=libhal-storage.so.1.0.0
-s usr/lib/libhal-storage.so=libhal-storage.so.1.0.0
-f usr/lib/libhal.so.1.0.0 0755 root bin
-s usr/lib/libhal.so.1=libhal.so.1.0.0
-s usr/lib/libhal.so=libhal.so.1.0.0
 f usr/lib/libhotplug.so.1 0755 root bin
 s usr/lib/libhotplug.so=libhotplug.so.1
 f usr/lib/libidmap.so.1 0755 root bin
@@ -6232,8 +6195,6 @@ s usr/lib/libkmf.so=../../lib/libkmf.so.1
 s usr/lib/libkmf.so.1=../../lib/libkmf.so.1
 s usr/lib/libkmfberder.so=../../lib/libkmfberder.so.1
 s usr/lib/libkmfberder.so.1=../../lib/libkmfberder.so.1
-f usr/lib/libkmsagent.so.1 0755 root bin
-s usr/lib/libkmsagent.so=libkmsagent.so.1
 f usr/lib/libkrb5.so.1 0755 root bin
 s usr/lib/libkrb5.so=libkrb5.so.1
 s usr/lib/libkstat.so.1=../../lib/libkstat.so.1
@@ -6242,7 +6203,6 @@ f usr/lib/libkvm.so.1 0755 root bin
 s usr/lib/libkvm.so=libkvm.so.1
 f usr/lib/libl.so.1 0755 root bin
 s usr/lib/libl.so=libl.so.1
-f usr/lib/libldap.so.4 0755 root bin
 f usr/lib/libldap.so.5 0755 root bin
 s usr/lib/libldap.so=libldap.so.5
 s usr/lib/liblddbg.so.4=../../lib/liblddbg.so.4
@@ -6303,6 +6263,7 @@ f usr/lib/libpanel.so.1 0755 root bin
 s usr/lib/libpanel.so=libpanel.so.1
 f usr/lib/libparted.so.8 0755 root bin
 s usr/lib/libparted.so=libparted.so.8
+f usr/lib/libpcidb.so.1 0755 root bin
 f usr/lib/libpctx.so.1 0755 root bin
 s usr/lib/libpctx.so=libpctx.so.1
 f usr/lib/libpicl.so.1 0755 root bin
@@ -6315,9 +6276,6 @@ f usr/lib/libpkcs11.so.1 0755 root bin
 s usr/lib/libpkcs11.so=libpkcs11.so.1
 f usr/lib/libpkg.so.1 0755 root bin
 s usr/lib/libpkg.so=libpkg.so.1
-f usr/lib/libpolkit.so.0.0.0 0755 root bin
-s usr/lib/libpolkit.so.0=libpolkit.so.0.0.0
-s usr/lib/libpolkit.so=libpolkit.so.0.0.0
 f usr/lib/libpool.so.1 0755 root bin
 s usr/lib/libpool.so=libpool.so.1
 s usr/lib/libposix4.so.1=../../lib/librt.so.1
@@ -6336,7 +6294,6 @@ s usr/lib/librcm.so.1=../../lib/librcm.so.1
 s usr/lib/librcm.so=../../lib/librcm.so.1
 f usr/lib/librdc.so.1 0755 root bin
 s usr/lib/librdc.so=librdc.so.1
-f usr/lib/libreadline.so.5 0555 root bin
 f usr/lib/libreparse.so.1 0755 root bin
 s usr/lib/libreparse.so=libreparse.so.1
 s usr/lib/libresolv.so.1=../../lib/libresolv.so.1
@@ -6434,9 +6391,10 @@ s usr/lib/libtsol.so=../../lib/libtsol.so.2
 s usr/lib/libtsol.so.2=../../lib/libtsol.so.2
 s usr/lib/libumem.so.1=../../lib/libumem.so.1
 s usr/lib/libumem.so=../../lib/libumem.so.1
+s usr/lib/libumem_trampoline.so.1=../../lib/libumem_trampoline.so.1
+s usr/lib/libumem_trampoline.so=../../lib/libumem_trampoline.so.1
 f usr/lib/libunistat.so.1 0755 root bin
 s usr/lib/libunistat.so=libunistat.so.1
-f usr/lib/libusb.so.1 0555 root bin
 s usr/lib/libuuid.so.1=../../lib/libuuid.so.1
 s usr/lib/libuuid.so=../../lib/libuuid.so.1
 s usr/lib/libuutil.so.1=../../lib/libuutil.so.1
@@ -9596,9 +9554,6 @@ s usr/lib/picl/plugins/libpiclfrutree.so=libpiclfrutree.so.1
 f usr/lib/picl/plugins/libpiclmemcfg.so.1 0755 root sys
 s usr/lib/picl/plugins/libpiclmemcfg.so=libpiclmemcfg.so.1
 d usr/lib/pkgconfig 0755 root bin
-f usr/lib/pkgconfig/hal-storage.pc 0644 root bin
-f usr/lib/pkgconfig/hal.pc 0644 root bin
-f usr/lib/pkgconfig/polkit.pc 0644 root bin
 f usr/lib/platexec 0555 root bin
 d usr/lib/pool 0755 root bin
 f usr/lib/pool/libjkstat.so.1 0755 root bin
@@ -9662,7 +9617,6 @@ s usr/lib/reparse/libnfs_basic.so=libnfs_basic.so.1
 f usr/lib/reparse/libreparse_smb.so.1 0755 root bin
 s usr/lib/reparse/libreparse_smb.so=libreparse_smb.so.1
 f usr/lib/reparse/reparsed 0555 root sys
-f usr/lib/rmvolmgr 0555 root bin
 f usr/lib/rpcsec.so.1 0755 root bin
 s usr/lib/rpcsec.so=rpcsec.so.1
 s usr/lib/rsh=../bin/ksh93
@@ -9740,7 +9694,9 @@ f usr/lib/scsi/smp 0555 root bin
 d usr/lib/secure 0755 root bin
 s usr/lib/secure/32=.
 s usr/lib/secure/64=amd64
+s usr/lib/secure/libumem_trampoline.so.1=../../../lib/libumem_trampoline.so.1
 d usr/lib/secure/amd64 0755 root bin
+s usr/lib/secure/amd64/libumem_trampoline.so.1=../../../../lib/amd64/libumem_trampoline.so.1
 d usr/lib/security 0755 root bin
 s usr/lib/security/64=amd64
 d usr/lib/security/amd64 0755 root bin
@@ -9796,8 +9752,6 @@ f usr/lib/security/amd64/pam_unix_session.so.1 0755 root bin
 s usr/lib/security/amd64/pam_unix_session.so=pam_unix_session.so.1
 f usr/lib/security/amd64/pkcs11_kernel.so.1 0755 root bin
 s usr/lib/security/amd64/pkcs11_kernel.so=pkcs11_kernel.so.1
-f usr/lib/security/amd64/pkcs11_kms.so.1 0755 root bin
-s usr/lib/security/amd64/pkcs11_kms.so=pkcs11_kms.so.1
 f usr/lib/security/amd64/pkcs11_softtoken.so.1 0755 root bin
 s usr/lib/security/amd64/pkcs11_softtoken.so=pkcs11_softtoken.so.1
 f usr/lib/security/audit_binfile.so.1 0755 root bin
@@ -9863,8 +9817,6 @@ f usr/lib/security/pam_unix_session.so.1 0755 root bin
 s usr/lib/security/pam_unix_session.so=pam_unix_session.so.1
 f usr/lib/security/pkcs11_kernel.so.1 0755 root bin
 s usr/lib/security/pkcs11_kernel.so=pkcs11_kernel.so.1
-f usr/lib/security/pkcs11_kms.so.1 0755 root bin
-s usr/lib/security/pkcs11_kms.so=pkcs11_kms.so.1
 f usr/lib/security/pkcs11_softtoken.so.1 0755 root bin
 s usr/lib/security/pkcs11_softtoken.so=pkcs11_softtoken.so.1
 f usr/lib/sendmail 2555 root smmsp
@@ -9898,6 +9850,7 @@ f usr/lib/smbsrv/libsmbns.so.1 0755 root bin
 s usr/lib/smbsrv/libsmbns.so=libsmbns.so.1
 f usr/lib/smbsrv/libsqlite.so.1 0755 root bin
 s usr/lib/smbsrv/libsqlite.so=libsqlite.so.1
+f usr/lib/smbsrv/smbd 0755 root bin
 d usr/lib/smedia 0755 root bin
 d usr/lib/smedia/amd64 0755 root bin
 f usr/lib/smedia/amd64/sm_blkdev.so.1 0555 root bin
@@ -10061,6 +10014,25 @@ f usr/perl5/5.12/lib/i86pc-solaris-64int/auto/Sun/Solaris/Utils/Utils.so 0555 ro
 d usr/platform 0755 root sys
 d usr/platform/i86pc 0755 root sys
 d usr/platform/i86pc/lib 0755 root sys
+d usr/platform/i86pc/lib/fm 0755 root sys
+d usr/platform/i86pc/lib/fm/eft 0755 root sys
+f usr/platform/i86pc/lib/fm/eft/amd64.eft 0444 root sys
+f usr/platform/i86pc/lib/fm/eft/gcpu_amd.eft 0444 root sys
+f usr/platform/i86pc/lib/fm/eft/gcpu.eft 0444 root sys
+f usr/platform/i86pc/lib/fm/eft/intel.eft 0444 root sys
+d usr/platform/i86pc/lib/fm/topo 0755 root sys
+d usr/platform/i86pc/lib/fm/topo/maps 0755 root sys
+f usr/platform/i86pc/lib/fm/topo/maps/chassis-hc-topology.xml 0444 root sys
+f usr/platform/i86pc/lib/fm/topo/maps/chip-hc-topology.xml 0444 root sys
+f usr/platform/i86pc/lib/fm/topo/maps/fan-hc-topology.xml 0444 root sys
+f usr/platform/i86pc/lib/fm/topo/maps/i86pc-hc-topology.xml 0444 root sys
+f usr/platform/i86pc/lib/fm/topo/maps/i86pc-legacy-hc-topology.xml 0444 root sys
+f usr/platform/i86pc/lib/fm/topo/maps/psu-hc-topology.xml 0444 root sys
+d usr/platform/i86pc/lib/fm/topo/plugins 0755 root sys
+f usr/platform/i86pc/lib/fm/topo/plugins/chip.so 0555 root sys
+f usr/platform/i86pc/lib/fm/topo/plugins/hostbridge.so 0555 root sys
+f usr/platform/i86pc/lib/fm/topo/plugins/pcibus.so 0555 root sys
+f usr/platform/i86pc/lib/fm/topo/plugins/x86pi.so 0555 root sys
 d usr/platform/i86pc/lib/mdb 0755 root sys
 d usr/platform/i86pc/lib/mdb/kvm 0755 root sys
 d usr/platform/i86pc/lib/mdb/kvm/amd64 0755 root sys
@@ -10136,12 +10108,10 @@ f usr/sadm/install/scripts/r.rbac 0555 root sys
 d usr/sadm/sysadm 0755 root bin
 d usr/sadm/sysadm/add-ons 0755 root bin
 d usr/sadm/sysadm/bin 0755 root bin
-f usr/sadm/sysadm/bin/mkdtab 0755 root bin
 f usr/sadm/ugdates 0444 root bin
 d usr/sbin 0755 root bin
 f usr/sbin/6to4relay 0555 root bin
 f usr/sbin/acctadm 0555 root bin
-f usr/sbin/add_allocatable 0555 root bin
 h usr/sbin/add_drv=usr/lib/isaexec
 f usr/sbin/allocate 4555 root bin
 d usr/sbin/amd64 0755 root bin
@@ -10169,7 +10139,6 @@ f usr/sbin/amd64/update_drv 0555 root sys
 f usr/sbin/amd64/whodo 4555 root bin
 f usr/sbin/amd64/zdb 0555 root bin
 f usr/sbin/arp 0555 root bin
-f usr/sbin/atohexlabel 0555 root sys
 f usr/sbin/audit 0555 root bin
 f usr/sbin/auditconfig 0555 root bin
 f usr/sbin/auditd 0555 root bin
@@ -10179,10 +10148,7 @@ f usr/sbin/auditstat 0555 root bin
 h usr/sbin/audlinks=usr/sbin/devfsadm
 s usr/sbin/automount=../lib/fs/autofs/automount
 s usr/sbin/autopush=../../sbin/autopush
-s usr/sbin/cachefslog=../lib/fs/cachefs/cachefslog
-s usr/sbin/cachefswssize=../lib/fs/cachefs/cachefswssize
 f usr/sbin/cfgadm 0555 root bin
-s usr/sbin/cfsadmin=../lib/fs/cachefs/cfsadmin
 f usr/sbin/check-hostname 0555 root mail
 f usr/sbin/check-permissions 0555 root mail
 f usr/sbin/chk_encodings 0555 root sys
@@ -10195,7 +10161,6 @@ f usr/sbin/consadmd 0555 root sys
 f usr/sbin/cpustat 0555 root bin
 f usr/sbin/cron 0555 root sys
 s usr/sbin/cryptoadm=../../sbin/cryptoadm
-f usr/sbin/datadm 0555 root bin
 s usr/sbin/dcopy=clri
 h usr/sbin/deallocate=usr/sbin/allocate
 f usr/sbin/devfsadm 0755 root sys
@@ -10205,7 +10170,6 @@ s usr/sbin/devnm=df
 f usr/sbin/df 0555 root bin
 f usr/sbin/dfmounts 0555 root bin
 h usr/sbin/dfshares=usr/sbin/dfmounts
-f usr/sbin/dig 0555 root bin
 h usr/sbin/disks=usr/sbin/devfsadm
 f usr/sbin/dispadmin 0555 root bin
 s usr/sbin/dladm=../../sbin/dladm
@@ -10254,15 +10218,7 @@ f usr/sbin/groupmod 0555 root sys
 f usr/sbin/grpck 0555 root bin
 f usr/sbin/grub 0555 root bin
 f usr/sbin/gsscred 0555 root sys
-f usr/sbin/hal-device 0555 root bin
-f usr/sbin/hal-fdi-validate 0555 root bin
-f usr/sbin/hal-find-by-capability 0555 root bin
-f usr/sbin/hal-find-by-property 0555 root bin
-f usr/sbin/hal-get-property 0555 root bin
-f usr/sbin/hal-set-property 0555 root bin
 f usr/sbin/halt 0755 root bin
-f usr/sbin/hextoalabel 0555 root sys
-f usr/sbin/host 0555 root bin
 s usr/sbin/hostconfig=../../sbin/hostconfig
 f usr/sbin/hotplug 0555 root bin
 f usr/sbin/htable 0555 root bin
@@ -10322,7 +10278,6 @@ f usr/sbin/ipdadm 0555 root bin
 h usr/sbin/ipf=usr/lib/isaexec
 h usr/sbin/ipfs=usr/lib/isaexec
 h usr/sbin/ipfstat=usr/lib/isaexec
-f usr/sbin/ipmitool 0555 root bin
 h usr/sbin/ipmon=usr/lib/isaexec
 s usr/sbin/ipmpstat=../../sbin/ipmpstat
 h usr/sbin/ipnat=usr/lib/isaexec
@@ -10368,7 +10323,6 @@ f usr/sbin/newkey 0555 root sys
 f usr/sbin/nfsref 0555 root bin
 f usr/sbin/nlsadmin 0755 root adm
 f usr/sbin/nscd 0555 root bin
-f usr/sbin/nslookup 0555 root bin
 f usr/sbin/nwamadm 0555 root bin
 f usr/sbin/nwamcfg 0555 root bin
 h usr/sbin/pbind=usr/lib/isaexec
@@ -10376,7 +10330,6 @@ f usr/sbin/ping 4555 root bin
 h usr/sbin/plockstat=usr/lib/isaexec
 f usr/sbin/pmadm 0555 root sys
 f usr/sbin/pmconfig 4555 root bin
-f usr/sbin/polkit-is-privileged 0555 root bin
 f usr/sbin/pooladm 0555 root bin
 f usr/sbin/poolbind 0555 root bin
 f usr/sbin/poolcfg 0555 root bin
@@ -10407,7 +10360,6 @@ f usr/sbin/rcapadm 0555 root bin
 f usr/sbin/rctladm 0555 root bin
 h usr/sbin/reboot=usr/sbin/halt
 h usr/sbin/rem_drv=usr/lib/isaexec
-h usr/sbin/remove_allocatable=usr/sbin/add_allocatable
 s usr/sbin/repquota=../lib/fs/ufs/repquota
 f usr/sbin/rmt 0555 root bin
 f usr/sbin/roleadd 0555 root sys
@@ -10423,7 +10375,6 @@ f usr/sbin/rwall 0555 root bin
 f usr/sbin/sacadm 4755 root sys
 f usr/sbin/safe_finger 0555 root bin
 f usr/sbin/sbdadm 0555 root bin
-f usr/sbin/sdpadm 0555 root bin
 s usr/sbin/sendmail=../lib/sendmail
 f usr/sbin/setmnt 0555 root bin
 h usr/sbin/share=usr/sbin/sharemgr
@@ -10432,7 +10383,9 @@ f usr/sbin/sharectl 0555 root bin
 f usr/sbin/sharemgr 0555 root bin
 s usr/sbin/showmount=../lib/fs/nfs/showmount
 f usr/sbin/shutdown 0755 root sys
+f usr/sbin/smbadm 0555 root bin
 f usr/sbin/smbios 0555 root bin
+f usr/sbin/smbstat 0555 root bin
 f usr/sbin/snoop 0555 root bin
 f usr/sbin/sppptun 0555 root bin
 f usr/sbin/spray 0555 root bin
@@ -10442,7 +10395,7 @@ f usr/sbin/strace 0555 root sys
 f usr/sbin/strclean 0555 root sys
 f usr/sbin/strerr 0555 root sys
 f usr/sbin/sttydefs 0755 root sys
-f usr/sbin/svcadm 0555 root bin
+s usr/sbin/svcadm=../../sbin/svcadm
 f usr/sbin/svccfg 0555 root bin
 h usr/sbin/swap=usr/lib/isaexec
 s usr/sbin/sync=../../sbin/sync
@@ -10458,15 +10411,11 @@ f usr/sbin/tar 0555 root bin
 f usr/sbin/tcpd 0555 root bin
 f usr/sbin/tcpdchk 0555 root bin
 f usr/sbin/tcpdmatch 0555 root bin
-f usr/sbin/tnchkdb 0555 root sys
-f usr/sbin/tnd 0555 root sys
-f usr/sbin/tninfo 0555 root sys
 f usr/sbin/traceroute 4555 root bin
 h usr/sbin/trapstat=usr/lib/platexec
 f usr/sbin/try-from 0555 root bin
 f usr/sbin/ttyadm 0755 root sys
 s usr/sbin/tunefs=../lib/fs/ufs/tunefs
-f usr/sbin/txzonemgr 0555 root sys
 s usr/sbin/tzreload=../../sbin/tzreload
 s usr/sbin/uadmin=../../sbin/uadmin
 f usr/sbin/ucodeadm 0555 root bin
@@ -10497,7 +10446,6 @@ f usr/sbin/zic 0555 root bin
 f usr/sbin/zlogin 0555 root bin
 f usr/sbin/zoneadm 0555 root bin
 f usr/sbin/zonecfg 0555 root bin
-f usr/sbin/zonemon 0555 root bin
 s usr/sbin/zpool=../../sbin/zpool
 f usr/sbin/zstreamdump 0555 root bin
 d usr/sfw 0755 root bin
@@ -10506,6 +10454,8 @@ d usr/sfw/bin/amd64 0755 root bin
 s usr/sfw/man=share/man
 d usr/sfw/share 0755 root bin
 d usr/share 0755 root sys
+d usr/share/hwdata 0755 root sys
+f usr/share/hwdata/pci.ids 0444 root bin
 d usr/share/lib 0755 root sys
 d usr/share/lib/dict 0755 root bin
 f usr/share/lib/dict/words 0444 root bin
@@ -10660,6 +10610,7 @@ f usr/share/lib/terminfo/a/at386 0644 root bin
 d usr/share/lib/terminfo/s 0755 root bin
 f usr/share/lib/terminfo/s/screen 0644 root bin
 f usr/share/lib/terminfo/s/screen-w 0644 root bin
+f usr/share/lib/terminfo/s/screen-256color 0644 root bin
 f usr/share/lib/terminfo/s/sun 0644 root bin
 f usr/share/lib/terminfo/s/sun-color 0644 root bin
 d usr/share/lib/terminfo/u 0755 root bin
@@ -10669,6 +10620,7 @@ f usr/share/lib/terminfo/v/vt100 0644 root bin
 f usr/share/lib/terminfo/v/vt220 0644 root bin
 d usr/share/lib/terminfo/x 0755 root bin
 f usr/share/lib/terminfo/x/xterm 0644 root bin
+f usr/share/lib/terminfo/x/xterm-256color 0644 root bin
 f usr/share/lib/terminfo/x/xterm-color 0644 root bin
 f usr/share/lib/terminfo/x/xtermc 0644 root bin
 f usr/share/lib/terminfo/x/xtermm 0644 root bin
@@ -11346,7 +11298,6 @@ d usr/share/man/cat1 0755 root bin
 d usr/share/man/cat1m 0755 root bin
 d usr/share/man/cat5 0755 root bin
 d usr/share/man/man1 0755 root bin
-f usr/share/man/man1/addbib.1 0444 root bin
 f usr/share/man/man1/alias.1 0444 root bin
 f usr/share/man/man1/allocate.1 0444 root bin
 f usr/share/man/man1/amt.1 0444 root bin
@@ -11396,6 +11347,7 @@ f usr/share/man/man1/command.1 0444 root bin
 f usr/share/man/man1/compress.1 0444 root bin
 f usr/share/man/man1/cp.1 0444 root bin
 f usr/share/man/man1/cpio.1 0444 root bin
+f usr/share/man/man1/cputrack.1 0444 root bin
 f usr/share/man/man1/crle.1 0444 root bin
 f usr/share/man/man1/crontab.1 0444 root bin
 f usr/share/man/man1/crypt.1 0444 root bin
@@ -11418,6 +11370,7 @@ f usr/share/man/man1/diffmk.1 0444 root bin
 f usr/share/man/man1/digest.1 0444 root bin
 f usr/share/man/man1/dircmp.1 0444 root bin
 f usr/share/man/man1/dirname.1 0444 root bin
+f usr/share/man/man1/dis.1 0444 root bin
 f usr/share/man/man1/dispgid.1 0444 root bin
 f usr/share/man/man1/dispuid.1 0444 root bin
 f usr/share/man/man1/dos2unix.1 0444 root bin
@@ -11437,6 +11390,16 @@ f usr/share/man/man1/encrypt.1 0444 root bin
 f usr/share/man/man1/enhance.1 0444 root bin
 f usr/share/man/man1/env.1 0444 root bin
 f usr/share/man/man1/eqn.1 0444 root bin
+f usr/share/man/man1/errange.1 044 root bin
+f usr/share/man/man1/errdate.1 044 root bin
+f usr/share/man/man1/errgid.1 044 root bin
+f usr/share/man/man1/errint.1 044 root bin
+f usr/share/man/man1/erritem.1 044 root bin
+f usr/share/man/man1/errpath.1 044 root bin
+f usr/share/man/man1/errstr.1 044 root bin
+f usr/share/man/man1/errtime.1 044 root bin
+f usr/share/man/man1/erruid.1 044 root bin
+f usr/share/man/man1/erryorn.1 044 root bin
 f usr/share/man/man1/expand.1 0444 root bin
 f usr/share/man/man1/expr.1 0444 root bin
 f usr/share/man/man1/exstr.1 0444 root bin
@@ -11453,6 +11416,8 @@ f usr/share/man/man1/fmt.1 0444 root bin
 f usr/share/man/man1/fmtmsg.1 0444 root bin
 f usr/share/man/man1/fold.1 0444 root bin
 f usr/share/man/man1/ftp.1 0444 root bin
+f usr/share/man/man1/ftpcount.1 0444 root bin
+f usr/share/man/man1/ftpwho.1 0444 root bin
 f usr/share/man/man1/gcore.1 0444 root bin
 f usr/share/man/man1/gencat.1 0444 root bin
 f usr/share/man/man1/genmsg.1 0444 root bin
@@ -11466,6 +11431,16 @@ f usr/share/man/man1/grep.1 0444 root bin
 f usr/share/man/man1/groups.1 0444 root bin
 f usr/share/man/man1/hash.1 0444 root bin
 f usr/share/man/man1/head.1 0444 root bin
+f usr/share/man/man1/helpdate.1 044 root bin
+f usr/share/man/man1/helpgid.1 044 root bin
+f usr/share/man/man1/helpint.1 044 root bin
+f usr/share/man/man1/helpitem.1 044 root bin
+f usr/share/man/man1/helppath.1 044 root bin
+f usr/share/man/man1/helprange.1 044 root bin
+f usr/share/man/man1/helpstr.1 044 root bin
+f usr/share/man/man1/helptime.1 044 root bin
+f usr/share/man/man1/helpuid.1 044 root bin
+f usr/share/man/man1/helpyorn.1 044 root bin
 f usr/share/man/man1/history.1 0444 root bin
 f usr/share/man/man1/hostid.1 0444 root bin
 f usr/share/man/man1/hostname.1 0444 root bin
@@ -11473,7 +11448,6 @@ f usr/share/man/man1/i286.1 0444 root bin
 f usr/share/man/man1/i386.1 0444 root bin
 f usr/share/man/man1/i486.1 0444 root bin
 f usr/share/man/man1/iconv.1 0444 root bin
-f usr/share/man/man1/indxbib.1 0444 root bin
 f usr/share/man/man1/isainfo.1 0444 root bin
 f usr/share/man/man1/isalist.1 0444 root bin
 f usr/share/man/man1/jobs.1 0444 root bin
@@ -11516,7 +11490,6 @@ f usr/share/man/man1/logger.1 0444 root bin
 f usr/share/man/man1/login.1 0444 root bin
 f usr/share/man/man1/logname.1 0444 root bin
 f usr/share/man/man1/look.1 0444 root bin
-f usr/share/man/man1/lookbib.1 0444 root bin
 f usr/share/man/man1/lorder.1 0444 root bin
 f usr/share/man/man1/ls.1 0444 root bin
 f usr/share/man/man1/m4.1 0444 root bin
@@ -11527,6 +11500,7 @@ f usr/share/man/man1/mail.1 0444 root bin
 f usr/share/man/man1/mailx.1 0444 root bin
 f usr/share/man/man1/man.1 0444 root bin
 f usr/share/man/man1/mdb.1 0444 root bin
+f usr/share/man/man1/mcs.1 0444 root bin
 f usr/share/man/man1/mesg.1 0444 root bin
 f usr/share/man/man1/mkdir.1 0444 root bin
 f usr/share/man/man1/mkmsgs.1 0444 root bin
@@ -11546,6 +11520,7 @@ f usr/share/man/man1/news.1 0444 root bin
 f usr/share/man/man1/newtask.1 0444 root bin
 f usr/share/man/man1/nice.1 0444 root bin
 f usr/share/man/man1/nl.1 0444 root bin
+f usr/share/man/man1/nm.1 0444 root bin
 f usr/share/man/man1/nohup.1 0444 root bin
 f usr/share/man/man1/nroff.1 0444 root bin
 f usr/share/man/man1/od.1 0444 root bin
@@ -11615,7 +11590,7 @@ f usr/share/man/man1/rlogin.1 0444 root bin
 f usr/share/man/man1/rm.1 0444 root bin
 f usr/share/man/man1/rmail.1 0444 root bin
 f usr/share/man/man1/rmdir.1 0444 root bin
-f usr/share/man/man1/roffbib.1 0444 root bin
+f usr/share/man/man1/rmformat.1 044 root bin
 f usr/share/man/man1/roles.1 0444 root bin
 f usr/share/man/man1/rsh.1 0444 root bin
 f usr/share/man/man1/runat.1 0444 root bin
@@ -11632,10 +11607,11 @@ f usr/share/man/man1/settime.1 0444 root bin
 f usr/share/man/man1/sftp.1 0444 root bin
 s usr/share/man/man1/sh.1=ksh93.1
 f usr/share/man/man1/shcomp.1 0444 root bin
+f usr/share/man/man1/size.1 044 root bin
 f usr/share/man/man1/sleep.1 0444 root bin
+f usr/share/man/man1/smbutil.1 0444 root bin
 f usr/share/man/man1/soelim.1 0444 root bin
 f usr/share/man/man1/sort.1 0444 root bin
-f usr/share/man/man1/sortbib.1 0444 root bin
 f usr/share/man/man1/sotruss.1 0444 root bin
 f usr/share/man/man1/sparc.1 0444 root bin
 f usr/share/man/man1/spell.1 0444 root bin
@@ -11649,6 +11625,7 @@ f usr/share/man/man1/ssh.1 0444 root bin
 f usr/share/man/man1/strchg.1 0444 root bin
 f usr/share/man/man1/strconf.1 0444 root bin
 f usr/share/man/man1/strings.1 0444 root bin
+f usr/share/man/man1/strip.1 044 root bin
 f usr/share/man/man1/stty.1 0444 root bin
 f usr/share/man/man1/sum.1 0444 root bin
 f usr/share/man/man1/sun.1 0444 root bin
@@ -11660,8 +11637,10 @@ f usr/share/man/man1/tar.1 0444 root bin
 f usr/share/man/man1/tbl.1 0444 root bin
 f usr/share/man/man1/tcopy.1 0444 root bin
 f usr/share/man/man1/tee.1 0444 root bin
+f usr/share/man/man1/telnet.1 0444 root bin
 f usr/share/man/man1/test.1 0444 root bin
 f usr/share/man/man1/time.1 0444 root bin
+f usr/share/man/man1/timex.1 044 root bin
 f usr/share/man/man1/tip.1 0444 root bin
 f usr/share/man/man1/touch.1 0444 root bin
 f usr/share/man/man1/tput.1 0444 root bin
@@ -11684,7 +11663,15 @@ f usr/share/man/man1/units.1 0444 root bin
 f usr/share/man/man1/unix2dos.1 0444 root bin
 f usr/share/man/man1/unpack.1 0444 root bin
 f usr/share/man/man1/uptime.1 0444 root bin
-f usr/share/man/man1/vax.1 0444 root bin
+f usr/share/man/man1/valdate.1 044 root bin
+f usr/share/man/man1/valgid.1 044 root bin
+f usr/share/man/man1/valint.1 044 root bin
+f usr/share/man/man1/valpath.1 044 root bin
+f usr/share/man/man1/valrange.1 044 root bin
+f usr/share/man/man1/valstr.1 044 root bin
+f usr/share/man/man1/valtime.1 044 root bin
+f usr/share/man/man1/valuid.1 044 root bin
+f usr/share/man/man1/valyorn.1 044 root bin
 f usr/share/man/man1/vedit.1 0444 root bin
 f usr/share/man/man1/vgrind.1 0444 root bin
 f usr/share/man/man1/w.1 0444 root bin
@@ -11707,6 +11694,11 @@ f usr/share/man/man1/ypwhich.1 0444 root bin
 f usr/share/man/man1/zcat.1 0444 root bin
 f usr/share/man/man1/zlogin.1 0444 root bin
 f usr/share/man/man1/zonename.1 0444 root bin
+d usr/share/man/man1b 0755 root bin
+f usr/share/man/man1b/ps.1b 044 root bin
+d usr/share/man/man1c 0755 root bin
+f usr/share/man/man1c/uudecode.1c 044 root bin
+f usr/share/man/man1c/uuencode.1c 044 root bin
 d usr/share/man/man1m 0755 root bin
 f usr/share/man/man1m/6to4relay.1m 0444 root bin
 f usr/share/man/man1m/acctadm.1m 0444 root bin
@@ -11724,20 +11716,18 @@ f usr/share/man/man1m/autopush.1m 0444 root bin
 f usr/share/man/man1m/bart.1m 0444 root bin
 f usr/share/man/man1m/bootadm.1m 0444 root bin
 f usr/share/man/man1m/busstat.1m 0444 root bin
-f usr/share/man/man1m/cachefslog.1m 0444 root bin
-f usr/share/man/man1m/cachefspack.1m 0444 root bin
-f usr/share/man/man1m/cachefsstat.1m 0444 root bin
-f usr/share/man/man1m/cachefswssize.1m 0444 root bin
 f usr/share/man/man1m/captoinfo.1m 0444 root bin
 f usr/share/man/man1m/catman.1m 0444 root bin
 f usr/share/man/man1m/cfgadm.1m 0444 root bin
-f usr/share/man/man1m/cfsadmin.1m 0444 root bin
+f usr/share/man/man1m/check-hostname.1m 0444 root bin
+f usr/share/man/man1m/check-permissions.1m 0444 root bin
 f usr/share/man/man1m/chroot.1m 0444 root bin
 f usr/share/man/man1m/clear_locks.1m 0444 root bin
 f usr/share/man/man1m/clinfo.1m 0444 root bin
 f usr/share/man/man1m/clri.1m 0444 root bin
 f usr/share/man/man1m/consadm.1m 0444 root bin
 f usr/share/man/man1m/coreadm.1m 0444 root bin
+f usr/share/man/man1m/cpustat.1m 0444 root bin
 f usr/share/man/man1m/cron.1m 0444 root bin
 f usr/share/man/man1m/cryptoadm.1m 0444 root bin
 f usr/share/man/man1m/dcopy.1m 0444 root bin
@@ -11766,8 +11756,12 @@ f usr/share/man/man1m/domainname.1m 0444 root bin
 f usr/share/man/man1m/drvconfig.1m 0444 root bin
 f usr/share/man/man1m/dtrace.1m 0444 root bin
 f usr/share/man/man1m/dumpadm.1m 0444 root bin
+f usr/share/man/man1m/editmap.1m 0444 root bin
 f usr/share/man/man1m/edquota.1m 0444 root bin
 f usr/share/man/man1m/eeprom.1m 0444 root bin
+f usr/share/man/man1m/etrn.1m 0444 root bin
+f usr/share/man/man1m/fcadm.1m 0444 root bin
+f usr/share/man/man1m/fcinfo.1m 0444 root bin
 f usr/share/man/man1m/fdetach.1m 0444 root bin
 f usr/share/man/man1m/fdisk.1m 0444 root bin
 f usr/share/man/man1m/ff.1m 0444 root bin
@@ -11784,7 +11778,12 @@ f usr/share/man/man1m/fsirand.1m 0444 root bin
 f usr/share/man/man1m/fssnap.1m 0444 root bin
 f usr/share/man/man1m/fsstat.1m 0444 root bin
 f usr/share/man/man1m/fstyp.1m 0444 root bin
+f usr/share/man/man1m/ftpaddhost.1m 0444 root bin
+f usr/share/man/man1m/ftpconfig.1m 0444 root bin
+f usr/share/man/man1m/ftprestart.1m 0444 root bin
+f usr/share/man/man1m/ftpshut.1m 0444 root bin
 f usr/share/man/man1m/fuser.1m 0444 root bin
+f usr/share/man/man1m/fwflash.1m 0444 root bin
 f usr/share/man/man1m/getdev.1m 0444 root bin
 f usr/share/man/man1m/getdevpolicy.1m 0444 root bin
 f usr/share/man/man1m/getdgrp.1m 0444 root bin
@@ -11819,13 +11818,20 @@ f usr/share/man/man1m/installgrub.1m 0444 root bin
 f usr/share/man/man1m/intrstat.1m 0444 root bin
 f usr/share/man/man1m/iostat.1m 0444 root bin
 f usr/share/man/man1m/ipaddrsel.1m 0444 root bin
+f usr/share/man/man1m/ipadm.1m 0444 root bin
 f usr/share/man/man1m/ipdadm.1m 0444 root bin
 f usr/share/man/man1m/ipf.1m 0444 root bin
+f usr/share/man/man1m/ipfs.1m 0444 root bin
+f usr/share/man/man1m/ipfstat.1m 0444 root bin
+f usr/share/man/man1m/ipmon.1m 0444 root bin
 f usr/share/man/man1m/ipmpstat.1m 0444 root bin
+f usr/share/man/man1m/ipnat.1m 0444 root bin
+f usr/share/man/man1m/ippool.1m 0444 root bin
 f usr/share/man/man1m/ipsecalgs.1m 0444 root bin
 f usr/share/man/man1m/ipsecconf.1m 0444 root bin
 f usr/share/man/man1m/ipseckey.1m 0444 root bin
-f usr/share/man/man1m/itu.1m 0444 root bin
+f usr/share/man/man1m/iscsiadm.1m 0444 root bin
+f usr/share/man/man1m/itadm.1m 0444 root bin
 f usr/share/man/man1m/keyserv.1m 0444 root bin
 f usr/share/man/man1m/killall.1m 0444 root bin
 f usr/share/man/man1m/ksslcfg.1m 0444 root bin
@@ -11842,7 +11848,7 @@ f usr/share/man/man1m/lofiadm.1m 0444 root bin
 f usr/share/man/man1m/logadm.1m 0444 root bin
 f usr/share/man/man1m/logins.1m 0444 root bin
 f usr/share/man/man1m/makedbm.1m 0444 root bin
-f usr/share/man/man1m/mkbootmedia.1m 0444 root bin
+f usr/share/man/man1m/makemap.1m 0444 root bin
 f usr/share/man/man1m/mkdevalloc.1m 0444 root bin
 f usr/share/man/man1m/mkdevmaps.1m 0444 root bin
 f usr/share/man/man1m/mkfifo.1m 0444 root bin
@@ -11865,6 +11871,7 @@ f usr/share/man/man1m/mount_udfs.1m 0444 root bin
 f usr/share/man/man1m/mount_ufs.1m 0444 root bin
 f usr/share/man/man1m/mount.1m 0444 root bin
 f usr/share/man/man1m/mountall.1m 0444 root bin
+f usr/share/man/man1m/mpathadm.1m 0444 root bin
 f usr/share/man/man1m/mpstat.1m 0444 root bin
 f usr/share/man/man1m/msgid.1m 0444 root bin
 f usr/share/man/man1m/mvdir.1m 0444 root bin
@@ -11872,6 +11879,7 @@ f usr/share/man/man1m/ncheck.1m 0444 root bin
 f usr/share/man/man1m/ndd.1m 0444 root bin
 f usr/share/man/man1m/netstat.1m 0444 root bin
 f usr/share/man/man1m/netstrategy.1m 0444 root bin
+f usr/share/man/man1m/newaliases.1m 0444 root bin
 f usr/share/man/man1m/newfs.1m 0444 root bin
 f usr/share/man/man1m/newkey.1m 0444 root bin
 f usr/share/man/man1m/nfsstat.1m 0444 root bin
@@ -11879,9 +11887,9 @@ f usr/share/man/man1m/nlsadmin.1m 0444 root bin
 f usr/share/man/man1m/nscd.1m 0444 root bin
 f usr/share/man/man1m/pbind.1m 0444 root bin
 f usr/share/man/man1m/ping.1m 0444 root bin
-f usr/share/man/man1m/pkg2du.1m 0444 root bin
 f usr/share/man/man1m/plockstat.1m 0444 root bin
 f usr/share/man/man1m/pmadm.1m 0444 root bin
+f usr/share/man/man1m/pmconfig.1m 0444 root bin
 f usr/share/man/man1m/pooladm.1m 0444 root bin
 f usr/share/man/man1m/poolbind.1m 0444 root bin
 f usr/share/man/man1m/poolcfg.1m 0444 root bin
@@ -11895,6 +11903,7 @@ f usr/share/man/man1m/projmod.1m 0444 root bin
 f usr/share/man/man1m/prstat.1m 0444 root bin
 f usr/share/man/man1m/prtconf.1m 0444 root bin
 f usr/share/man/man1m/prtdiag.1m 0444 root bin
+f usr/share/man/man1m/prtpicl.1m 0444 root bin
 f usr/share/man/man1m/prtvtoc.1m 0444 root bin
 f usr/share/man/man1m/psradm.1m 0444 root bin
 f usr/share/man/man1m/psrinfo.1m 0444 root bin
@@ -11925,11 +11934,14 @@ f usr/share/man/man1m/routeadm.1m 0444 root bin
 f usr/share/man/man1m/rpc.rexd.1m 0444 root bin
 f usr/share/man/man1m/rpcbind.1m 0444 root bin
 f usr/share/man/man1m/rpcinfo.1m 0444 root bin
+f usr/share/man/man1m/rsh.1m 0444 root bin
 f usr/share/man/man1m/rtc.1m 0444 root bin
 f usr/share/man/man1m/rtquery.1m 0444 root bin
 f usr/share/man/man1m/rwall.1m 0444 root bin
 f usr/share/man/man1m/sacadm.1m 0444 root bin
 f usr/share/man/man1m/savecore.1m 0444 root bin
+f usr/share/man/man1m/sbdadm.1m 0444 root bin
+f usr/share/man/man1m/sendmail.1m 0444 root bin
 f usr/share/man/man1m/setuname.1m 0444 root bin
 f usr/share/man/man1m/share.1m 0444 root bin
 f usr/share/man/man1m/shareall.1m 0444 root bin
@@ -11938,11 +11950,15 @@ f usr/share/man/man1m/sharemgr.1m 0444 root bin
 f usr/share/man/man1m/share_nfs.1m 0444 root bin
 f usr/share/man/man1m/showmount.1m 0444 root bin
 f usr/share/man/man1m/shutdown.1m 0444 root bin
+f usr/share/man/man1m/smbadm.1m 0444 root bin
 f usr/share/man/man1m/smbios.1m 0444 root bin
+f usr/share/man/man1m/smbstat.1m 0444 root bin
 f usr/share/man/man1m/snoop.1m 0444 root bin
 f usr/share/man/man1m/soconfig.1m 0444 root bin
 f usr/share/man/man1m/spray.1m 0444 root bin
+f usr/share/man/man1m/sppptun.1m 0444 root bin
 f usr/share/man/man1m/sshd.1m 0444 root bin
+f usr/share/man/man1m/stmfadm.1m 0444 root bin
 f usr/share/man/man1m/stmsboot.1m 0444 root bin
 f usr/share/man/man1m/strace.1m 0444 root bin
 f usr/share/man/man1m/strclean.1m 0444 root bin
@@ -11962,6 +11978,9 @@ f usr/share/man/man1m/sysdef.1m 0444 root bin
 f usr/share/man/man1m/syseventadm.1m 0444 root bin
 f usr/share/man/man1m/syslogd.1m 0444 root bin
 f usr/share/man/man1m/tapes.1m 0444 root bin
+f usr/share/man/man1m/tcpd.1m 0444 root bin
+f usr/share/man/man1m/tcpdchk.1m 0444 root bin
+f usr/share/man/man1m/tcpdmatch.1m 0444 root bin
 f usr/share/man/man1m/tic.1m 0444 root bin
 f usr/share/man/man1m/traceroute.1m 0444 root bin
 f usr/share/man/man1m/trapstat.1m 0444 root bin
@@ -11979,7 +11998,6 @@ f usr/share/man/man1m/unshare.1m 0444 root bin
 f usr/share/man/man1m/unshareall.1m 0444 root bin
 f usr/share/man/man1m/unshare_nfs.1m 0444 root bin
 f usr/share/man/man1m/update_drv.1m 0444 root bin
-f usr/share/man/man1m/updatemedia.1m 0444 root bin
 f usr/share/man/man1m/useradd.1m 0444 root bin
 f usr/share/man/man1m/userdel.1m 0444 root bin
 f usr/share/man/man1m/usermod.1m 0444 root bin
@@ -13448,15 +13466,84 @@ f usr/share/man/man3commputil/sdp_new_session.3commputil 0444 root bin
 f usr/share/man/man3commputil/sdp_parse.3commputil 0444 root bin
 f usr/share/man/man3commputil/sdp_session_to_str.3commputil 0444 root bin
 d usr/share/man/man3contract 0755 root bin
+f usr/share/man/man3contract/ct_ctl_abandon.3contract 0444 root bin
+f usr/share/man/man3contract/ct_ctl_ack.3contract 0444 root bin
 f usr/share/man/man3contract/ct_ctl_adopt.3contract 0444 root bin
+f usr/share/man/man3contract/ct_ctl_nack.3contract 0444 root bin
+f usr/share/man/man3contract/ct_ctl_newct.3contract 0444 root bin
+f usr/share/man/man3contract/ct_ctl_qack.3contract 0444 root bin
+f usr/share/man/man3contract/ct_dev_status_get_aset.3contract 0444 root bin
 f usr/share/man/man3contract/ct_dev_status_get_dev_state.3contract 0444 root bin
+f usr/share/man/man3contract/ct_dev_status_get_minor.3contract 0444 root bin
+f usr/share/man/man3contract/ct_dev_status_get_noneg.3contract 0444 root bin
+f usr/share/man/man3contract/ct_dev_tmpl_clear_noneg.3contract 0444 root bin
+f usr/share/man/man3contract/ct_dev_tmpl_get_aset.3contract 0444 root bin
+f usr/share/man/man3contract/ct_dev_tmpl_get_minor.3contract 0444 root bin
+f usr/share/man/man3contract/ct_dev_tmpl_get_noneg.3contract 0444 root bin
 f usr/share/man/man3contract/ct_dev_tmpl_set_aset.3contract 0444 root bin
+f usr/share/man/man3contract/ct_dev_tmpl_set_minor.3contract 0444 root bin
+f usr/share/man/man3contract/ct_dev_tmpl_set_noneg.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_free.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_get_ctid.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_get_evid.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_get_flags.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_get_nevid.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_get_newct.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_get_type.3contract 0444 root bin
 f usr/share/man/man3contract/ct_event_read.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_read_critical.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_reliable.3contract 0444 root bin
+f usr/share/man/man3contract/ct_event_reset.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_event_get_exitstatus.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_event_get_gcorefile.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_event_get_pcorefile.3contract 0444 root bin
 f usr/share/man/man3contract/ct_pr_event_get_pid.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_event_get_ppid.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_event_get_sender.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_event_get_senderct.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_event_get_signal.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_event_get_zcorefile.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_status_get_contracts.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_status_get_fatal.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_status_get_members.3contract 0444 root bin
 f usr/share/man/man3contract/ct_pr_status_get_param.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_status_get_svc_aux.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_status_get_svc_creator.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_status_get_svc_ctid.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_status_get_svc_fmri.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_tmpl_get_fatal.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_tmpl_get_param.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_tmpl_get_svc_aux.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_tmpl_get_svc_fmri.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_tmpl_get_transfer.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_tmpl_set_fatal.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_tmpl_set_param.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_tmpl_set_svc_aux.3contract 0444 root bin
+f usr/share/man/man3contract/ct_pr_tmpl_set_svc_fmri.3contract 0444 root bin
 f usr/share/man/man3contract/ct_pr_tmpl_set_transfer.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_free.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_cookie.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_critical.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_holder.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_id.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_informative.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_nevents.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_nevid.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_ntime.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_qtime.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_state.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_type.3contract 0444 root bin
+f usr/share/man/man3contract/ct_status_get_zoneid.3contract 0444 root bin
 f usr/share/man/man3contract/ct_status_read.3contract 0444 root bin
 f usr/share/man/man3contract/ct_tmpl_activate.3contract 0444 root bin
+f usr/share/man/man3contract/ct_tmpl_clear.3contract 0444 root bin
+f usr/share/man/man3contract/ct_tmpl_create.3contract 0444 root bin
+f usr/share/man/man3contract/ct_tmpl_get_cookie.3contract 0444 root bin
+f usr/share/man/man3contract/ct_tmpl_get_critical.3contract 0444 root bin
+f usr/share/man/man3contract/ct_tmpl_get_informative.3contract 0444 root bin
+f usr/share/man/man3contract/ct_tmpl_set_cookie.3contract 0444 root bin
+f usr/share/man/man3contract/ct_tmpl_set_critical.3contract 0444 root bin
+f usr/share/man/man3contract/ct_tmpl_set_informative.3contract 0444 root bin
 d usr/share/man/man3cpc 0755 root bin
 f usr/share/man/man3cpc/cpc.3cpc 0444 root bin
 f usr/share/man/man3cpc/cpc_access.3cpc 0444 root bin
@@ -15084,7 +15171,6 @@ f usr/share/man/man5/formats.5 0444 root bin
 f usr/share/man/man5/fsattr.5 0444 root bin
 f usr/share/man/man5/grub.5 0444 root bin
 f usr/share/man/man5/gss_auth_rules.5 0444 root bin
-f usr/share/man/man5/hal.5 0444 root bin
 f usr/share/man/man5/iconv.5 0444 root bin
 f usr/share/man/man5/iconv_unicode.5 0444 root bin
 f usr/share/man/man5/ieee802.11.5 0444 root bin
@@ -15179,6 +15265,7 @@ f usr/share/man/man7d/hwahc.7d 0444 root bin
 f usr/share/man/man7d/hwarc.7d 0444 root bin
 f usr/share/man/man7d/hxge.7d 0444 root bin
 f usr/share/man/man7d/igb.7d 0444 root bin
+f usr/share/man/man7d/ipmi.7d 0444 root bin
 f usr/share/man/man7d/ipnet.7d 0444 root bin
 f usr/share/man/man7d/iscsi.7d 0444 root bin
 f usr/share/man/man7d/ixgbe.7d 0444 root bin
@@ -15239,6 +15326,7 @@ f usr/share/man/man7fs/devfs.7fs 0444 root bin
 f usr/share/man/man7fs/hsfs.7fs 0444 root bin
 f usr/share/man/man7fs/hyprlofs.7fs 0444 root bin
 f usr/share/man/man7fs/lofs.7fs 0444 root bin
+f usr/share/man/man7fs/lxproc.7fs 0444 root bin
 f usr/share/man/man7fs/objfs.7fs 0444 root bin
 f usr/share/man/man7fs/pcfs.7fs 0444 root bin
 f usr/share/man/man7fs/sharefs.7fs 0444 root bin
@@ -16716,7 +16804,6 @@ d var/inet 0755 root sys
 d var/krb5 0755 root sys
 d var/krb5/rcache 1777 root sys
 d var/krb5/rcache/root 0700 root sys
-f var/ld/ld.config 0644 root root
 d var/ldap 0755 root sys
 d var/lib 0755 root other
 d var/lib/sgml 0755 root sys
@@ -16799,3 +16886,19 @@ d var/svc/profile 0755 root sys
 d var/tmp 1777 root sys
 d var/yp 0755 root bin
 d var/yp/binding 0755 root bin
+
+f usr/lib/llib-lzfs_core.ln 644 root bin
+f usr/lib/libzfs_core.so.1 755 root bin
+f usr/lib/amd64/llib-lzfs_core.ln 644 root bin
+f usr/lib/amd64/libzfs_core.so.1 755 root bin
+s usr/lib/amd64/libzfs_core.so=libzfs_core.so.1 
+s usr/lib/libzfs_core.so=libzfs_core.so.1
+f usr/include/libzfs_core.h 0644 root bin
+f usr/lib/llib-lzfs_core 0644 root bin
+s lib/llib-lzfs_core=../usr/lib/llib-lzfs_core.ln
+s lib/libzfs_core.so=../usr/lib/libzfs_core.so
+s lib/llib-lzfs_core.ln=../usr/lib/llib-lzfs_core.ln
+s lib/libzfs_core.so.1=../usr/lib/libzfs_core.so
+s lib/amd64/libzfs_core.so=../usr/lib/amd64/libzfs_core.so
+s lib/amd64/llib-lzfs_core.ln=../usr/lib/amd64/llib-lzfs_core.ln
+s lib/amd64/libzfs_core.so.1=../usr/lib/amd64/libzfs_core.so.1

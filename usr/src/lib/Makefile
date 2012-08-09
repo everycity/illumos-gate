@@ -21,7 +21,8 @@
 
 # Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2011, Joyent, Inc. All rights reserved.
+# Copyright (c) 2012, Joyent, Inc. All rights reserved.
+# Copyright (c) 2012 by Delphix. All rights reserved.
 
 include ../Makefile.master
 
@@ -115,7 +116,6 @@ SUBDIRS += \
 	libipmp		\
 	libiscsit	\
 	libkmf		\
-	libkmsagent	\
 	libkstat	\
 	libkvm		\
 	liblm		\
@@ -129,7 +129,6 @@ SUBDIRS += \
 	libumem		\
 	libnvpair	.WAIT	\
 	libexacct	\
-	libldap4	\
 	libsasl		\
 	libldap5	\
 	libsldap	.WAIT	\
@@ -161,7 +160,9 @@ SUBDIRS += \
 	libdscfg	\
 	librdc		\
 	libinstzones	\
-	libpkg
+	libpkg		\
+	libpcidb	\
+	libumem_trampoline
 
 SUBDIRS += \
 	passwdutil	\
@@ -237,8 +238,10 @@ SUBDIRS += \
 	sasl_plugins	\
 	udapl		\
 	libzpool	\
+	libzfs_core	\
 	libzfs		\
-	libbe 		\
+	libbe		\
+	pylibbe		\
 	libzfs_jni	\
 	libmapid	\
 	brand		\
@@ -425,6 +428,7 @@ HDRSUBDIRS=		\
 	libnsl		\
 	libnwam		\
 	libpam		\
+	libpcidb	\
 	libpctx		\
 	libpicl		\
 	libpicltree	\
@@ -470,6 +474,7 @@ HDRSUBDIRS=		\
 	libwrap		\
 	libxcurses2	\
 	libzfs		\
+	libzfs_core	\
 	libzfs_jni	\
 	libzoneinfo	\
 	libzonestat	\
@@ -631,10 +636,10 @@ libinetsvc:	libscf
 librestart:	libuutil libscf
 ../cmd/sgs/libdl:	../cmd/sgs/libconv
 ../cmd/sgs/libelf:	../cmd/sgs/libconv
-pkcs11:		libcryptoutil libkmsagent
 udapl/udapl_tavor:	udapl/libdat
 libzfs:		libdevid libgen libnvpair libuutil \
-		libadm libavl libefi libidmap libmd
+		libadm libavl libefi libidmap libmd libzfs_core
+libzfs_core:	libnvpair
 libzfs_jni:	libdiskmgt libnvpair libzfs
 libzpool:	libavl libumem libnvpair libcmdutils
 libsec:		libavl libidmap

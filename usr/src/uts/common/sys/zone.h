@@ -703,6 +703,19 @@ typedef struct zone {
 	uint32_t	zone_fss_shr_pct;	/* fss active shr % in intvl */
 	uint64_t	zone_fss_pri_hi;	/* fss high pri this interval */
 	uint64_t	zone_fss_pri_avg;	/* fss avg pri this interval */
+
+	/*
+	 * DTrace-private per-zone state
+	 */
+	int		zone_dtrace_getf;	/* # of unprivileged getf()s */
+
+	/* 
+	 * Synchronization primitives used to synchronize between mounts and
+	 * zone creation/destruction.
+	 */
+	int		zone_mounts_in_progress;
+	kcondvar_t	zone_mount_cv;
+	kmutex_t	zone_mount_lock;
 } zone_t;
 
 /*
@@ -923,8 +936,8 @@ extern int zone_dataset_visible(const char *, int *);
 extern int zone_kadmin(int, int, const char *, cred_t *);
 extern void zone_shutdown_global(void);
 
-extern void mount_in_progress(void);
-extern void mount_completed(void);
+extern void mount_in_progress(zone_t *);
+extern void mount_completed(zone_t *);
 
 extern int zone_walk(int (*)(zone_t *, void *), void *);
 

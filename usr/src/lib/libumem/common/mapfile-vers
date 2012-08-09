@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2012, Joyent, Inc.  All rights reserved.
 #
 
 #
@@ -72,6 +73,10 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	vmem_walk;
 	vmem_xalloc;
 	vmem_xfree;
+	umem_genasm_mptr;
+	umem_genasm_fptr;
+	umem_genasm_fsize;
+	umem_genasm_msize;
     local:
 	*;
 };

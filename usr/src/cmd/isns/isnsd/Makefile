@@ -23,6 +23,10 @@
 # Use is subject to license terms.
 #
 
+#
+# Copyright (c) 2012 by Delphix. All rights reserved.
+#
+
 PROG = isns
 
 DSRC = isns_provider.d
@@ -47,7 +51,7 @@ ROOTMANIFESTDIR	= $(ROOTSVCNETWORK)
 $(ROOTSVCNETWORK)/isns_server.xml	:= FILEMODE = 0444
 
 CFLAGS 		+=	$(CCVERBOSE)
-CPPFLAGS 	+= -I./ -I/usr/include/libxml2
+CPPFLAGS 	+= -I./ -I$(ADJUNCT_PROTO)/usr/include/libxml2
 CPPFLAGS	+= -DTARGET_DATA_STORE=$(DATA_STORE)
 CPPFLAGS	+= -D_POSIX_PTHREAD_SEMANTICS
 LINTFLAGS += -xerroff=E_BAD_PTR_CAST_ALIGN
@@ -68,14 +72,14 @@ $(PROG): $(OBJS)
 	$(POST_PROCESS)
 
 %.h: %.d
-	$(DTRACE) -xnolibs -h -s $< -o $@
+	$(DTRACE) -h -s $< -o $@
 
 %.o:	%.c $(DTRACE_HEADER)
 	$(COMPILE.c) $<
 	$(POST_PROCESS_O)
 
 %.o:	%.d $(COBJS)
-	$(COMPILE.d) -xnolibs -s $< $(COBJS)
+	$(COMPILE.d) -s $< $(COBJS)
 	$(POST_PROCESS_O)
 
 clean:

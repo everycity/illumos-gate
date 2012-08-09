@@ -172,7 +172,9 @@ UNREF_OBJ	/libm\.so\.2.*\ of\ .*libstdc\+\+\.so\.6	# gcc build
 UNREF_OBJ	/lib.*\ of\ .*/lib/picl/plugins/		# picl
 UNREF_OBJ	/lib.*\ of\ .*kcfd				# interposer
 UNREF_OBJ	/libpkcs11\.so\.1; .*\ of\ .*libkmf\.so\.1	# interposed
-UNREF_OBJ	/libc\.so\.1.*\ of\ .*kldap\.so\.1              # gcc build
+# Referenced by the Studio build, not the GCC build.  GCC eliminates the unused
+# statics which have the dependence.
+UNREF_OBJ	/libc\.so\.1.*\ of\ .*kldap\.so\.1
 
 
 # Objects that used to contain system functionalty that has since
@@ -210,9 +212,6 @@ NOSYMSORT	lib/libsun_fc\.so\.1				# C++
 NOSYMSORT	lib/amd64/libsun_fc\.so\.1			# C++
 NOSYMSORT	lib/sparcv9/libsun_fc\.so\.1 			# C++
 NOSYMSORT	usr/lib/amd64/libfru\.so\.1			# C++
-NOSYMSORT	usr/lib/libkmsagent\.so\.1			# C++
-NOSYMSORT	usr/lib/amd64/libkmsagent\.so\.1		# C++
-NOSYMSORT	usr/lib/sparcv9/libkmsagent\.so\.1		# C++
 
 
 # The libprtdiag_psr.so.1 objects built under usr/src/lib/libprtdiag_psr

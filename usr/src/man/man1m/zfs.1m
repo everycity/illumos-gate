@@ -1,8 +1,9 @@
 '\" te
 .\" Copyright (c) 2009 Sun Microsystems, Inc. All Rights Reserved.
+.\" Copyright (c) 2012 by Delphix. All rights reserved.
 .\" Copyright (c) 2011 Joyent, Inc. All Rights Reserved.
-.\" Copyright (c) 2011 by Delphix. All rights reserved.
 .\" Copyright (c) 2012 Nexenta Systems, Inc. All Rights Reserved.
+.\" Copyright (c) 2012, Joyent, Inc. All rights reserved.
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
 .\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with
 .\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
@@ -39,7 +40,7 @@ zfs \- configures ZFS file systems
 .LP
 .nf
 \fBzfs\fR \fBsnapshot\fR [\fB-r\fR] [\fB-o\fR \fIproperty\fR=\fIvalue\fR]...
-      \fIfilesystem@snapname\fR|\fIvolume@snapname\fR
+      \fIfilesystem@snapname\fR|\fIvolume@snapname\fR...
 .fi
 
 .LP
@@ -59,13 +60,13 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBrename\fR \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
+\fBzfs\fR \fBrename\fR [\fB-f\fR] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
      \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
 .fi
 
 .LP
 .nf
-\fBzfs\fR \fBrename\fR [\fB-p\fR] \fIfilesystem\fR|\fIvolume\fR \fIfilesystem\fR|\fIvolume\fR
+\fBzfs\fR \fBrename\fR [\fB-fp\fR] \fIfilesystem\fR|\fIvolume\fR \fIfilesystem\fR|\fIvolume\fR
 .fi
 
 .LP
@@ -86,7 +87,7 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBget\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR][\fB-Hp\fR][\fB-o\fR \fIfield\fR[,...]] [\fB-t\fR \fItype\fR[,...]] 
+\fBzfs\fR \fBget\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR][\fB-Hpc\fR][\fB-o\fR \fIfield\fR[,...]] [\fB-t\fR \fItype\fR[,...]] 
     [\fB-s\fR \fIsource\fR[,...]] "\fIall\fR" | \fIproperty\fR[,...] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR ...
 .fi
 
@@ -864,15 +865,18 @@ This property is not inherited.
 .ne 2
 .na
 \fB\fBchecksum\fR=\fBon\fR | \fBoff\fR | \fBfletcher2,\fR| \fBfletcher4\fR |
-\fBsha256\fR\fR
+\fBsha256\fR | \fBnoparity\fR \fR
 .ad
 .sp .6
 .RS 4n
 Controls the checksum used to verify data integrity. The default value is
 \fBon\fR, which automatically selects an appropriate algorithm (currently,
 \fBfletcher2\fR, but this may change in future releases). The value \fBoff\fR
-disables integrity checking on user data. Disabling checksums is \fBNOT\fR a
-recommended practice.
+disables integrity checking on user data. The value \fBnoparity\fR not only
+disables integrity but also disables maintaining parity for user data.  This
+setting is used internally by a dump device residing on a RAID-Z pool and should
+not be used by any other dataset. Disabling checksums is \fBNOT\fR a recommended
+practice.
 .sp
 Changing this property affects only newly-written data.
 .RE
@@ -1837,13 +1841,14 @@ behavior for mounted file systems in use.
 .ne 2
 .na
 \fB\fBzfs snapshot\fR [\fB-r\fR] [\fB-o\fR \fIproperty\fR=\fIvalue\fR] ...
-\fIfilesystem@snapname\fR|\fIvolume@snapname\fR\fR
+\fIfilesystem@snapname\fR|\fIvolume@snapname\fR\fR...
 .ad
 .sp .6
 .RS 4n
-Creates a snapshot with the given name. All previous modifications by
-successful system calls to the file system are part of the snapshot. See the
-"Snapshots" section for details.
+Creates snapshots with the given names. All previous modifications by
+successful system calls to the file system are part of the snapshots.
+Snapshots are taken atomically, so that all snapshots correspond to the same
+moment in time. See the "Snapshots" section for details.
 .sp
 .ne 2
 .na
@@ -1851,9 +1856,7 @@ successful system calls to the file system are part of the snapshot. See the
 .ad
 .sp .6
 .RS 4n
-Recursively create snapshots of all descendent datasets. Snapshots are taken
-atomically, so that all recursive snapshots correspond to the same moment in
-time.
+Recursively create snapshots of all descendent datasets
 .RE
 
 .sp
@@ -1980,7 +1983,7 @@ any conflicting snapshots.
 .sp
 .ne 2
 .na
-\fB\fBzfs rename\fR \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR\fR
+\fB\fBzfs rename\fR [\fB-f\fR] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR\fR
 .ad
 .br
 .na
@@ -1988,7 +1991,7 @@ any conflicting snapshots.
 .ad
 .br
 .na
-\fB\fBzfs rename\fR [\fB-p\fR] \fIfilesystem\fR|\fIvolume\fR
+\fB\fBzfs rename\fR [\fB-fp\fR] \fIfilesystem\fR|\fIvolume\fR
 \fIfilesystem\fR|\fIvolume\fR\fR
 .ad
 .sp .6
@@ -2009,6 +2012,16 @@ case they are unmounted and remounted at the new mount point.
 Creates all the nonexistent parent datasets. Datasets created in this manner
 are automatically mounted according to the \fBmountpoint\fR property inherited
 from their parent.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-f\fR\fR
+.ad
+.sp .6
+.RS 4n
+Force unmount any filesystems that need to be unmounted in the process.
 .RE
 
 .RE
@@ -2209,7 +2222,7 @@ Properties" section.
 .sp
 .ne 2
 .na
-\fB\fBzfs get\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR] [\fB-Hp\fR] [\fB-o\fR
+\fB\fBzfs get\fR [\fB-r\fR|\fB-d\fR \fIdepth\fR] [\fB-Hpc\fR] [\fB-o\fR
 \fIfield\fR[,...] [\fB-t\fR \fItype\fR[,...]] [\fB-s\fR \fIsource\fR[,...] "\fIall\fR" |
 \fIproperty\fR[,...] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR ...\fR
 .ad
@@ -2302,6 +2315,19 @@ is all sources.
 .sp .6
 .RS 4n
 Display numbers in parseable (exact) values.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-c\fR\fR
+.ad
+.sp .6
+.RS 4n
+Only display properties which can be retrieved without issuing any I/O requests,
+i.e. properties which are already cached.  Most properties are cached except for
+create-time properties (normalization, utf8only, casesensitivity) as well as a
+volume's size and block size.
 .RE
 
 .RE
@@ -2847,7 +2873,8 @@ Print machine-parsable verbose information about the stream package generated.
 .ad
 .sp .6
 .RS 4n
-Print verbose information about the stream package generated.
+Print verbose information about the stream package generated.  This information
+includes a per-second report of how much data has been sent.
 .RE
 
 The format of the stream is committed. You will be able to receive your streams
