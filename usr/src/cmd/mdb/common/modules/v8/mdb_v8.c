@@ -294,6 +294,7 @@ autoconfigure(v8_cfg_t *cfgp)
 	v8_enum_t *ep;
 	struct v8_constant *cnp;
 	int ii;
+	int failed = 0;
 
 	assert(v8_classes == NULL);
 
@@ -326,7 +327,7 @@ autoconfigure(v8_cfg_t *cfgp)
 		if (cfgp->v8cfg_readsym(cfgp, cnp->v8c_symbol,
 		    cnp->v8c_valp) == -1) {
 			mdb_warn("failed to read \"%s\"", cnp->v8c_symbol);
-			return (-1);
+			failed++;
 		}
 	}
 
@@ -370,7 +371,7 @@ autoconfigure(v8_cfg_t *cfgp)
 	if (V8_TYPE_JSOBJECT == -1 || V8_TYPE_FIXEDARRAY == -1) {
 		mdb_warn("couldn't find %s type\n",
 		    V8_TYPE_JSOBJECT == -1 ? "JSObject" : "FixedArray");
-		return (-1);
+		failed++;
 	}
 
 	/*
@@ -398,10 +399,10 @@ again:
 
 		mdb_warn("couldn't find class \"%s\", field \"%s\"\n",
 		    offp->v8o_class, offp->v8o_member);
-		return (-1);
+		failed++;
 	}
 
-	return (0);
+	return (failed ? -1 : 0);
 }
 
 /* ARGSUSED */
@@ -450,24 +451,17 @@ conf_next_part(char *buf, char *start)
 static v8_class_t *
 conf_class_findcreate(const char *name)
 {
-	v8_class_t *clp, *iclp, **ptr;
+	v8_class_t *clp, *iclp, *prev = NULL;
 	int cmp;
 
-	if (v8_classes == NULL || strcmp(v8_classes->v8c_name, name) > 0) {
-		ptr = &v8_classes;
-	} else {
-		for (iclp = v8_classes; iclp->v8c_next != NULL;
-		    iclp = iclp->v8c_next) {
-			cmp = strcmp(iclp->v8c_next->v8c_name, name);
+	for (iclp = v8_classes; iclp != NULL; iclp = iclp->v8c_next) {
+		if ((cmp = strcmp(iclp->v8c_name, name)) == 0)
+			return (iclp);
 
-			if (cmp == 0)
-				return (iclp->v8c_next);
+		if (cmp > 0)
+			break;
 
-			if (cmp > 0)
-				break;
-		}
-
-		ptr = &iclp->v8c_next;
+		prev = iclp;
 	}
 
 	if ((clp = mdb_zalloc(sizeof (*clp), UM_NOSLEEP)) == NULL)
@@ -475,9 +469,14 @@ conf_class_findcreate(const char *name)
 
 	(void) strlcpy(clp->v8c_name, name, sizeof (clp->v8c_name));
 	clp->v8c_end = (size_t)-1;
+	clp->v8c_next = iclp;
 
-	clp->v8c_next = *ptr;
-	*ptr = clp;
+	if (prev != NULL) {
+		prev->v8c_next = clp;
+	} else {
+		v8_classes = clp;
+	}
+
 	return (clp);
 }
 
@@ -3079,11 +3078,12 @@ configure(void)
 	 * be present in recent V8 versions built with postmortem metadata.
 	 */
 	if (mdb_lookup_by_name("v8dbg_SmiTag", &sym) == 0) {
-		if (autoconfigure(&v8_cfg_target) != 0)
-			mdb_warn("failed to autoconfigure from target\n");
-
-		else
+		if (autoconfigure(&v8_cfg_target) != 0) {
+			mdb_warn("failed to autoconfigure from target; "
+			    "commands may have incorrect results!\n");
+		} else {
 			mdb_printf("Autoconfigured V8 support from target\n");
+		}
 
 		return;
 	}
