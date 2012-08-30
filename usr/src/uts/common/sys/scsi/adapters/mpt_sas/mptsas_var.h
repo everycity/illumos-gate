@@ -210,6 +210,8 @@ typedef	struct mptsas_target {
 		uint16_t		m_slot_num;
 		uint32_t		m_tgt_unconfigured;
 		uint8_t			m_led_status;
+		uint32_t		m_timeout_interval;
+		uint8_t			m_timeout_count;
 
 } mptsas_target_t;
 
