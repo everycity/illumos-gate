@@ -347,14 +347,10 @@ static int mptsas_get_target_device_info(mptsas_t *mpt, uint32_t page_address,
     uint16_t *handle, mptsas_target_t **pptgt);
 static void mptsas_update_phymask(mptsas_t *mpt);
 
-static int mptsas_send_sep(mptsas_t *mpt, mptsas_target_t *ptgt,
-    uint32_t *status, uint8_t cmd);
 static dev_info_t *mptsas_get_dip_from_dev(dev_t dev,
     mptsas_phymask_t *phymask);
 static mptsas_target_t *mptsas_addr_to_ptgt(mptsas_t *mpt, char *addr,
     mptsas_phymask_t phymask);
-static int mptsas_set_led_status(mptsas_t *mpt, mptsas_target_t *ptgt,
-    uint32_t slotstatus);
 
 
 /*
@@ -6054,10 +6050,6 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 		}
 
 		mutex_enter(&mpt->m_mutex);
-		if (mptsas_set_led_status(mpt, ptgt, 0) != DDI_SUCCESS) {
-			NDBG14(("mptsas: clear LED for tgt %x failed",
-			    ptgt->m_slot_num));
-		}
 		if (rval == DDI_SUCCESS) {
 			mptsas_tgt_free(&mpt->m_active->m_tgttbl,
 			    ptgt->m_sas_wwn, ptgt->m_phymask);
@@ -11326,64 +11318,6 @@ mptsas_ioctl(dev_t dev, int cmd, intptr_t data, int mode, cred_t *credp,
 
 	if (iport_flag) {
 		status = scsi_hba_ioctl(dev, cmd, data, mode, credp, rval);
-		if (status != 0) {
-			goto out;
-		}
-		/*
-		 * The following code control the OK2RM LED, it doesn't affect
-		 * the ioctl return status.
-		 */
-		if ((cmd == DEVCTL_DEVICE_ONLINE) ||
-		    (cmd == DEVCTL_DEVICE_OFFLINE)) {
-			if (ndi_dc_allochdl((void *)data, &dcp) !=
-			    NDI_SUCCESS) {
-				goto out;
-			}
-			addr = ndi_dc_getaddr(dcp);
-			ptgt = mptsas_addr_to_ptgt(mpt, addr, phymask);
-			if (ptgt == NULL) {
-				NDBG14(("mptsas_ioctl led control: tgt %s not "
-				    "found", addr));
-				ndi_dc_freehdl(dcp);
-				goto out;
-			}
-			mutex_enter(&mpt->m_mutex);
-			if (cmd == DEVCTL_DEVICE_ONLINE) {
-				ptgt->m_tgt_unconfigured = 0;
-			} else if (cmd == DEVCTL_DEVICE_OFFLINE) {
-				ptgt->m_tgt_unconfigured = 1;
-			}
-			slotstatus = 0;
-#ifdef MPTSAS_GET_LED
-			/*
-			 * The get led status can't get a valid/reasonable
-			 * state, so ignore the get led status, and write the
-			 * required value directly
-			 */
-			if (mptsas_get_led_status(mpt, ptgt, &slotstatus) !=
-			    DDI_SUCCESS) {
-				NDBG14(("mptsas_ioctl: get LED for tgt %s "
-				    "failed %x", addr, slotstatus));
-				slotstatus = 0;
-			}
-			NDBG14(("mptsas_ioctl: LED status %x for %s",
-			    slotstatus, addr));
-#endif
-			if (cmd == DEVCTL_DEVICE_OFFLINE) {
-				slotstatus |=
-				    MPI2_SEP_REQ_SLOTSTATUS_REQUEST_REMOVE;
-			} else {
-				slotstatus &=
-				    ~MPI2_SEP_REQ_SLOTSTATUS_REQUEST_REMOVE;
-			}
-			if (mptsas_set_led_status(mpt, ptgt, slotstatus) !=
-			    DDI_SUCCESS) {
-				NDBG14(("mptsas_ioctl: set LED for tgt %s "
-				    "failed %x", addr, slotstatus));
-			}
-			mutex_exit(&mpt->m_mutex);
-			ndi_dc_freehdl(dcp);
-		}
 		goto out;
 	}
 	switch (cmd) {
@@ -13837,10 +13771,6 @@ mptsas_create_virt_lun(dev_info_t *pdip, struct scsi_inquiry *inq, char *guid,
 				    (!MDI_PI_IS_STANDBY(*pip)) &&
 				    (ptgt->m_tgt_unconfigured == 0)) {
 					rval = mdi_pi_online(*pip, 0);
-					mutex_enter(&mpt->m_mutex);
-					(void) mptsas_set_led_status(mpt, ptgt,
-					    0);
-					mutex_exit(&mpt->m_mutex);
 				} else {
 					rval = DDI_SUCCESS;
 				}
@@ -14094,15 +14024,6 @@ mptsas_create_virt_lun(dev_info_t *pdip, struct scsi_inquiry *inq, char *guid,
 		}
 		NDBG20(("new path:%s onlining,", MDI_PI(*pip)->pi_addr));
 		mdi_rtn = mdi_pi_online(*pip, 0);
-		if (mdi_rtn == MDI_SUCCESS) {
-			mutex_enter(&mpt->m_mutex);
-			if (mptsas_set_led_status(mpt, ptgt, 0) !=
-			    DDI_SUCCESS) {
-				NDBG14(("mptsas: clear LED for slot %x "
-				    "failed", ptgt->m_slot_num));
-			}
-			mutex_exit(&mpt->m_mutex);
-		}
 		if (mdi_rtn == MDI_NOT_SUPPORTED) {
 			mdi_rtn = MDI_FAILURE;
 		}
@@ -14455,15 +14376,6 @@ phys_create_done:
 			 * Try to online the new node
 			 */
 			ndi_rtn = ndi_devi_online(*lun_dip, NDI_ONLINE_ATTACH);
-		}
-		if (ndi_rtn == NDI_SUCCESS) {
-			mutex_enter(&mpt->m_mutex);
-			if (mptsas_set_led_status(mpt, ptgt, 0) !=
-			    DDI_SUCCESS) {
-				NDBG14(("mptsas: clear LED for tgt %x "
-				    "failed", ptgt->m_slot_num));
-			}
-			mutex_exit(&mpt->m_mutex);
 		}
 
 		/*
@@ -15355,79 +15267,6 @@ mptsas_addr_to_ptgt(mptsas_t *mpt, char *addr, mptsas_phymask_t phymask)
 		ptgt = mptsas_phy_to_tgt(mpt, (int)phymask, phynum);
 	}
 	return (ptgt);
-}
-
-#ifdef MPTSAS_GET_LED
-static int
-mptsas_get_led_status(mptsas_t *mpt, mptsas_target_t *ptgt,
-    uint32_t *slotstatus)
-{
-	return (mptsas_send_sep(mpt, ptgt, slotstatus,
-	    MPI2_SEP_REQ_ACTION_READ_STATUS));
-}
-#endif
-static int
-mptsas_set_led_status(mptsas_t *mpt, mptsas_target_t *ptgt, uint32_t slotstatus)
-{
-	NDBG14(("mptsas_ioctl: set LED status %x for slot %x",
-	    slotstatus, ptgt->m_slot_num));
-	return (mptsas_send_sep(mpt, ptgt, &slotstatus,
-	    MPI2_SEP_REQ_ACTION_WRITE_STATUS));
-}
-/*
- *  send sep request, use enclosure/slot addressing
- */
-static int mptsas_send_sep(mptsas_t *mpt, mptsas_target_t *ptgt,
-    uint32_t *status, uint8_t act)
-{
-	Mpi2SepRequest_t	req;
-	Mpi2SepReply_t		rep;
-	int			ret;
-
-	ASSERT(mutex_owned(&mpt->m_mutex));
-
-	bzero(&req, sizeof (req));
-	bzero(&rep, sizeof (rep));
-
-	/* Do nothing for RAID volumes */
-	if (ptgt->m_phymask == 0) {
-		NDBG14(("mptsas_send_sep: Skip RAID volumes"));
-		return (DDI_FAILURE);
-	}
-
-	req.Function = MPI2_FUNCTION_SCSI_ENCLOSURE_PROCESSOR;
-	req.Action = act;
-	req.Flags = MPI2_SEP_REQ_FLAGS_ENCLOSURE_SLOT_ADDRESS;
-	req.EnclosureHandle = LE_16(ptgt->m_enclosure);
-	req.Slot = LE_16(ptgt->m_slot_num);
-	if (act == MPI2_SEP_REQ_ACTION_WRITE_STATUS) {
-		req.SlotStatus = LE_32(*status);
-	}
-	ret = mptsas_do_passthru(mpt, (uint8_t *)&req, (uint8_t *)&rep, NULL,
-	    sizeof (req), sizeof (rep), NULL, 0, NULL, 0, 60, FKIOCTL);
-	if (ret != 0) {
-		mptsas_log(mpt, CE_NOTE, "mptsas_send_sep: passthru SEP "
-		    "Processor Request message error %d", ret);
-		return (DDI_FAILURE);
-	}
-	/* do passthrough success, check the ioc status */
-	if (LE_16(rep.IOCStatus) != MPI2_IOCSTATUS_SUCCESS) {
-		if ((LE_16(rep.IOCStatus) & MPI2_IOCSTATUS_MASK) ==
-		    MPI2_IOCSTATUS_INVALID_FIELD) {
-			mptsas_log(mpt, CE_NOTE, "send sep act %x: Not "
-			    "supported action, loginfo %x", act,
-			    LE_32(rep.IOCLogInfo));
-			return (DDI_FAILURE);
-		}
-		mptsas_log(mpt, CE_NOTE, "send_sep act %x: ioc "
-		    "status:%x", act, LE_16(rep.IOCStatus));
-		return (DDI_FAILURE);
-	}
-	if (act != MPI2_SEP_REQ_ACTION_WRITE_STATUS) {
-		*status = LE_32(rep.SlotStatus);
-	}
-
-	return (DDI_SUCCESS);
 }
 
 int
