@@ -237,6 +237,7 @@ static void mptsas_sge_setup(mptsas_t *mpt, mptsas_cmd_t *cmd,
 static void mptsas_watch(void *arg);
 static void mptsas_watchsubr(mptsas_t *mpt);
 static void mptsas_cmd_timeout(mptsas_t *mpt, uint16_t devhdl);
+static void mptsas_kill_target(mptsas_t *mpt, mptsas_target_t *ptgt);
 
 static void mptsas_start_passthru(mptsas_t *mpt, mptsas_cmd_t *cmd);
 static int mptsas_do_passthru(mptsas_t *mpt, uint8_t *request, uint8_t *reply,
@@ -461,6 +462,14 @@ extern dev_info_t	*scsi_vhci_dip;
  * By default the value is 30 seconds.
  */
 int mptsas_inq83_retry_timeout = 30;
+/*
+ * Maximum number of command timeouts (0 - 255) considered acceptable.
+ */
+int mptsas_timeout_threshold = 2;
+/*
+ * Timeouts exceeding threshold within this period are considered excessive.
+ */
+int mptsas_timeout_interval = 30;
 
 /*
  * This is used to allocate memory for message frame storage, not for
@@ -8509,6 +8518,16 @@ mptsas_flush_target(mptsas_t *mpt, ushort_t target, int lun, uint8_t tasktype)
 		switch (tasktype) {
 		case MPI2_SCSITASKMGMT_TASKTYPE_TARGET_RESET:
 			if (Tgt(cmd) == target) {
+				if (cmd->cmd_tgt_addr->m_timeout < 0) {
+					/*
+					 * When timeout requested, propagate
+					 * proper reason and statistics to
+					 * target drivers.
+					 */
+					reason = CMD_TIMEOUT;
+					stat |= STAT_TIMEOUT;
+				}
+				
 				NDBG25(("mptsas_flush_target discovered non-"
 				    "NULL cmd in slot %d, tasktype 0x%x", slot,
 				    tasktype));
@@ -9376,8 +9395,24 @@ mptsas_watchsubr(mptsas_t *mpt)
 
 			ptgt->m_timeout -= mptsas_scsi_watchdog_tick;
 
+			if (ptgt->m_timeout_count > 0) {
+				ptgt->m_timeout_interval +=
+				    mptsas_scsi_watchdog_tick;
+			}
+			if (ptgt->m_timeout_interval > mptsas_timeout_interval) {
+				ptgt->m_timeout_interval = 0;
+				ptgt->m_timeout_count = 0;
+			}
+
 			if (ptgt->m_timeout < 0) {
-				mptsas_cmd_timeout(mpt, ptgt->m_devhdl);
+				ptgt->m_timeout_count++;
+				if (ptgt->m_timeout_count >
+				    mptsas_timeout_threshold) {
+					ptgt->m_timeout_count = 0;
+					mptsas_kill_target(mpt, ptgt);
+				} else {
+					mptsas_cmd_timeout(mpt, ptgt->m_devhdl);
+				}
 				ptgt = (mptsas_target_t *)mptsas_hash_traverse(
 				    &mpt->m_active->m_tgttbl, MPTSAS_HASH_NEXT);
 				continue;
@@ -9415,6 +9450,40 @@ mptsas_cmd_timeout(mptsas_t *mpt, uint16_t devhdl)
 	if (mptsas_do_scsi_reset(mpt, devhdl) != TRUE) {
 		mptsas_log(mpt, CE_WARN, "Target %d reset for command timeout "
 		    "recovery failed!", devhdl);
+	}
+}
+
+/*
+ * target causing too many timeouts
+ */
+static void
+mptsas_kill_target(mptsas_t *mpt, mptsas_target_t *ptgt)
+{
+	mptsas_topo_change_list_t 	*topo_node = NULL;
+
+	NDBG29(("mptsas_tgt_kill: target=%d", ptgt->m_devhdl));
+	mptsas_log(mpt, CE_WARN, "timeout threshold exceeded for "
+	    "Target %d", ptgt->m_devhdl);
+
+	topo_node = kmem_zalloc(sizeof (mptsas_topo_change_list_t), KM_SLEEP);
+	topo_node->mpt = mpt;
+	topo_node->un.phymask = ptgt->m_phymask;
+	topo_node->event = MPTSAS_DR_EVENT_OFFLINE_TARGET;
+	topo_node->devhdl = ptgt->m_devhdl;
+	if (ptgt->m_deviceinfo & DEVINFO_DIRECT_ATTACHED)
+		topo_node->flags = MPTSAS_TOPO_FLAG_DIRECT_ATTACHED_DEVICE;
+	else
+		topo_node->flags = MPTSAS_TOPO_FLAG_EXPANDER_ATTACHED_DEVICE;
+	topo_node->object = NULL;
+
+	/*
+	 * Launch DR taskq to fake topology change
+	 */
+	if ((ddi_taskq_dispatch(mpt->m_dr_taskq,
+	    mptsas_handle_dr, (void *)topo_node,
+	    DDI_NOSLEEP)) != DDI_SUCCESS) {
+		mptsas_log(mpt, CE_NOTE, "mptsas start taskq "
+		    "for fake offline event failed. \n");
 	}
 }
 
