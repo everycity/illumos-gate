@@ -599,6 +599,7 @@ f kernel/drv/amd64/dlpistub 0755 root sys
 f kernel/drv/amd64/dmfe 0755 root sys
 f kernel/drv/amd64/dnet 0755 root sys
 f kernel/drv/amd64/dprov 0755 root sys
+f kernel/drv/amd64/dr_sas 0755 root sys
 f kernel/drv/amd64/dtrace 0755 root sys
 f kernel/drv/amd64/e1000g 0755 root sys
 f kernel/drv/amd64/ehci 0755 root sys
@@ -747,6 +748,7 @@ f kernel/drv/devinfo.conf 0644 root sys
 f kernel/drv/dld.conf 0644 root sys
 f kernel/drv/dlpistub.conf 0644 root sys
 f kernel/drv/dprov.conf 0644 root sys
+f kernel/drv/dr_sas.conf 0644 root sys
 f kernel/drv/dtrace.conf 0644 root sys
 f kernel/drv/e1000g.conf 0644 root sys
 f kernel/drv/ehci.conf 0644 root sys
@@ -1491,6 +1493,7 @@ f lib/svc/manifest/network/iscsi/iscsi-initiator.xml 0444 root sys
 f lib/svc/manifest/network/iscsi/iscsi-target.xml 0444 root sys
 f lib/svc/manifest/network/isns_server.xml 0444 root sys
 d lib/svc/manifest/network/ldap 0755 root sys
+f lib/svc/manifest/network/ldap/client.xml 0444 root sys
 f lib/svc/manifest/network/lms.xml 0444 root sys
 d lib/svc/manifest/network/loadbalancer 0755 root sys
 f lib/svc/manifest/network/loadbalancer/ilbd.xml 0444 root sys
@@ -2392,7 +2395,6 @@ f usr/bin/ypwhich 0555 root other
 f usr/bin/zcat 0555 root bin
 f usr/bin/ziostat 0555 root bin
 s usr/bin/zonename=../../sbin/zonename
-f usr/bin/zschedstat 0555 root bin
 d usr/ccs 0755 root bin
 d usr/ccs/bin 0755 root bin
 d usr/ccs/bin/amd64 0755 root bin
@@ -2871,6 +2873,7 @@ f usr/include/libilb.h 0644 root bin
 f usr/include/libinetutil.h 0644 root bin
 f usr/include/libintl.h 0644 root bin
 f usr/include/libipadm.h 0644 root bin
+f usr/include/libipd.h 0644 root bin
 f usr/include/libipmi.h 0644 root bin
 f usr/include/libipp.h 0644 root bin
 f usr/include/libiscsit.h 0644 root bin
@@ -3398,7 +3401,6 @@ f usr/include/sys/bitmap.h 0644 root bin
 f usr/include/sys/bitset.h 0644 root bin
 f usr/include/sys/bl.h 0644 root bin
 f usr/include/sys/blkdev.h 0644 root bin
-f usr/include/sys/bmc_intf.h 0644 root bin
 f usr/include/sys/bofi.h 0644 root bin
 f usr/include/sys/bofi_impl.h 0644 root bin
 f usr/include/sys/bootconf.h 0644 root bin
@@ -4801,6 +4803,8 @@ s usr/lib/amd64/libinetutil.so.1=../../../lib/amd64/libinetutil.so.1
 s usr/lib/amd64/libinetutil.so=../../../lib/amd64/libinetutil.so.1
 s usr/lib/amd64/libintl.so.1=../../../lib/amd64/libintl.so.1
 s usr/lib/amd64/libintl.so=../../../lib/amd64/libintl.so.1
+f usr/lib/amd64/libipd.so.1 0755 root bin
+s usr/lib/amd64/libipd.so=libipd.so.1
 f usr/lib/amd64/libipmi.so.1 0755 root bin
 s usr/lib/amd64/libipmi.so=libipmi.so.1
 f usr/lib/amd64/libipp.so.1 0755 root bin
@@ -6179,6 +6183,8 @@ s usr/lib/libintl.so.1=../../lib/libintl.so.1
 s usr/lib/libintl.so=../../lib/libintl.so.1
 s usr/lib/libipadm.so=../../lib/libipadm.so.1
 s usr/lib/libipadm.so.1=../../lib/libipadm.so.1
+f usr/lib/libipd.so.1 0755 root bin
+s usr/lib/libipd.so=libipd.so.1
 f usr/lib/libipmi.so.1 0755 root bin
 s usr/lib/libipmi.so=libipmi.so.1
 s usr/lib/libipmp.so=../../lib/libipmp.so.1
@@ -9824,10 +9830,6 @@ s usr/lib/security/pkcs11_softtoken.so=pkcs11_softtoken.so.1
 f usr/lib/sendmail 2555 root smmsp
 f usr/lib/servinfo 0555 root bin
 f usr/lib/set_keyboard_layout 0555 root bin
-d usr/lib/sgml 0755 root bin
-f usr/lib/sgml/instant 0755 root bin
-f usr/lib/sgml/nsgmls 0755 root bin
-f usr/lib/sgml/sgml2roff 0755 root bin
 d usr/lib/smbfs 0755 root bin
 f usr/lib/smbfs/smbiod 0555 root bin
 f usr/lib/smbfs/smbiod-svc 0555 root bin
@@ -11841,6 +11843,7 @@ f usr/share/man/man1m/killall.1m 0444 root bin
 f usr/share/man/man1m/ksslcfg.1m 0444 root bin
 f usr/share/man/man1m/kstat.1m 0444 root bin
 f usr/share/man/man1m/labelit.1m 0444 root bin
+f usr/share/man/man1m/ldap_cachemgr.1m 0444 root bin
 f usr/share/man/man1m/ldapaddent.1m 0444 root bin
 f usr/share/man/man1m/ldapclient.1m 0444 root bin
 f usr/share/man/man1m/link.1m 0444 root bin
@@ -12021,7 +12024,6 @@ f usr/share/man/man1m/zic.1m 0444 root bin
 f usr/share/man/man1m/zoneadm.1m 0444 root bin
 f usr/share/man/man1m/zonecfg.1m 0444 root bin
 f usr/share/man/man1m/zpool.1m 0444 root bin
-f usr/share/man/man1m/zschedstat.1m 0444 root bin
 f usr/share/man/man1m/zstreamdump.1m 0444 root bin
 d usr/share/man/man2 0755 root bin
 f usr/share/man/man2/Intro.2 0444 root bin
