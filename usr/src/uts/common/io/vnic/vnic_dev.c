@@ -52,6 +52,7 @@
 #include <sys/vlan.h>
 #include <sys/vnic.h>
 #include <sys/vnic_impl.h>
+#include <sys/mac_impl.h>
 #include <sys/mac_flow_impl.h>
 #include <inet/ip_impl.h>
 
@@ -407,15 +408,6 @@ vnic_dev_create(datalink_id_t vnic_id, datalink_id_t linkid,
 		if (err != 0)
 			goto bail;
 
-		if (mrp != NULL) {
-			if ((mrp->mrp_mask & MRP_RX_RINGS) != 0 ||
-			    (mrp->mrp_mask & MRP_TX_RINGS) != 0) {
-				req_hwgrp_flag = B_TRUE;
-			}
-			err = mac_client_set_resources(vnic->vn_mch, mrp);
-			if (err != 0)
-				goto bail;
-		}
 		/* assign a MAC address to the VNIC */
 
 		err = vnic_unicast_add(vnic, *vnic_addr_type, mac_slot,
@@ -519,8 +511,21 @@ vnic_dev_create(datalink_id_t vnic_id, datalink_id_t linkid,
 	}
 
 	/* Set the VNIC's MAC in the client */
-	if (!is_anchor)
+	if (!is_anchor) {
 		mac_set_upper_mac(vnic->vn_mch, vnic->vn_mh, mrp);
+
+		if (mrp != NULL) {
+			if ((mrp->mrp_mask & MRP_RX_RINGS) != 0 ||
+			    (mrp->mrp_mask & MRP_TX_RINGS) != 0) {
+				req_hwgrp_flag = B_TRUE;
+			}
+			err = mac_client_set_resources(vnic->vn_mch, mrp);
+			if (err != 0) {
+				(void) mac_unregister(vnic->vn_mh);
+				goto bail;
+			}
+		}
+	}
 
 	err = dls_devnet_create(vnic->vn_mh, vnic->vn_id, crgetzoneid(credp));
 	if (err != 0) {
@@ -847,7 +852,7 @@ static int
 vnic_m_setprop(void *m_driver, const char *pr_name, mac_prop_id_t pr_num,
     uint_t pr_valsize, const void *pr_val)
 {
-	int 		err = ENOTSUP;
+	int 		err = 0;
 	vnic_t		*vn = m_driver;
 
 	switch (pr_num) {
@@ -855,8 +860,10 @@ vnic_m_setprop(void *m_driver, const char *pr_name, mac_prop_id_t pr_num,
 		uint32_t	mtu;
 
 		/* allow setting MTU only on an etherstub */
-		if (vn->vn_link_id != DATALINK_INVALID_LINKID)
-			return (err);
+		if (vn->vn_link_id != DATALINK_INVALID_LINKID) {
+			err = ENOTSUP;
+			break;
+		}
 
 		if (pr_valsize < sizeof (mtu)) {
 			err = EINVAL;
@@ -879,9 +886,10 @@ vnic_m_setprop(void *m_driver, const char *pr_name, mac_prop_id_t pr_num,
 		}
 
 		bcopy(pr_val, &filtered, sizeof (filtered));
-		err = mac_set_promisc_filtered(vn->vn_mch, filtered);
+		mac_set_promisc_filtered(vn->vn_mch, filtered);
 	}
 	default:
+		err = ENOTSUP;
 		break;
 	}
 	return (err);
