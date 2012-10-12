@@ -5266,6 +5266,8 @@ f usr/lib/fm/fmd/plugins/syslog-msgs.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/syslog-msgs.so 0555 root bin
 f usr/lib/fm/fmd/plugins/zfs-diagnosis.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/zfs-diagnosis.so 0555 root bin
+f usr/lib/fm/fmd/plugins/zfs-monitor.conf 0644 root bin
+f usr/lib/fm/fmd/plugins/zfs-monitor.so 0555 root bin
 f usr/lib/fm/fmd/plugins/zfs-retire.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/zfs-retire.so 0555 root bin
 d usr/lib/fm/fmd/schemes 0755 root bin
