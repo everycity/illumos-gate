@@ -132,6 +132,7 @@
 ./usr/src/lib/crypt_modules/sha256/test.c
 ./usr/src/lib/efcode/fcode_test
 ./usr/src/lib/libkvm/common/test.c
+./usr/src/common/saveargs/tests/
 
 #
 # Ignore debugging code.
@@ -277,3 +278,4 @@
 # ld tests which are not currently delivered
 #
 ./usr/src/cmd/sgs/test
+./usr/src/cmd/mdb/test

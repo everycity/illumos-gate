@@ -22,8 +22,6 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 PROG =		rmmount
 LOCAL_OBJS =	rmmount.o
@@ -43,7 +41,11 @@ CPPFLAGS +=	-I$(ROOT)/usr/include/hal
 CPPFLAGS +=	-I$(SRC)/cmd/rmvolmgr
 C99MODE =	$(C99_ENABLE)
 
-CFLAGS += -erroff=E_INTEGER_OVERFLOW_DETECTED
+CERRWARN += -_gcc=-Wno-switch
+CERRWARN += -_gcc=-Wno-unused-variable
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-unused-function
+CERRWARN += -_gcc=-Wno-uninitialized
 
 .KEEP_STATE:
 

@@ -2,9 +2,8 @@
  * CDDL HEADER START
  *
  * The contents of this file are subject to the terms of the
- * Common Development and Distribution License, Version 1.0 only
- * (the "License").  You may not use this file except in compliance
- * with the License.
+ * Common Development and Distribution License (the "License").
+ * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
  * or http://www.opensolaris.org/os/licensing.
@@ -20,23 +19,24 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
- * Use is subject to license terms.
+ * Copyright (c) 2012 Joyent, Inc. All rights reserved.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
-/*
- * The inclusion of <sys/utsname.h> in a source file causes an automatic
- * inclusion of a static definition of uname() that calls _nuname().
- */
+#ifndef	_MDB_TYPEDEF_H
+#define	_MDB_TYPEDEF_H
 
-#include <sys/utsname.h>
-#include <errno.h>
+#include <mdb/mdb_modapi.h>
 
-/*ARGSUSED*/
-int
-_nuname(struct utsname *utsp)
-{
-	return (EINVAL);
+#ifdef	__cplusplus
+extern "C" {
+#endif
+
+int cmd_typedef(uintptr_t, uint_t, int, const mdb_arg_t *);
+void cmd_typedef_help(void);
+
+#ifdef	__cplusplus
 }
+#endif
+
+#endif	/* _MDB_TYPEDEF_H */
