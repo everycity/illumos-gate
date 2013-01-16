@@ -84,7 +84,7 @@ extern "C" {
 	"\010amdmmx\07mmx\06cmov\05amdsysc\04sep\03cx8\02tsc\01fpu"
 
 #define	AV_386_2_F16C		0x00001	/* F16C half percision extensions */
-#define	AV_386_2_RDRAND		0x00002	/* rdtsc insn */
+#define	AV_386_2_RDRAND		0x00002	/* RDRAND insn */
 
 #define	FMT_AV_386_2							\
 	"\020"								\

@@ -459,6 +459,9 @@ $(DBOOT_LINTS_DIR)/%.ln: $(UTSBASE)/i86pc/dboot/%.c
 $(DBOOT_LINTS_DIR)/%.ln: $(UTSBASE)/i86pc/dboot/%.s
 	@($(LHEAD) $(DBOOT_LINT) $(DBOOT_LOCAL_LINTFLAGS) $< $(LTAIL))
 
+$(DBOOT_LINTS_DIR)/%.ln: $(COMMONBASE)/crypto/sha1/%.c
+	@($(LHEAD) $(DBOOT_LINT) $(DBOOT_LOCAL_LINTFLAGS) $< $(LTAIL))
+
 $(DBOOT_LINTS_DIR)/%.ln: $(UTSBASE)/i86pc/boot/%.c
 	@($(LHEAD) $(DBOOT_LINT) $(DBOOT_LOCAL_LINTFLAGS) $< $(LTAIL))
 
