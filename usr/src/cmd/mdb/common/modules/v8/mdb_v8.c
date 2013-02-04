@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -121,11 +121,11 @@ static intptr_t	V8_SmiTagMask;
 static intptr_t	V8_SmiValueShift;
 static intptr_t	V8_PointerSizeLog2;
 
+static intptr_t	V8_ISSHARED_SHIFT;
 static intptr_t	V8_DICT_SHIFT;
 static intptr_t	V8_DICT_PREFIX_SIZE;
 static intptr_t	V8_DICT_ENTRY_SIZE;
 static intptr_t	V8_DICT_START_INDEX;
-
 static intptr_t	V8_PROP_IDX_CONTENT;
 static intptr_t	V8_PROP_IDX_FIRST;
 static intptr_t	V8_PROP_TYPE_FIELD;
@@ -234,12 +234,13 @@ static v8_constant_t v8_constants[] = {
 	{ &V8_DICT_SHIFT,		"v8dbg_dict_shift",
 	    V8_CONSTANT_FALLBACK(3, 13), 24 },
 	{ &V8_DICT_PREFIX_SIZE,		"v8dbg_dict_prefix_size",
-	    V8_CONSTANT_FALLBACK(3, 13), 2 },
+	    V8_CONSTANT_FALLBACK(3, 11), 2 },
 	{ &V8_DICT_ENTRY_SIZE,		"v8dbg_dict_entry_size",
-	    V8_CONSTANT_FALLBACK(3, 13), 3 },
+	    V8_CONSTANT_FALLBACK(3, 11), 3 },
 	{ &V8_DICT_START_INDEX,		"v8dbg_dict_start_index",
-	    V8_CONSTANT_FALLBACK(3, 13), 3 },
-
+	    V8_CONSTANT_FALLBACK(3, 11), 3 },
+	{ &V8_ISSHARED_SHIFT,		"v8dbg_isshared_shift",
+	    V8_CONSTANT_FALLBACK(3, 11), 0 },
 	{ &V8_PROP_IDX_FIRST,		"v8dbg_prop_idx_first"		},
 	{ &V8_PROP_TYPE_FIELD,		"v8dbg_prop_type_field"		},
 	{ &V8_PROP_FIRST_PHANTOM,	"v8dbg_prop_type_first_phantom"	},
@@ -1032,6 +1033,7 @@ read_heap_dict(uintptr_t addr,
 	char *bufp;
 	int rval = -1;
 	uintptr_t *dict, ndict, i;
+	const char *typename;
 
 	if (read_heap_array(addr, &dict, &ndict, UM_SLEEP) != 0)
 		return (-1);
@@ -1053,6 +1055,17 @@ read_heap_dict(uintptr_t addr,
 
 		if (read_typebyte(&type, dict[i]) != 0)
 			goto out;
+
+		typename = enum_lookup_str(v8_types, type, NULL);
+
+		if (typename != NULL && strcmp(typename, "Oddball") == 0) {
+			/*
+			 * In some cases, the key can (apparently) be a hole;
+			 * assume that any Oddball in the key field falls into
+			 * this case and skip over it.
+			 */
+			continue;
+		}
 
 		if (!V8_TYPE_STRING(type))
 			goto out;
@@ -1473,6 +1486,27 @@ jsobj_properties(uintptr_t addr,
 
 		if (V8_SMI_VALUE(bit_field3) & (1 << V8_DICT_SHIFT))
 			return (read_heap_dict(ptr, func, arg));
+	} else if (V8_OFF_MAP_INSTANCE_DESCRIPTORS != -1) {
+		uintptr_t bit_field3;
+
+		if (mdb_vread(&bit_field3, sizeof (bit_field3),
+		    map + V8_OFF_MAP_INSTANCE_DESCRIPTORS) == -1)
+			goto err;
+
+		if (V8_SMI_VALUE(bit_field3) == (1 << V8_ISSHARED_SHIFT)) {
+			/*
+			 * On versions of V8 prior to that used in 0.10,
+			 * the instance descriptors were overloaded to also
+			 * be bit_field3 -- and there was no way from that
+			 * field to infer a dictionary type.  Because we
+			 * can't determine if the map is actually the
+			 * hash_table_map, we assume that if it's an object
+			 * that has kIsShared set, that it is in fact a
+			 * dictionary -- an assumption that is assuredly in
+			 * error in some cases.
+			 */
+			return (read_heap_dict(ptr, func, arg));
+		}
 	}
 
 	if (read_heap_array(ptr, &props, &nprops, UM_SLEEP) != 0)
@@ -1738,6 +1772,8 @@ typedef struct jsobj_print {
 	uint64_t jsop_depth;
 	boolean_t jsop_printaddr;
 	int jsop_nprops;
+	const char *jsop_member;
+	boolean_t jsop_found;
 } jsobj_print_t;
 
 static int jsobj_print_number(uintptr_t, jsobj_print_t *);
@@ -1768,7 +1804,7 @@ jsobj_print(uintptr_t addr, jsobj_print_t *jsop)
 		{ NULL }
 	}, *ent;
 
-	if (jsop->jsop_printaddr)
+	if (jsop->jsop_printaddr && jsop->jsop_member == NULL)
 		(void) bsnprintf(bufp, lenp, "%p: ", addr);
 
 	if (V8_IS_SMI(addr)) {
@@ -1856,10 +1892,49 @@ jsobj_print_prop(const char *desc, uintptr_t val, void *arg)
 }
 
 static int
+jsobj_print_prop_member(const char *desc, uintptr_t val, void *arg)
+{
+	jsobj_print_t *jsop = arg, descend;
+	const char *member = jsop->jsop_member, *next = member;
+	int rv;
+
+	for (; *next != '\0' && *next != '.' && *next != '['; next++)
+		continue;
+
+	if (*member == '[') {
+		mdb_warn("cannot use array indexing on an object\n");
+		return (-1);
+	}
+
+	if (strncmp(member, desc, next - member) != 0)
+		return (0);
+
+	/*
+	 * This property matches the desired member; descend.
+	 */
+	descend = *jsop;
+
+	if (*next == '\0') {
+		descend.jsop_member = NULL;
+		descend.jsop_found = B_TRUE;
+	} else {
+		descend.jsop_member = *next == '.' ? next + 1 : next;
+	}
+
+	rv = jsobj_print(val, &descend);
+	jsop->jsop_found = descend.jsop_found;
+
+	return (rv);
+}
+
+static int
 jsobj_print_jsobject(uintptr_t addr, jsobj_print_t *jsop)
 {
 	char **bufp = jsop->jsop_bufp;
 	size_t *lenp = jsop->jsop_lenp;
+
+	if (jsop->jsop_member != NULL)
+		return (jsobj_properties(addr, jsobj_print_prop_member, jsop));
 
 	if (jsop->jsop_depth == 0) {
 		(void) bsnprintf(bufp, lenp, "[...]");
@@ -1885,6 +1960,82 @@ jsobj_print_jsobject(uintptr_t addr, jsobj_print_t *jsop)
 }
 
 static int
+jsobj_print_jsarray_member(uintptr_t addr, jsobj_print_t *jsop)
+{
+	uintptr_t *elts;
+	jsobj_print_t descend;
+	uintptr_t ptr;
+	const char *member = jsop->jsop_member, *end, *p;
+	size_t elt = 0, place = 1, len, rv;
+
+	if (read_heap_ptr(&ptr, addr, V8_OFF_JSOBJECT_ELEMENTS) != 0 ||
+	    read_heap_array(ptr, &elts, &len, UM_GC) != 0)
+		return (-1);
+
+	if (*member != '[') {
+		mdb_warn("expected bracketed array index; "
+		    "found '%s'\n", member);
+		return (-1);
+	}
+
+	if ((end = strchr(member, ']')) == NULL) {
+		mdb_warn("missing array index terminator\n");
+		return (-1);
+	}
+
+	/*
+	 * We know where our array index ends; convert it to an integer
+	 * by stepping through it from least significant digit to most.
+	 */
+	for (p = end - 1; p > member; p--) {
+		if (*p < '0' || *p > '9') {
+			mdb_warn("illegal array index at '%c'\n", *p);
+			return (-1);
+		}
+
+		elt += (*p - '0') * place;
+		place *= 10;
+	}
+
+	if (place == 1) {
+		mdb_warn("missing array index\n");
+		return (-1);
+	}
+
+	if (elt >= len) {
+		mdb_warn("array index %d exceeds size of %d\n", elt, len);
+		return (-1);
+	}
+
+	descend = *jsop;
+
+	switch (*(++end)) {
+	case '\0':
+		descend.jsop_member = NULL;
+		descend.jsop_found = B_TRUE;
+		break;
+
+	case '.':
+		descend.jsop_member = end + 1;
+		break;
+
+	case '[':
+		descend.jsop_member = end;
+		break;
+
+	default:
+		mdb_warn("illegal character '%c' following "
+		    "array index terminator\n", *end);
+		return (-1);
+	}
+
+	rv = jsobj_print(elts[elt], &descend);
+	jsop->jsop_found = descend.jsop_found;
+
+	return (rv);
+}
+
+static int
 jsobj_print_jsarray(uintptr_t addr, jsobj_print_t *jsop)
 {
 	char **bufp = jsop->jsop_bufp;
@@ -1894,6 +2045,9 @@ jsobj_print_jsarray(uintptr_t addr, jsobj_print_t *jsop)
 	uintptr_t ptr;
 	uintptr_t *elts;
 	size_t ii, len;
+
+	if (jsop->jsop_member != NULL)
+		return (jsobj_print_jsarray_member(addr, jsop));
 
 	if (jsop->jsop_depth == 0) {
 		(void) bsnprintf(bufp, lenp, "[...]");
@@ -2997,16 +3151,27 @@ dcmd_jsprint(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	char *buf, *bufp;
 	size_t bufsz = 262144, len = bufsz;
 	jsobj_print_t jsop;
-	int rv;
+	int rv, i;
 
 	bzero(&jsop, sizeof (jsop));
 	jsop.jsop_depth = 2;
 	jsop.jsop_printaddr = B_FALSE;
 
-	if (mdb_getopts(argc, argv,
+	i = mdb_getopts(argc, argv,
 	    'a', MDB_OPT_SETBITS, B_TRUE, &jsop.jsop_printaddr,
-	    'd', MDB_OPT_UINT64, &jsop.jsop_depth, NULL) != argc)
+	    'd', MDB_OPT_UINT64, &jsop.jsop_depth, NULL);
+
+	if (i < argc - 1)
 		return (DCMD_USAGE);
+
+	if (i != argc) {
+		const mdb_arg_t *member = &argv[argc - 1];
+
+		if (member->a_type != MDB_TYPE_STRING)
+			return (DCMD_USAGE);
+
+		jsop.jsop_member = member->a_un.a_str;
+	}
 
 	for (;;) {
 		if ((buf = bufp = mdb_zalloc(bufsz, UM_NOSLEEP)) == NULL)
@@ -3023,6 +3188,15 @@ dcmd_jsprint(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		mdb_free(buf, bufsz);
 		bufsz <<= 1;
 		len = bufsz;
+	}
+
+	if (jsop.jsop_member && !jsop.jsop_found) {
+		if (rv != 0)
+			return (DCMD_ERR);
+
+		mdb_warn("'%s' not found in %p\n", jsop.jsop_member, addr);
+		mdb_free(buf, bufsz);
+		return (DCMD_ERR);
 	}
 
 	(void) mdb_printf("%s\n", buf);
@@ -3273,7 +3447,7 @@ static const mdb_dcmd_t v8_mdb_dcmds[] = {
 	 */
 	{ "jsframe", ":[-v]", "summarize a JavaScript stack frame",
 		dcmd_jsframe },
-	{ "jsprint", ":[-a] [-d depth]", "print a JavaScript object",
+	{ "jsprint", ":[-a] [-d depth] [member]", "print a JavaScript object",
 		dcmd_jsprint },
 	{ "jsstack", "[-v]", "print a JavaScript stacktrace",
 		dcmd_jsstack },
