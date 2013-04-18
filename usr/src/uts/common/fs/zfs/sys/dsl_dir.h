@@ -20,7 +20,8 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 #ifndef	_SYS_DSL_DIR_H
@@ -106,18 +107,15 @@ struct dsl_dir {
 	char dd_myname[MAXNAMELEN];
 };
 
-void dsl_dir_close(dsl_dir_t *dd, void *tag);
-int dsl_dir_open(const char *name, void *tag, dsl_dir_t **, const char **tail);
-int dsl_dir_open_spa(spa_t *spa, const char *name, void *tag, dsl_dir_t **,
-    const char **tailp);
-int dsl_dir_open_obj(dsl_pool_t *dp, uint64_t ddobj,
+void dsl_dir_rele(dsl_dir_t *dd, void *tag);
+int dsl_dir_hold(dsl_pool_t *dp, const char *name, void *tag,
+    dsl_dir_t **, const char **tail);
+int dsl_dir_hold_obj(dsl_pool_t *dp, uint64_t ddobj,
     const char *tail, void *tag, dsl_dir_t **);
 void dsl_dir_name(dsl_dir_t *dd, char *buf);
 int dsl_dir_namelen(dsl_dir_t *dd);
 uint64_t dsl_dir_create_sync(dsl_pool_t *dp, dsl_dir_t *pds,
     const char *name, dmu_tx_t *tx);
-dsl_checkfunc_t dsl_dir_destroy_check;
-dsl_syncfunc_t dsl_dir_destroy_sync;
 void dsl_dir_stats(dsl_dir_t *dd, nvlist_t *nv);
 uint64_t dsl_dir_space_available(dsl_dir_t *dd,
     dsl_dir_t *ancestor, int64_t delta, int ondiskonly);
@@ -136,21 +134,15 @@ int dsl_dir_set_quota(const char *ddname, zprop_source_t source,
     uint64_t quota);
 int dsl_dir_set_reservation(const char *ddname, zprop_source_t source,
     uint64_t reservation);
-int dsl_dir_validate_fs_ss_limit(const char *, uint64_t, zfs_prop_t);
-int dsl_secpolicy_write_prop(dsl_dir_t *, zfs_prop_t, cred_t *);
-int dsl_dir_fscount_check(dsl_dir_t *, uint64_t, dsl_dir_t *, cred_t *);
-void dsl_dir_fscount_adjust(dsl_dir_t *, dmu_tx_t *, int64_t, boolean_t);
-int dsl_snapcount_check(dsl_dir_t *, uint64_t, dsl_dir_t *, cred_t *);
-void dsl_snapcount_adjust(dsl_dir_t *, dmu_tx_t *, int64_t, boolean_t);
-int dsl_dir_rename(dsl_dir_t *dd, const char *newname);
-int dsl_dir_transfer_possible(dsl_dir_t *sdd, dsl_dir_t *tdd,
-    dsl_dir_t *moving_dd, uint64_t space, cred_t *);
-int dsl_dir_set_reservation_check(void *arg1, void *arg2, dmu_tx_t *tx);
+int dsl_dir_rename(const char *oldname, const char *newname);
+int dsl_dir_transfer_possible(dsl_dir_t *sdd, dsl_dir_t *tdd, uint64_t space);
 boolean_t dsl_dir_is_clone(dsl_dir_t *dd);
 void dsl_dir_new_refreservation(dsl_dir_t *dd, struct dsl_dataset *ds,
     uint64_t reservation, cred_t *cr, dmu_tx_t *tx);
 void dsl_dir_snap_cmtime_update(dsl_dir_t *dd);
 timestruc_t dsl_dir_snap_cmtime(dsl_dir_t *dd);
+void dsl_dir_set_reservation_sync_impl(dsl_dir_t *dd, uint64_t value,
+    dmu_tx_t *tx);
 
 /* internal reserved dir name */
 #define	MOS_DIR_NAME "$MOS"

@@ -24,7 +24,7 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
  */
 
 /*
@@ -123,6 +123,13 @@ static int pt_lookup_by_name_thr(mdb_tgt_t *, const char *,
     const char *, GElf_Sym *, mdb_syminfo_t *, mdb_tgt_tid_t);
 static int tlsbase(mdb_tgt_t *, mdb_tgt_tid_t, Lmid_t, const char *,
     psaddr_t *);
+
+/*
+ * When debugging postmortem, we don't resolve names as we may very well not
+ * be on a system on which those names resolve.
+ */
+#define	PT_LIBPROC_RESOLVE(P) \
+	(!(mdb.m_flags & MDB_FL_LMRAW) && Pstate(P) != PS_DEAD)
 
 /*
  * The Perror_printf() function interposes on the default, empty libproc
@@ -2166,11 +2173,20 @@ static const mdb_walker_t pt_walkers[] = {
 	{ NULL }
 };
 
+static int
+pt_agent_check(boolean_t *agent, const lwpstatus_t *psp)
+{
+	if (psp->pr_flags & PR_AGENT)
+		*agent = B_TRUE;
+
+	return (0);
+}
 
 static void
 pt_activate_common(mdb_tgt_t *t)
 {
 	pt_data_t *pt = t->t_data;
+	boolean_t hasagent = B_FALSE;
 	GElf_Sym sym;
 
 	/*
@@ -2184,13 +2200,23 @@ pt_activate_common(mdb_tgt_t *t)
 		    "library information will not be available\n");
 	}
 
-	/*
-	 * If we have a libproc handle and libthread is loaded, attempt to load
-	 * and initialize the corresponding libthread_db.  If this fails, fall
-	 * back to our native LWP implementation and issue a warning.
-	 */
-	if (t->t_pshandle != NULL && Pstate(t->t_pshandle) != PS_IDLE)
+	if (t->t_pshandle != NULL) {
+		(void) Plwp_iter(t->t_pshandle,
+		    (proc_lwp_f *)pt_agent_check, &hasagent);
+	}
+
+	if (hasagent) {
+		mdb_warn("agent lwp detected; forcing "
+		    "lwp thread model (use ::tmodel to change)\n");
+	} else if (t->t_pshandle != NULL && Pstate(t->t_pshandle) != PS_IDLE) {
+		/*
+		 * If we have a libproc handle and we do not have an agent LWP,
+		 * look for the correct thread debugging library.  (If we have
+		 * an agent LWP, we leave the model as the raw LWP model to
+		 * allow the agent LWP to be visible to the debugger.)
+		 */
 		(void) Pobject_iter(t->t_pshandle, (proc_map_f *)thr_check, t);
+	}
 
 	/*
 	 * If there's a global object named '_mdb_abort_info', assuming we're
@@ -2808,7 +2834,7 @@ pt_lookup_by_addr(mdb_tgt_t *t, uintptr_t addr, uint_t flags,
 	 * Once we get the closest symbol, we perform the EXACT match or
 	 * smart-mode or absolute distance check ourself:
 	 */
-	if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+	if (PT_LIBPROC_RESOLVE(P)) {
 		rv = Pxlookup_by_addr_resolved(P, addr, buf, nbytes,
 		    symp, &si);
 	} else {
@@ -2853,7 +2879,7 @@ found:
 		const char *prefix = pmp->pr_mapname;
 		Lmid_t lmid;
 
-		if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+		if (PT_LIBPROC_RESOLVE(P)) {
 			if (Pobjname_resolved(P, addr, pt->p_objname,
 			    MDB_TGT_MAPSZ))
 				prefix = pt->p_objname;
@@ -2955,7 +2981,7 @@ pt_symbol_iter(mdb_tgt_t *t, const char *object, uint_t which,
 			    which, type, pt_symbol_iter_cb, &ps);
 			return (0);
 		} else if (Prd_agent(t->t_pshandle) != NULL) {
-			if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+			if (PT_LIBPROC_RESOLVE(t->t_pshandle)) {
 				(void) Pobject_iter_resolved(t->t_pshandle,
 				    pt_objsym_iter, &ps);
 			} else {
@@ -2994,7 +3020,7 @@ pt_prmap_to_mdbmap(mdb_tgt_t *t, const prmap_t *prp, mdb_map_t *mp)
 	char *rv, name[MAXPATHLEN];
 	Lmid_t lmid;
 
-	if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+	if (PT_LIBPROC_RESOLVE(P)) {
 		rv = Pobjname_resolved(P, prp->pr_vaddr, name, sizeof (name));
 	} else {
 		rv = Pobjname(P, prp->pr_vaddr, name, sizeof (name));
@@ -3060,7 +3086,7 @@ pt_mapping_iter(mdb_tgt_t *t, mdb_tgt_map_f *func, void *private)
 		pm.pmap_func = func;
 		pm.pmap_private = private;
 
-		if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+		if (PT_LIBPROC_RESOLVE(t->t_pshandle)) {
 			(void) Pmapping_iter_resolved(t->t_pshandle,
 			    pt_map_apply, &pm);
 		} else {
@@ -3089,7 +3115,7 @@ pt_object_iter(mdb_tgt_t *t, mdb_tgt_map_f *func, void *private)
 		pm.pmap_func = func;
 		pm.pmap_private = private;
 
-		if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+		if (PT_LIBPROC_RESOLVE(t->t_pshandle)) {
 			(void) Pobject_iter_resolved(t->t_pshandle,
 			    pt_map_apply, &pm);
 		} else {

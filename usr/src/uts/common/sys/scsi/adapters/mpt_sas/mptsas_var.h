@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -210,6 +211,15 @@ typedef	struct mptsas_target {
 		uint32_t		m_tgt_unconfigured;
 		uint32_t		m_timeout_interval;
 		uint8_t			m_timeout_count;
+		uint8_t			m_led_status;
+
+		/*
+		 * For the common case, the elements in this structure are
+		 * protected by the per hba instance mutex. In order to make
+		 * the key code path in ISR lockless, a separate mutex is
+		 * introdeced to protect those shown in ISR.
+		 */
+		kmutex_t		m_tgt_intr_mutex;
 
 } mptsas_target_t;
 

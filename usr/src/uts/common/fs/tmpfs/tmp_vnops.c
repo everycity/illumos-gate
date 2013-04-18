@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -877,8 +877,7 @@ tmp_lookup(
 				return (error);
 			}
 
-			xdp = tmp_memalloc(sizeof (struct tmpnode),
-			    TMP_MUSTHAVE);
+			xdp = kmem_zalloc(sizeof (struct tmpnode), KM_SLEEP);
 			tm = VTOTM(dvp);
 			tmpnode_init(tm, xdp, &tp->tn_attr, NULL);
 			/*
@@ -1607,7 +1606,7 @@ tmp_symlink(
 		return (error);
 	}
 	len = strlen(tnm) + 1;
-	cp = tmp_memalloc(len, 0);
+	cp = kmem_alloc(len, KM_NOSLEEP | KM_NORMALPRI);
 	if (cp == NULL) {
 		tmpnode_rele(self);
 		return (ENOSPC);
@@ -1691,7 +1690,7 @@ top:
 		mutex_exit(&tp->tn_tlock);
 		rw_exit(&tp->tn_rwlock);
 		/* If the filesystem was umounted by force, rele the vfs ref */
-		if (vp->v_vfsp->vfs_flag & VFS_UNMOUNTED)
+		if (tm->tm_vfsp->vfs_flag & VFS_UNMOUNTED)
 			VFS_RELE(tm->tm_vfsp);
 		return;
 	}
@@ -1717,7 +1716,7 @@ top:
 			goto top;
 		}
 		if (tp->tn_type == VLNK)
-			tmp_memfree(tp->tn_symlink, tp->tn_size + 1);
+			kmem_free(tp->tn_symlink, tp->tn_size + 1);
 	}
 
 	/*
@@ -1751,10 +1750,10 @@ top:
 	rw_destroy(&tp->tn_rwlock);
 	mutex_destroy(&tp->tn_tlock);
 	vn_free(TNTOV(tp));
-	tmp_memfree(tp, sizeof (struct tmpnode));
+	kmem_free(tp, sizeof (struct tmpnode));
 
 	/* If the filesystem was umounted by force, rele the vfs ref */
-	if (vp->v_vfsp->vfs_flag & VFS_UNMOUNTED)
+	if (tm->tm_vfsp->vfs_flag & VFS_UNMOUNTED)
 		VFS_RELE(tm->tm_vfsp);
 }
 

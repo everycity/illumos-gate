@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -68,6 +69,7 @@
 #include <sys/pci.h>
 #include <sys/file.h>
 #include <sys/policy.h>
+#include <sys/model.h>
 #include <sys/sysevent.h>
 #include <sys/sysevent/eventdefs.h>
 #include <sys/sysevent/dr.h>
@@ -352,6 +354,7 @@ static dev_info_t *mptsas_get_dip_from_dev(dev_t dev,
     mptsas_phymask_t *phymask);
 static mptsas_target_t *mptsas_addr_to_ptgt(mptsas_t *mpt, char *addr,
     mptsas_phymask_t phymask);
+static int mptsas_flush_led_status(mptsas_t *mpt, mptsas_target_t *ptgt);
 
 
 /*
@@ -6068,6 +6071,11 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 		}
 
 		mutex_enter(&mpt->m_mutex);
+		ptgt->m_led_status = 0;
+		if (mptsas_flush_led_status(mpt, ptgt) != DDI_SUCCESS) {
+			NDBG14(("mptsas: clear LED for tgt %x failed",
+			    ptgt->m_slot_num));
+		}
 		if (rval == DDI_SUCCESS) {
 			mptsas_tgt_free(&mpt->m_active->m_tgttbl,
 			    ptgt->m_sas_wwn, ptgt->m_phymask);
@@ -11353,6 +11361,163 @@ mptsas_reg_access(mptsas_t *mpt, mptsas_reg_access_t *data, int mode)
 }
 
 static int
+led_control(mptsas_t *mpt, intptr_t data, int mode)
+{
+	int ret = 0;
+	mptsas_led_control_t lc;
+	mptsas_target_t *ptgt;
+
+	if (ddi_copyin((void *)data, &lc, sizeof (lc), mode) != 0) {
+		return (EFAULT);
+	}
+
+	if ((lc.Command != MPTSAS_LEDCTL_FLAG_SET &&
+	    lc.Command != MPTSAS_LEDCTL_FLAG_GET) ||
+	    lc.Led < MPTSAS_LEDCTL_LED_MIN ||
+	    lc.Led > MPTSAS_LEDCTL_LED_MAX ||
+	    (lc.Command == MPTSAS_LEDCTL_FLAG_SET && lc.LedStatus != 0 &&
+	    lc.LedStatus != 1)) {
+		return (EINVAL);
+	}
+
+	if ((lc.Command == MPTSAS_LEDCTL_FLAG_SET && (mode & FWRITE) == 0) ||
+	    (lc.Command == MPTSAS_LEDCTL_FLAG_GET && (mode & FREAD) == 0))
+		return (EACCES);
+
+	/* Locate the target we're interrogating... */
+	mutex_enter(&mpt->m_mutex);
+	ptgt = (mptsas_target_t *)mptsas_hash_traverse(&mpt->m_active->m_tgttbl,
+	    MPTSAS_HASH_FIRST);
+	while (ptgt != NULL) {
+		if (ptgt->m_enclosure == lc.Enclosure &&
+		    ptgt->m_slot_num == lc.Slot) {
+			break;
+		}
+		ptgt = (mptsas_target_t *)mptsas_hash_traverse(
+		    &mpt->m_active->m_tgttbl, MPTSAS_HASH_NEXT);
+	}
+	if (ptgt == NULL) {
+		/* We could not find a target for that enclosure/slot. */
+		mutex_exit(&mpt->m_mutex);
+		return (ENOENT);
+	}
+
+	if (lc.Command == MPTSAS_LEDCTL_FLAG_SET) {
+		/* Update our internal LED state. */
+		ptgt->m_led_status &= ~(1 << (lc.Led - 1));
+		ptgt->m_led_status |= lc.LedStatus << (lc.Led - 1);
+
+		/* Flush it to the controller. */
+		ret = mptsas_flush_led_status(mpt, ptgt);
+		mutex_exit(&mpt->m_mutex);
+		return (ret);
+	}
+
+	/* Return our internal LED state. */
+	lc.LedStatus = (ptgt->m_led_status >> (lc.Led - 1)) & 1;
+	mutex_exit(&mpt->m_mutex);
+
+	if (ddi_copyout(&lc, (void *)data, sizeof (lc), mode) != 0) {
+		return (EFAULT);
+	}
+
+	return (0);
+}
+
+static int
+get_disk_info(mptsas_t *mpt, intptr_t data, int mode)
+{
+	int i = 0;
+	int count = 0;
+	int ret = 0;
+	mptsas_target_t *ptgt;
+	mptsas_disk_info_t *di;
+	STRUCT_DECL(mptsas_get_disk_info, gdi);
+
+	if ((mode & FREAD) == 0)
+		return (EACCES);
+
+	STRUCT_INIT(gdi, get_udatamodel());
+
+	if (ddi_copyin((void *)data, STRUCT_BUF(gdi), STRUCT_SIZE(gdi),
+	    mode) != 0) {
+		return (EFAULT);
+	}
+
+	/* Find out how many targets there are. */
+	mutex_enter(&mpt->m_mutex);
+	ptgt = (mptsas_target_t *)mptsas_hash_traverse(&mpt->m_active->m_tgttbl,
+	    MPTSAS_HASH_FIRST);
+	while (ptgt != NULL) {
+		count++;
+		ptgt = (mptsas_target_t *)mptsas_hash_traverse(
+		    &mpt->m_active->m_tgttbl, MPTSAS_HASH_NEXT);
+	}
+	mutex_exit(&mpt->m_mutex);
+
+	/*
+	 * If we haven't been asked to copy out information on each target,
+	 * then just return the count.
+	 */
+	STRUCT_FSET(gdi, DiskCount, count);
+	if (STRUCT_FGETP(gdi, PtrDiskInfoArray) == NULL)
+		goto copy_out;
+
+	/*
+	 * If we haven't been given a large enough buffer to copy out into,
+	 * let the caller know.
+	 */
+	if (STRUCT_FGET(gdi, DiskInfoArraySize) <
+	    count * sizeof (mptsas_disk_info_t)) {
+		ret = ENOSPC;
+		goto copy_out;
+	}
+
+	di = kmem_zalloc(count * sizeof (mptsas_disk_info_t), KM_SLEEP);
+
+	mutex_enter(&mpt->m_mutex);
+	ptgt = (mptsas_target_t *)mptsas_hash_traverse(&mpt->m_active->m_tgttbl,
+	    MPTSAS_HASH_FIRST);
+	while (ptgt != NULL) {
+		if (i >= count) {
+			/*
+			 * The number of targets changed while we weren't
+			 * looking, so give up.
+			 */
+			mutex_exit(&mpt->m_mutex);
+			kmem_free(di, count * sizeof (mptsas_disk_info_t));
+			return (EAGAIN);
+		}
+		di[i].Instance = mpt->m_instance;
+		di[i].Enclosure = ptgt->m_enclosure;
+		di[i].Slot = ptgt->m_slot_num;
+		di[i].SasAddress = ptgt->m_sas_wwn;
+
+		ptgt = (mptsas_target_t *)mptsas_hash_traverse(
+		    &mpt->m_active->m_tgttbl, MPTSAS_HASH_NEXT);
+		i++;
+	}
+	mutex_exit(&mpt->m_mutex);
+	STRUCT_FSET(gdi, DiskCount, i);
+
+	/* Copy out the disk information to the caller. */
+	if (ddi_copyout((void *)di, STRUCT_FGETP(gdi, PtrDiskInfoArray),
+	    i * sizeof (mptsas_disk_info_t), mode) != 0) {
+		ret = EFAULT;
+	}
+
+	kmem_free(di, count * sizeof (mptsas_disk_info_t));
+
+copy_out:
+	if (ddi_copyout(STRUCT_BUF(gdi), (void *)data, STRUCT_SIZE(gdi),
+	    mode) != 0) {
+		ret = EFAULT;
+	}
+
+	return (ret);
+}
+
+static int
 mptsas_ioctl(dev_t dev, int cmd, intptr_t data, int mode, cred_t *credp,
     int *rval)
 {
@@ -11412,9 +11577,56 @@ mptsas_ioctl(dev_t dev, int cmd, intptr_t data, int mode, cred_t *credp,
 
 	if (iport_flag) {
 		status = scsi_hba_ioctl(dev, cmd, data, mode, credp, rval);
+		if (status != 0) {
+			goto out;
+		}
+		/*
+		 * The following code control the OK2RM LED, it doesn't affect
+		 * the ioctl return status.
+		 */
+		if ((cmd == DEVCTL_DEVICE_ONLINE) ||
+		    (cmd == DEVCTL_DEVICE_OFFLINE)) {
+			if (ndi_dc_allochdl((void *)data, &dcp) !=
+			    NDI_SUCCESS) {
+				goto out;
+			}
+			addr = ndi_dc_getaddr(dcp);
+			ptgt = mptsas_addr_to_ptgt(mpt, addr, phymask);
+			if (ptgt == NULL) {
+				NDBG14(("mptsas_ioctl led control: tgt %s not "
+				    "found", addr));
+				ndi_dc_freehdl(dcp);
+				goto out;
+			}
+			mutex_enter(&mpt->m_mutex);
+			if (cmd == DEVCTL_DEVICE_ONLINE) {
+				ptgt->m_tgt_unconfigured = 0;
+			} else if (cmd == DEVCTL_DEVICE_OFFLINE) {
+				ptgt->m_tgt_unconfigured = 1;
+			}
+			if (cmd == DEVCTL_DEVICE_OFFLINE) {
+				ptgt->m_led_status |=
+				    (1 << (MPTSAS_LEDCTL_LED_OK2RM - 1));
+			} else {
+				ptgt->m_led_status &=
+				    ~(1 << (MPTSAS_LEDCTL_LED_OK2RM - 1));
+			}
+			if (mptsas_flush_led_status(mpt, ptgt) != DDI_SUCCESS) {
+				NDBG14(("mptsas_ioctl: set LED for tgt %s "
+				    "failed %x", addr, slotstatus));
+			}
+			mutex_exit(&mpt->m_mutex);
+			ndi_dc_freehdl(dcp);
+		}
 		goto out;
 	}
 	switch (cmd) {
+		case MPTIOCTL_GET_DISK_INFO:
+			status = get_disk_info(mpt, data, mode);
+			break;
+		case MPTIOCTL_LED_CONTROL:
+			status = led_control(mpt, data, mode);
+			break;
 		case MPTIOCTL_UPDATE_FLASH:
 			if (ddi_copyin((void *)data, &flashdata,
 				sizeof (struct mptsas_update_flash), mode)) {
@@ -13865,6 +14077,11 @@ mptsas_create_virt_lun(dev_info_t *pdip, struct scsi_inquiry *inq, char *guid,
 				    (!MDI_PI_IS_STANDBY(*pip)) &&
 				    (ptgt->m_tgt_unconfigured == 0)) {
 					rval = mdi_pi_online(*pip, 0);
+					mutex_enter(&mpt->m_mutex);
+					ptgt->m_led_status = 0;
+					(void) mptsas_flush_led_status(mpt,
+					    ptgt);
+					mutex_exit(&mpt->m_mutex);
 				} else {
 					rval = DDI_SUCCESS;
 				}
@@ -14118,6 +14335,15 @@ mptsas_create_virt_lun(dev_info_t *pdip, struct scsi_inquiry *inq, char *guid,
 		}
 		NDBG20(("new path:%s onlining,", MDI_PI(*pip)->pi_addr));
 		mdi_rtn = mdi_pi_online(*pip, 0);
+		if (mdi_rtn == MDI_SUCCESS) {
+			mutex_enter(&mpt->m_mutex);
+			ptgt->m_led_status = 0;
+			if (mptsas_flush_led_status(mpt, ptgt) != DDI_SUCCESS) {
+				NDBG14(("mptsas: clear LED for slot %x "
+				    "failed", ptgt->m_slot_num));
+			}
+			mutex_exit(&mpt->m_mutex);
+		}
 		if (mdi_rtn == MDI_NOT_SUPPORTED) {
 			mdi_rtn = MDI_FAILURE;
 		}
@@ -14470,6 +14696,15 @@ phys_create_done:
 			 * Try to online the new node
 			 */
 			ndi_rtn = ndi_devi_online(*lun_dip, NDI_ONLINE_ATTACH);
+		}
+		if (ndi_rtn == NDI_SUCCESS) {
+			mutex_enter(&mpt->m_mutex);
+			ptgt->m_led_status = 0;
+			if (mptsas_flush_led_status(mpt, ptgt) != DDI_SUCCESS) {
+				NDBG14(("mptsas: clear LED for tgt %x "
+				    "failed", ptgt->m_slot_num));
+			}
+			mutex_exit(&mpt->m_mutex);
 		}
 
 		/*
@@ -15361,6 +15596,82 @@ mptsas_addr_to_ptgt(mptsas_t *mpt, char *addr, mptsas_phymask_t phymask)
 		ptgt = mptsas_phy_to_tgt(mpt, (int)phymask, phynum);
 	}
 	return (ptgt);
+}
+
+static int
+mptsas_flush_led_status(mptsas_t *mpt, mptsas_target_t *ptgt)
+{
+	uint32_t slotstatus = 0;
+
+	/* Build an MPI2 Slot Status based on our view of the world */
+	if (ptgt->m_led_status & (1 << (MPTSAS_LEDCTL_LED_IDENT - 1)))
+		slotstatus |= MPI2_SEP_REQ_SLOTSTATUS_IDENTIFY_REQUEST;
+	if (ptgt->m_led_status & (1 << (MPTSAS_LEDCTL_LED_FAIL - 1)))
+		slotstatus |= MPI2_SEP_REQ_SLOTSTATUS_PREDICTED_FAULT;
+	if (ptgt->m_led_status & (1 << (MPTSAS_LEDCTL_LED_OK2RM - 1)))
+		slotstatus |= MPI2_SEP_REQ_SLOTSTATUS_REQUEST_REMOVE;
+
+	/* Write it to the controller */
+	NDBG14(("mptsas_ioctl: set LED status %x for slot %x",
+	    slotstatus, ptgt->m_slot_num));
+	return (mptsas_send_sep(mpt, ptgt, &slotstatus,
+	    MPI2_SEP_REQ_ACTION_WRITE_STATUS));
+}
+
+/*
+ *  send sep request, use enclosure/slot addressing
+ */
+static int mptsas_send_sep(mptsas_t *mpt, mptsas_target_t *ptgt,
+    uint32_t *status, uint8_t act)
+{
+	Mpi2SepRequest_t	req;
+	Mpi2SepReply_t		rep;
+	int			ret;
+
+	ASSERT(mutex_owned(&mpt->m_mutex));
+
+	bzero(&req, sizeof (req));
+	bzero(&rep, sizeof (rep));
+
+	/* Do nothing for RAID volumes */
+	if (ptgt->m_phymask == 0) {
+		NDBG14(("mptsas_send_sep: Skip RAID volumes"));
+		return (DDI_FAILURE);
+	}
+
+	req.Function = MPI2_FUNCTION_SCSI_ENCLOSURE_PROCESSOR;
+	req.Action = act;
+	req.Flags = MPI2_SEP_REQ_FLAGS_ENCLOSURE_SLOT_ADDRESS;
+	req.EnclosureHandle = LE_16(ptgt->m_enclosure);
+	req.Slot = LE_16(ptgt->m_slot_num);
+	if (act == MPI2_SEP_REQ_ACTION_WRITE_STATUS) {
+		req.SlotStatus = LE_32(*status);
+	}
+	ret = mptsas_do_passthru(mpt, (uint8_t *)&req, (uint8_t *)&rep, NULL,
+	    sizeof (req), sizeof (rep), NULL, 0, NULL, 0, 60, FKIOCTL);
+	if (ret != 0) {
+		mptsas_log(mpt, CE_NOTE, "mptsas_send_sep: passthru SEP "
+		    "Processor Request message error %d", ret);
+		return (DDI_FAILURE);
+	}
+	/* do passthrough success, check the ioc status */
+	if (LE_16(rep.IOCStatus) != MPI2_IOCSTATUS_SUCCESS) {
+		if ((LE_16(rep.IOCStatus) & MPI2_IOCSTATUS_MASK) ==
+		    MPI2_IOCSTATUS_INVALID_FIELD) {
+			mptsas_log(mpt, CE_NOTE, "send sep act %x: Not "
+			    "supported action, loginfo %x", act,
+			    LE_32(rep.IOCLogInfo));
+			return (DDI_FAILURE);
+		}
+		mptsas_log(mpt, CE_NOTE, "send_sep act %x: ioc "
+		    "status:%x", act, LE_16(rep.IOCStatus));
+		return (DDI_FAILURE);
+	}
+	if (act != MPI2_SEP_REQ_ACTION_WRITE_STATUS) {
+		*status = LE_32(rep.SlotStatus);
+	}
+
+	return (DDI_SUCCESS);
 }
 
 int

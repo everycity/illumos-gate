@@ -36,7 +36,6 @@
 #include <sys/metaslab_impl.h>
 #include <sys/space_map.h>
 #include <sys/list.h>
-#include <sys/spa_impl.h>
 #include <sys/vdev_impl.h>
 #include <sys/zap_leaf.h>
 #include <sys/zap_impl.h>
@@ -46,6 +45,7 @@
 
 #ifdef _KERNEL
 #define	ZFS_OBJ_NAME	"zfs"
+extern int64_t mdb_gethrtime(void);
 #else
 #define	ZFS_OBJ_NAME	"libzpool.so.1"
 #endif
@@ -379,7 +379,7 @@ typedef struct mdb_dmu_buf_impl {
 	struct {
 		uint64_t db_object;
 	} db;
-	void *db_objset;
+	uintptr_t db_objset;
 	uint64_t db_level;
 	uint64_t db_blkid;
 	struct {
@@ -415,7 +415,7 @@ dbuf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		(void) mdb_snprintf(blkidname, sizeof (blkidname), "%llx",
 		    (u_longlong_t)db.db_blkid);
 
-	if (objset_name((uintptr_t)db.db_objset, path)) {
+	if (objset_name(db.db_objset, path)) {
 		return (DCMD_ERR);
 	}
 
@@ -777,7 +777,7 @@ abuf_find(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	for (i = 0; i < sizeof (syms) / sizeof (syms[0]); i++) {
-		if (mdb_lookup_by_name(syms[i], &sym)) {
+		if (mdb_lookup_by_obj(ZFS_OBJ_NAME, syms[i], &sym)) {
 			mdb_warn("can't find symbol %s", syms[i]);
 			return (DCMD_ERR);
 		}
@@ -859,7 +859,7 @@ dbgmsg(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    NULL) != argc)
 		return (DCMD_USAGE);
 
-	if (mdb_lookup_by_name("zfs_dbgmsgs", &sym)) {
+	if (mdb_lookup_by_obj(ZFS_OBJ_NAME, "zfs_dbgmsgs", &sym)) {
 		mdb_warn("can't find zfs_dbgmsgs");
 		return (DCMD_ERR);
 	}
@@ -895,7 +895,7 @@ arc_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		NULL
 	};
 
-	if (mdb_lookup_by_name("arc_stats", &sym) == -1) {
+	if (mdb_lookup_by_obj(ZFS_OBJ_NAME, "arc_stats", &sym) == -1) {
 		mdb_warn("failed to find 'arc_stats'");
 		return (DCMD_ERR);
 	}
@@ -962,7 +962,7 @@ arc_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	for (i = 0; extras[i]; i++) {
 		uint64_t buf;
 
-		if (mdb_lookup_by_name(extras[i], &sym) == -1) {
+		if (mdb_lookup_by_obj(ZFS_OBJ_NAME, extras[i], &sym) == -1) {
 			mdb_warn("failed to find '%s'", extras[i]);
 			return (DCMD_ERR);
 		}
@@ -991,12 +991,17 @@ arc_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (DCMD_OK);
 }
 
+typedef struct mdb_spa_print {
+	pool_state_t spa_state;
+	char spa_name[MAXNAMELEN];
+} mdb_spa_print_t;
+
 /*
  * ::spa
  *
- * 	-c	Print configuration information as well
- * 	-v	Print vdev state
- * 	-e	Print vdev error stats
+ *	-c	Print configuration information as well
+ *	-v	Print vdev state
+ *	-e	Print vdev error stats
  *
  * Print a summarized spa_t.  When given no arguments, prints out a table of all
  * active pools on the system.
@@ -1005,7 +1010,6 @@ arc_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 static int
 spa_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	spa_t spa;
 	const char *statetab[] = { "ACTIVE", "EXPORTED", "DESTROYED",
 		"SPARE", "L2CACHE", "UNINIT", "UNAVAIL", "POTENTIAL" };
 	const char *state;
@@ -1038,10 +1042,9 @@ spa_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		mdb_printf("%<u>%-?s %9s %-*s%</u>\n", "ADDR", "STATE",
 		    sizeof (uintptr_t) == 4 ? 60 : 52, "NAME");
 
-	if (mdb_vread(&spa, sizeof (spa), addr) == -1) {
-		mdb_warn("failed to read spa_t at %p", addr);
+	mdb_spa_print_t spa;
+	if (mdb_ctf_vread(&spa, "spa_t", "mdb_spa_print_t", addr, 0) == -1)
 		return (DCMD_ERR);
-	}
 
 	if (spa.spa_state < 0 || spa.spa_state > POOL_STATE_UNAVAIL)
 		state = "UNKNOWN";
@@ -1077,7 +1080,7 @@ spa_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 }
 
 typedef struct mdb_spa_config_spa {
-	nvlist_t *spa_config;
+	uintptr_t spa_config;
 } mdb_spa_config_spa_t;
 
 /*
@@ -1100,12 +1103,12 @@ spa_print_config(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    addr, 0) == -1)
 		return (DCMD_ERR);
 
-	if (spa.spa_config == NULL) {
+	if (spa.spa_config == 0) {
 		mdb_printf("(none)\n");
 		return (DCMD_OK);
 	}
 
-	return (mdb_call_dcmd("nvlist", (uintptr_t)spa.spa_config, flags,
+	return (mdb_call_dcmd("nvlist", spa.spa_config, flags,
 	    0, NULL));
 }
 
@@ -1576,36 +1579,19 @@ spa_space(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (DCMD_OK);
 }
 
-/*
- * ::spa_verify
- *
- * Given a spa_t, verify that that the pool is self-consistent.
- * Currently, it only checks to make sure that the vdev tree exists.
- */
-/* ARGSUSED */
-static int
-spa_verify(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
-{
-	spa_t spa;
+typedef struct mdb_spa_aux_vdev {
+	int sav_count;
+	uintptr_t sav_vdevs;
+} mdb_spa_aux_vdev_t;
 
-	if (argc != 0 || !(flags & DCMD_ADDRSPEC))
-		return (DCMD_USAGE);
-
-	if (mdb_vread(&spa, sizeof (spa), addr) == -1) {
-		mdb_warn("failed to read spa_t at %p", addr);
-		return (DCMD_ERR);
-	}
-
-	if (spa.spa_root_vdev == NULL) {
-		mdb_printf("no vdev tree present\n");
-		return (DCMD_OK);
-	}
-
-	return (DCMD_OK);
-}
+typedef struct mdb_spa_vdevs {
+	uintptr_t spa_root_vdev;
+	mdb_spa_aux_vdev_t spa_l2cache;
+	mdb_spa_aux_vdev_t spa_spares;
+} mdb_spa_vdevs_t;
 
 static int
-spa_print_aux(spa_aux_vdev_t *sav, uint_t flags, mdb_arg_t *v,
+spa_print_aux(mdb_spa_aux_vdev_t *sav, uint_t flags, mdb_arg_t *v,
     const char *name)
 {
 	uintptr_t *aux;
@@ -1626,8 +1612,7 @@ spa_print_aux(spa_aux_vdev_t *sav, uint_t flags, mdb_arg_t *v,
 
 		len = sav->sav_count * sizeof (uintptr_t);
 		aux = mdb_alloc(len, UM_SLEEP);
-		if (mdb_vread(aux, len,
-		    (uintptr_t)sav->sav_vdevs) == -1) {
+		if (mdb_vread(aux, len, sav->sav_vdevs) == -1) {
 			mdb_free(aux, len);
 			mdb_warn("failed to read l2cache vdevs at %p",
 			    sav->sav_vdevs);
@@ -1663,7 +1648,6 @@ spa_print_aux(spa_aux_vdev_t *sav, uint_t flags, mdb_arg_t *v,
 static int
 spa_vdevs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	spa_t spa;
 	mdb_arg_t v[3];
 	int errors = FALSE;
 	int ret;
@@ -1676,10 +1660,9 @@ spa_vdevs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (!(flags & DCMD_ADDRSPEC))
 		return (DCMD_USAGE);
 
-	if (mdb_vread(&spa, sizeof (spa), addr) == -1) {
-		mdb_warn("failed to read spa_t at %p", addr);
+	mdb_spa_vdevs_t spa;
+	if (mdb_ctf_vread(&spa, "spa_t", "mdb_spa_vdevs_t", addr, 0) == -1)
 		return (DCMD_ERR);
-	}
 
 	/*
 	 * Unitialized spa_t structures can have a NULL root vdev.
@@ -1712,13 +1695,13 @@ spa_vdevs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
  * the main summary.  More detailed information can always be found by doing a
  * '::print zio' on the underlying zio_t.  The columns we display are:
  *
- *	ADDRESS		TYPE	STAGE		WAITER
+ *	ADDRESS  TYPE  STAGE  WAITER  TIME_ELAPSED
  *
  * The 'address' column is indented by one space for each depth level as we
  * descend down the tree.
  */
 
-#define	ZIO_MAXINDENT	24
+#define	ZIO_MAXINDENT	7
 #define	ZIO_MAXWIDTH	(sizeof (uintptr_t) * 2 + ZIO_MAXINDENT)
 #define	ZIO_WALK_SELF	0
 #define	ZIO_WALK_CHILD	1
@@ -1735,26 +1718,36 @@ typedef struct zio_print_args {
 typedef struct mdb_zio {
 	enum zio_type io_type;
 	enum zio_stage io_stage;
-	void *io_waiter;
-	uint64_t io_timestamp;
-	void *io_spa;
+	uintptr_t io_waiter;
+	uintptr_t io_spa;
 	struct {
 		struct {
-			void *list_next;
+			uintptr_t list_next;
 		} list_head;
 	} io_parent_list;
 	int io_error;
 } mdb_zio_t;
 
+typedef struct mdb_zio_timestamp {
+	hrtime_t io_timestamp;
+} mdb_zio_timestamp_t;
+
 static int zio_child_cb(uintptr_t addr, const void *unknown, void *arg);
 
 static int
-zio_print_cb(uintptr_t addr, const mdb_zio_t *zio, zio_print_args_t *zpa)
+zio_print_cb(uintptr_t addr, zio_print_args_t *zpa)
 {
 	mdb_ctf_id_t type_enum, stage_enum;
 	int indent = zpa->zpa_current_depth;
 	const char *type, *stage;
 	uintptr_t laddr;
+	mdb_zio_t zio;
+	mdb_zio_timestamp_t zio_timestamp = { 0 };
+
+	if (mdb_ctf_vread(&zio, ZFS_STRUCT "zio", "mdb_zio_t", addr, 0) == -1)
+		return (WALK_ERR);
+	(void) mdb_ctf_vread(&zio_timestamp, ZFS_STRUCT "zio",
+	    "mdb_zio_timestamp_t", addr, MDB_CTF_VREAD_QUIET);
 
 	if (indent > ZIO_MAXINDENT)
 		indent = ZIO_MAXINDENT;
@@ -1765,13 +1758,13 @@ zio_print_cb(uintptr_t addr, const mdb_zio_t *zio, zio_print_args_t *zpa)
 		return (WALK_ERR);
 	}
 
-	if ((type = mdb_ctf_enum_name(type_enum, zio->io_type)) != NULL)
+	if ((type = mdb_ctf_enum_name(type_enum, zio.io_type)) != NULL)
 		type += sizeof ("ZIO_TYPE_") - 1;
 	else
 		type = "?";
 
-	if (zio->io_error == 0) {
-		stage = mdb_ctf_enum_name(stage_enum, zio->io_stage);
+	if (zio.io_error == 0) {
+		stage = mdb_ctf_enum_name(stage_enum, zio.io_stage);
 		if (stage != NULL)
 			stage += sizeof ("ZIO_STAGE_") - 1;
 		else
@@ -1786,10 +1779,22 @@ zio_print_cb(uintptr_t addr, const mdb_zio_t *zio, zio_print_args_t *zpa)
 		} else {
 			mdb_printf("%*s%-*p %-5s %-16s ", indent, "",
 			    ZIO_MAXWIDTH - indent, addr, type, stage);
-			if (zio->io_waiter)
-				mdb_printf("%?p\n", zio->io_waiter);
+			if (zio.io_waiter != 0)
+				mdb_printf("%-16lx ", zio.io_waiter);
 			else
-				mdb_printf("-\n");
+				mdb_printf("%-16s ", "-");
+#ifdef _KERNEL
+			if (zio_timestamp.io_timestamp != 0) {
+				mdb_printf("%llums", (mdb_gethrtime() -
+				    zio_timestamp.io_timestamp) /
+				    1000000);
+			} else {
+				mdb_printf("%-12s ", "-");
+			}
+#else
+			mdb_printf("%-12s ", "-");
+#endif
+			mdb_printf("\n");
 		}
 	}
 
@@ -1818,7 +1823,6 @@ static int
 zio_child_cb(uintptr_t addr, const void *unknown, void *arg)
 {
 	zio_link_t zl;
-	mdb_zio_t zio;
 	uintptr_t ziop;
 	zio_print_args_t *zpa = arg;
 
@@ -1832,17 +1836,13 @@ zio_child_cb(uintptr_t addr, const void *unknown, void *arg)
 	else
 		ziop = (uintptr_t)zl.zl_child;
 
-	if (mdb_ctf_vread(&zio, ZFS_STRUCT "zio", "mdb_zio_t", ziop, 0) == -1)
-		return (WALK_ERR);
-
-	return (zio_print_cb(ziop, &zio, arg));
+	return (zio_print_cb(ziop, arg));
 }
 
 /* ARGSUSED */
 static int
 zio_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	mdb_zio_t zio;
 	zio_print_args_t zpa = { 0 };
 
 	if (!(flags & DCMD_ADDRSPEC))
@@ -1864,14 +1864,13 @@ zio_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		zpa.zpa_max_depth = 1;
 	}
 
-	if (mdb_ctf_vread(&zio, ZFS_STRUCT "zio", "mdb_zio_t", addr, 0) == -1)
-		return (DCMD_ERR);
+	if (!(flags & DCMD_PIPE_OUT) && DCMD_HDRSPEC(flags)) {
+		mdb_printf("%<u>%-*s %-5s %-16s %-16s %-12s%</u>\n",
+		    ZIO_MAXWIDTH, "ADDRESS", "TYPE", "STAGE", "WAITER",
+		    "TIME_ELAPSED");
+	}
 
-	if (!(flags & DCMD_PIPE_OUT) && DCMD_HDRSPEC(flags))
-		mdb_printf("%<u>%-*s %-5s %-16s %-?s%</u>\n", ZIO_MAXWIDTH,
-		    "ADDRESS", "TYPE", "STAGE", "WAITER");
-
-	if (zio_print_cb(addr, &zio, &zpa) != WALK_NEXT)
+	if (zio_print_cb(addr, &zpa) != WALK_NEXT)
 		return (DCMD_ERR);
 
 	return (DCMD_OK);
@@ -2028,14 +2027,7 @@ spa_walk_init(mdb_walk_state_t *wsp)
 static int
 spa_walk_step(mdb_walk_state_t *wsp)
 {
-	spa_t	spa;
-
-	if (mdb_vread(&spa, sizeof (spa), wsp->walk_addr) == -1) {
-		mdb_warn("failed to read spa_t at %p", wsp->walk_addr);
-		return (WALK_ERR);
-	}
-
-	return (wsp->walk_callback(wsp->walk_addr, &spa, wsp->walk_cbdata));
+	return (wsp->walk_callback(wsp->walk_addr, NULL, wsp->walk_cbdata));
 }
 
 /*
@@ -2048,7 +2040,7 @@ spa_walk_step(mdb_walk_state_t *wsp)
 static int
 zio_walk_init(mdb_walk_state_t *wsp)
 {
-	wsp->walk_data = (void *)wsp->walk_addr;
+	wsp->walk_data = &wsp->walk_addr;
 
 	if (mdb_layered_walk("zio_cache", wsp) == -1) {
 		mdb_warn("failed to walk 'zio_cache'\n");
@@ -2062,12 +2054,13 @@ static int
 zio_walk_step(mdb_walk_state_t *wsp)
 {
 	mdb_zio_t zio;
+	uintptr_t *spap = wsp->walk_data;
 
 	if (mdb_ctf_vread(&zio, ZFS_STRUCT "zio", "mdb_zio_t",
 	    wsp->walk_addr, 0) == -1)
 		return (WALK_ERR);
 
-	if (wsp->walk_data != NULL && wsp->walk_data != zio.io_spa)
+	if (*spap != 0 && *spap != zio.io_spa)
 		return (WALK_NEXT);
 
 	return (wsp->walk_callback(wsp->walk_addr, &zio, wsp->walk_cbdata));
@@ -2082,16 +2075,17 @@ static int
 zio_walk_root_step(mdb_walk_state_t *wsp)
 {
 	mdb_zio_t zio;
+	uintptr_t *spap = wsp->walk_data;
 
 	if (mdb_ctf_vread(&zio, ZFS_STRUCT "zio", "mdb_zio_t",
 	    wsp->walk_addr, 0) == -1)
 		return (WALK_ERR);
 
-	if (wsp->walk_data != NULL && wsp->walk_data != zio.io_spa)
+	if (*spap != 0 && *spap != zio.io_spa)
 		return (WALK_NEXT);
 
 	/* If the parent list is not empty, ignore */
-	if ((uintptr_t)zio.io_parent_list.list_head.list_next !=
+	if (zio.io_parent_list.list_head.list_next !=
 	    wsp->walk_addr +
 	    mdb_ctf_offsetof_by_name(ZFS_STRUCT "zio", "io_parent_list") +
 	    mdb_ctf_offsetof_by_name("struct list", "list_head"))
@@ -2271,41 +2265,35 @@ zfs_blkstats(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (DCMD_OK);
 }
 
+typedef struct mdb_reference {
+	uintptr_t ref_holder;
+	uintptr_t ref_removed;
+	uint64_t ref_number;
+} mdb_reference_t;
+
 /* ARGSUSED */
 static int
 reference_cb(uintptr_t addr, const void *ignored, void *arg)
 {
-	static int gotid;
-	static mdb_ctf_id_t ref_id;
-	uintptr_t ref_holder;
-	uintptr_t ref_removed;
-	uint64_t ref_number;
+	mdb_reference_t ref;
 	boolean_t holder_is_str = B_FALSE;
 	char holder_str[128];
 	boolean_t removed = (boolean_t)arg;
 
-	if (!gotid) {
-		if (mdb_ctf_lookup_by_name("struct reference", &ref_id) == -1) {
-			mdb_warn("couldn't find struct reference");
-			return (WALK_ERR);
-		}
-		gotid = TRUE;
-	}
+	if (mdb_ctf_vread(&ref, "reference_t", "mdb_reference_t", addr,
+	    0) == -1)
+		return (DCMD_ERR);
 
-	if (GETMEMBID(addr, &ref_id, ref_holder, ref_holder) ||
-	    GETMEMBID(addr, &ref_id, ref_removed, ref_removed) ||
-	    GETMEMBID(addr, &ref_id, ref_number, ref_number))
-		return (WALK_ERR);
-
-	if (mdb_readstr(holder_str, sizeof (holder_str), ref_holder) != -1)
+	if (mdb_readstr(holder_str, sizeof (holder_str),
+	    ref.ref_holder) != -1)
 		holder_is_str = strisprint(holder_str);
 
 	if (removed)
 		mdb_printf("removed ");
 	mdb_printf("reference ");
-	if (ref_number != 1)
-		mdb_printf("with count=%llu ", ref_number);
-	mdb_printf("with tag %p", (void*)ref_holder);
+	if (ref.ref_number != 1)
+		mdb_printf("with count=%llu ", ref.ref_number);
+	mdb_printf("with tag %lx", ref.ref_holder);
 	if (holder_is_str)
 		mdb_printf(" \"%s\"", holder_str);
 	mdb_printf(", held at:\n");
@@ -2314,7 +2302,7 @@ reference_cb(uintptr_t addr, const void *ignored, void *arg)
 
 	if (removed) {
 		mdb_printf("removed at:\n");
-		(void) mdb_call_dcmd("whatis", ref_removed,
+		(void) mdb_call_dcmd("whatis", ref.ref_removed,
 		    DCMD_ADDRSPEC, 0, NULL);
 	}
 
@@ -2323,15 +2311,26 @@ reference_cb(uintptr_t addr, const void *ignored, void *arg)
 	return (WALK_NEXT);
 }
 
+typedef struct mdb_refcount {
+	uint64_t rc_count;
+} mdb_refcount_t;
+
+typedef struct mdb_refcount_removed {
+	uint64_t rc_removed_count;
+} mdb_refcount_removed_t;
+
+typedef struct mdb_refcount_tracked {
+	boolean_t rc_tracked;
+} mdb_refcount_tracked_t;
+
 /* ARGSUSED */
 static int
 refcount(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	uint64_t rc_count, rc_removed_count;
-	uintptr_t rc_list, rc_removed;
-	static int gotid;
-	static mdb_ctf_id_t rc_id;
-	ulong_t off;
+	mdb_refcount_t rc;
+	mdb_refcount_removed_t rcr;
+	mdb_refcount_tracked_t rct;
+	int off;
 	boolean_t released = B_FALSE;
 
 	if (!(flags & DCMD_ADDRSPEC))
@@ -2342,48 +2341,41 @@ refcount(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    NULL) != argc)
 		return (DCMD_USAGE);
 
-	if (!gotid) {
-		/*
-		 * The refcount structure is different when compiled debug
-		 * vs nondebug.  Therefore, we want to make sure we get the
-		 * refcount definition from the ZFS module, in case it has
-		 * been compiled debug but genunix is nondebug.
-		 */
-		if (mdb_ctf_lookup_by_name(ZFS_STRUCT "refcount",
-		    &rc_id) == -1) {
-			mdb_warn("couldn't find struct refcount");
-			return (DCMD_ERR);
-		}
-		gotid = TRUE;
-	}
-
-	if (GETMEMBID(addr, &rc_id, rc_count, rc_count))
+	if (mdb_ctf_vread(&rc, "refcount_t", "mdb_refcount_t", addr,
+	    0) == -1)
 		return (DCMD_ERR);
 
-	if (GETMEMBID(addr, &rc_id, rc_removed_count, rc_removed_count)) {
-		mdb_printf("refcount_t at %p has %llu current holds\n",
-		    addr, (longlong_t)rc_count);
+	if (mdb_ctf_vread(&rcr, "refcount_t", "mdb_refcount_removed_t", addr,
+	    MDB_CTF_VREAD_QUIET) == -1) {
+		mdb_printf("refcount_t at %p has %llu holds (untracked)\n",
+		    addr, (longlong_t)rc.rc_count);
 		return (DCMD_OK);
+	}
+
+	if (mdb_ctf_vread(&rct, "refcount_t", "mdb_refcount_tracked_t", addr,
+	    MDB_CTF_VREAD_QUIET) == -1) {
+		/* If this is an old target, it might be tracked. */
+		rct.rc_tracked = B_TRUE;
 	}
 
 	mdb_printf("refcount_t at %p has %llu current holds, "
 	    "%llu recently released holds\n",
-	    addr, (longlong_t)rc_count, (longlong_t)rc_removed_count);
+	    addr, (longlong_t)rc.rc_count, (longlong_t)rcr.rc_removed_count);
 
-	if (rc_count > 0)
+	if (rct.rc_tracked && rc.rc_count > 0)
 		mdb_printf("current holds:\n");
-	if (mdb_ctf_offsetof(rc_id, "rc_list", &off) == -1)
+	off = mdb_ctf_offsetof_by_name("refcount_t", "rc_list");
+	if (off == -1)
 		return (DCMD_ERR);
-	rc_list = addr + off/NBBY;
-	mdb_pwalk("list", reference_cb, (void*)B_FALSE, rc_list);
+	mdb_pwalk("list", reference_cb, (void*)B_FALSE, addr + off);
 
-	if (released) {
-		if (rc_removed_count > 0)
-			mdb_printf("released holds:\n");
-		if (mdb_ctf_offsetof(rc_id, "rc_removed", &off) == -1)
+	if (released && rcr.rc_removed_count > 0) {
+		mdb_printf("released holds:\n");
+
+		off = mdb_ctf_offsetof_by_name("refcount_t", "rc_removed");
+		if (off == -1)
 			return (DCMD_ERR);
-		rc_removed = addr + off/NBBY;
-		mdb_pwalk("list", reference_cb, (void*)B_TRUE, rc_removed);
+		mdb_pwalk("list", reference_cb, (void*)B_FALSE, addr + off);
 	}
 
 	return (DCMD_OK);
@@ -2987,7 +2979,7 @@ zfs_aces_walk_step(mdb_walk_state_t *wsp)
 }
 
 typedef struct mdb_zfs_rrwlock {
-	kthread_t	*rr_writer;
+	uintptr_t	rr_writer;
 	boolean_t	rr_writer_wanted;
 } mdb_zfs_rrwlock_t;
 
@@ -3008,8 +3000,8 @@ rrwlock(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    0) == -1)
 		return (DCMD_ERR);
 
-	if (rrw.rr_writer != NULL) {
-		mdb_printf("write lock held by thread %p\n", rrw.rr_writer);
+	if (rrw.rr_writer != 0) {
+		mdb_printf("write lock held by thread %lx\n", rrw.rr_writer);
 		return (DCMD_OK);
 	}
 
@@ -3060,7 +3052,6 @@ static const mdb_dcmd_t dcmds[] = {
 	    abuf_find },
 	{ "spa", "?[-cv]", "spa_t summary", spa_print },
 	{ "spa_config", ":", "print spa_t configuration", spa_print_config },
-	{ "spa_verify", ":", "verify spa_t consistency", spa_verify },
 	{ "spa_space", ":[-b]", "print spa_t on-disk space usage", spa_space },
 	{ "spa_vdevs", ":", "given a spa_t, print vdev summary", spa_vdevs },
 	{ "vdev", ":[-re]\n"
