@@ -5251,6 +5251,8 @@ f usr/lib/fm/fmd/ipmitopo 0555 root bin
 d usr/lib/fm/fmd/plugins 0755 root bin
 f usr/lib/fm/fmd/plugins/cpumem-retire.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/cpumem-retire.so 0555 root bin
+f usr/lib/fm/fmd/plugins/disk-lights.conf 0644 root bin
+f usr/lib/fm/fmd/plugins/disk-lights.so 0555 root bin
 f usr/lib/fm/fmd/plugins/disk-monitor.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/disk-monitor.so 0555 root bin
 f usr/lib/fm/fmd/plugins/disk-transport.conf 0644 root bin
@@ -12706,6 +12708,7 @@ f usr/share/man/man3c/getchar_unlocked.3c 0444 root bin
 f usr/share/man/man3c/getcpuid.3c 0444 root bin
 f usr/share/man/man3c/getcwd.3c 0444 root bin
 f usr/share/man/man3c/getdate.3c 0444 root bin
+f usr/share/man/man3c/getdelim.3c 0444 root bin
 f usr/share/man/man3c/getdtablesize.3c 0444 root bin
 f usr/share/man/man3c/getenv.3c 0444 root bin
 f usr/share/man/man3c/getexecname.3c 0444 root bin
@@ -12721,6 +12724,7 @@ f usr/share/man/man3c/gethostid.3c 0444 root bin
 f usr/share/man/man3c/gethostname.3c 0444 root bin
 f usr/share/man/man3c/gethrtime.3c 0444 root bin
 f usr/share/man/man3c/gethrvtime.3c 0444 root bin
+f usr/share/man/man3c/getline.3c 0444 root bin
 f usr/share/man/man3c/getloadavg.3c 0444 root bin
 f usr/share/man/man3c/getlogin.3c 0444 root bin
 f usr/share/man/man3c/getlogin_r.3c 0444 root bin
