@@ -9416,7 +9416,6 @@ mptsas_watchsubr(mptsas_t *mpt)
 			mptsas_set_throttle(mpt, ptgt, MAX_THROTTLE);
 			++restart_needed;
 		}
-		mutex_exit(&ptgt->m_tgt_intr_mutex);
 		ptgt = (mptsas_target_t *)mptsas_hash_traverse(
 		    &mpt->m_active->m_tgttbl, MPTSAS_HASH_NEXT);
 	}
@@ -9427,7 +9426,6 @@ mptsas_watchsubr(mptsas_t *mpt)
 	ptgt = (mptsas_target_t *)mptsas_hash_traverse(&mpt->m_active->m_tgttbl,
 	    MPTSAS_HASH_FIRST);
 	while (ptgt != NULL) {
-		mutex_enter(&ptgt->m_tgt_intr_mutex);
 		if ((ptgt->m_t_ncmds > 0) &&
 		    (ptgt->m_timebase)) {
 
