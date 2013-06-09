@@ -119,6 +119,7 @@ enum s10_emulated_features {
 #define	S10_SYS_utime		30
 #define	S10_SYS_access		33
 #define	S10_SYS_dup		41
+#define	S10_SYS_pipe		42
 #define	S10_SYS_issetugid	75
 #define	S10_SYS_fsat		76
 #define	S10_SYS_rmdir		79

@@ -1386,6 +1386,21 @@ s10_issetugid(sysret_t *rval)
 	    0, 0, 0, 0, 0));
 }
 
+/*
+ * S10's pipe() syscall has a different calling convention
+ */
+static int
+s10_pipe(sysret_t *rval)
+{
+	int fds[2], err;
+	if ((err = __systemcall(rval, SYS_pipe + 1024, fds, 0)) != 0)
+		return (err);
+
+	rval->sys_rval1 = fds[0];
+	rval->sys_rval2 = fds[1];
+	return (0);
+}
+
 static long
 s10_uname(sysret_t *rv, uintptr_t p1)
 {
@@ -1900,7 +1915,7 @@ brand_sysent_table_t brand_sysent_table[] = {
 	NOSYS,					/*  39 */
 	NOSYS,					/*  40 */
 	EMULATE(s10_dup, 1 | RV_DEFAULT),	/*  41 */
-	NOSYS,					/*  42 */
+	EMULATE(s10_pipe, 0 | RV_32RVAL2),	/*  42 */
 	NOSYS,					/*  43 */
 	NOSYS,					/*  44 */
 	NOSYS,					/*  45 */
