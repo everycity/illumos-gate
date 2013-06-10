@@ -20,6 +20,7 @@
  */
 
 /*
+ * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -555,6 +556,7 @@ _init(void)
 	s10_emulation_table[S10_SYS_creat64] = 1;		/* 224 */
 	s10_emulation_table[S10_SYS_open64] = 1;		/* 225 */
 	s10_emulation_table[SYS_zone] = 1;			/* 227 */
+	s10_emulation_table[S10_SYS_so_socket] = 1;		/* 230 */
 	s10_emulation_table[S10_SYS_accept] = 1;		/* 234 */
 	s10_emulation_table[SYS_lwp_mutex_trylock] = 1;		/* 251 */
 

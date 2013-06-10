@@ -20,6 +20,7 @@
  */
 
 /*
+ * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -59,6 +60,7 @@
 #include <sys/lofi.h>
 #include <atomic.h>
 #include <sys/acl.h>
+#include <sys/socket.h>
 
 #include <s10_brand.h>
 #include <brand_misc.h>
@@ -1387,6 +1389,20 @@ s10_issetugid(sysret_t *rval)
 }
 
 /*
+ * S10's socket() syscall does not spilt type and flags
+ */
+static int
+s10_so_socket(sysret_t *rval, int domain, int type, int protocol)
+{
+	if ((type & ~SOCK_TYPE_MASK) != 0) {
+		errno = EINVAL;
+		return (-1);
+	}
+	return (__systemcall(rval, SYS_so_socket + 1024, domain, type,
+	    protocol));
+}
+
+/*
  * S10's pipe() syscall has a different calling convention
  */
 static int
@@ -2141,7 +2157,7 @@ brand_sysent_table_t brand_sysent_table[] = {
 	EMULATE(s10_zone, 5 | RV_DEFAULT),	/* 227 */
 	NOSYS,					/* 228 */
 	NOSYS,					/* 229 */
-	NOSYS,					/* 230 */
+	EMULATE(s10_so_socket, 3 | RV_DEFAULT),	/* 230 */
 	NOSYS,					/* 231 */
 	NOSYS,					/* 232 */
 	NOSYS,					/* 233 */
