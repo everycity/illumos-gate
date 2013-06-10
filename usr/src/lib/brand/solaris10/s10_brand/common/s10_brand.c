@@ -1401,6 +1401,17 @@ s10_pipe(sysret_t *rval)
 	return (0);
 }
 
+/*
+ * S10's accept() syscall takes three arguments
+ */
+static int
+s10_accept(sysret_t *rval, int sock, struct sockaddr *addr, uint_t *addrlen,
+    int version)
+{
+	return (__systemcall(rval, SYS_accept + 1024, sock, addr, addrlen,
+	    version, 0));
+}
+
 static long
 s10_uname(sysret_t *rv, uintptr_t p1)
 {
@@ -2134,7 +2145,7 @@ brand_sysent_table_t brand_sysent_table[] = {
 	NOSYS,					/* 231 */
 	NOSYS,					/* 232 */
 	NOSYS,					/* 233 */
-	NOSYS,					/* 234 */
+	EMULATE(s10_accept, 4 | RV_DEFAULT),	/* 234 */
 	NOSYS,					/* 235 */
 	NOSYS,					/* 236 */
 	NOSYS,					/* 237 */

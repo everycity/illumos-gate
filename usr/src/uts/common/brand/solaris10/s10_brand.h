@@ -145,6 +145,7 @@ enum s10_emulated_features {
 #define	S10_SYS_fstat64		217
 #define	S10_SYS_creat64		224
 #define	S10_SYS_open64		225
+#define	S10_SYS_accept		234
 
 /*
  * solaris10-brand-specific attributes
