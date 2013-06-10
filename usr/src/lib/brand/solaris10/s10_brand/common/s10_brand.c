@@ -1392,14 +1392,14 @@ s10_issetugid(sysret_t *rval)
  * S10's socket() syscall does not spilt type and flags
  */
 static int
-s10_so_socket(sysret_t *rval, int domain, int type, int protocol)
+s10_so_socket(sysret_t *rval, int domain, int type, int protocol, char *devpath, int version)
 {
 	if ((type & ~SOCK_TYPE_MASK) != 0) {
 		errno = EINVAL;
 		return (-1);
 	}
 	return (__systemcall(rval, SYS_so_socket + 1024, domain, type,
-	    protocol));
+	    protocol, devpath, version));
 }
 
 /*
@@ -2157,7 +2157,7 @@ brand_sysent_table_t brand_sysent_table[] = {
 	EMULATE(s10_zone, 5 | RV_DEFAULT),	/* 227 */
 	NOSYS,					/* 228 */
 	NOSYS,					/* 229 */
-	EMULATE(s10_so_socket, 3 | RV_DEFAULT),	/* 230 */
+	EMULATE(s10_so_socket, 5 | RV_DEFAULT),	/* 230 */
 	NOSYS,					/* 231 */
 	NOSYS,					/* 232 */
 	NOSYS,					/* 233 */
