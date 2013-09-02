@@ -9416,9 +9416,6 @@ mptsas_watchsubr(mptsas_t *mpt)
 			mptsas_restart_hba(mpt);
 		}
 
-	ptgt = (mptsas_target_t *)mptsas_hash_traverse(&mpt->m_active->m_tgttbl,
-	    MPTSAS_HASH_FIRST);
-	while (ptgt != NULL) {
 		if ((ptgt->m_t_ncmds > 0) &&
 		    (ptgt->m_timebase)) {
 
