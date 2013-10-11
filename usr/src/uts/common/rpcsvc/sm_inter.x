@@ -26,6 +26,12 @@
 
 %/* from sm_inter.x */
 
+#ifdef RPC_HDR
+%
+%#pragma ident	"%Z%%M%	%I%	%E% SMI"
+%
+#endif
+
 /*
  * Status monitor protocol specification
  */
@@ -92,13 +98,13 @@ struct sm_stat {
 	int state;		/* state # of status monitor */
 };
 
-enum sm_res {
+enum res {
 	stat_succ = 0,		/* status monitor agrees to monitor */
 	stat_fail = 1		/* status monitor cannot monitor */
 };
 
 struct sm_stat_res {
-	sm_res res_stat;
+	res res_stat;
 	int state;
 };
 
@@ -106,7 +112,7 @@ struct sm_stat_res {
  * structure of the status message sent by the status monitor to the
  * requesting program when a monitored site changes status.
  */
-struct sm_status {
+struct status {
 	string mon_name<SM_MAXSTRLEN>;
 	int state;
 	opaque priv[16];		/* stored private information */

@@ -20,10 +20,9 @@
  * CDDL HEADER END
  */
 /*
+ * Network lock manager protocol definition
  * Copyright (C) 1986, 1992, 1993, 1997, 1999 by Sun Microsystems, Inc.
  * All rights reserved.
- *
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  *
  * Protocol used between local lock manager and remote lock manager.
  *
@@ -35,6 +34,8 @@
  * procedures that the status monitor uses to notify the lock manager of
  * changes in monitored systems.)
  */
+
+%#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #if RPC_HDR
 %
@@ -200,20 +201,20 @@ struct	nlm_notify {
  */
 
 enum nlm4_stats {
-	nlm4_granted = 0,		/* lock was granted */
-	nlm4_denied = 1,		/* lock was not granted, usually */
+	NLM4_GRANTED = 0,		/* lock was granted */
+	NLM4_DENIED = 1,		/* lock was not granted, usually */
 					/* due to conflicting lock */
-	nlm4_denied_nolocks = 2,	/* not granted: out of resources */
-	nlm4_blocked = 3,		/* not granted: expect callback */
+	NLM4_DENIED_NOLOCKS = 2,	/* not granted: out of resources */
+	NLM4_BLOCKED = 3,		/* not granted: expect callback */
 					/* when granted */
-	nlm4_denied_grace_period = 4,	/* not granted: server is */
+	NLM4_DENIED_GRACE_PERIOD = 4,	/* not granted: server is */
 					/* reestablishing old locks */
-	nlm4_deadlck = 5,		/* not granted: deadlock detected */
-	nlm4_rofs = 6,			/* not granted: read-only filesystem */
-	nlm4_stale_fh = 7,		/* not granted: stale file handle */
-	nlm4_fbig = 8,			/* not granted: offset or length */
+	NLM4_DEADLCK = 5,		/* not granted: deadlock detected */
+	NLM4_ROFS = 6,			/* not granted: read-only filesystem */
+	NLM4_STALE_FH = 7,		/* not granted: stale file handle */
+	NLM4_FBIG = 8,			/* not granted: offset or length */
 					/* too big */
-	nlm4_failed = 9			/* not granted: some other error */
+	NLM4_FAILED = 9			/* not granted: some other error */
 };
 
 /*
@@ -229,7 +230,7 @@ struct nlm4_holder {
 };
 
 union nlm4_testrply switch (nlm4_stats stat) {
-	case nlm4_denied:
+	case NLM4_DENIED:
 		struct nlm4_holder holder;
 	default:
 		void;
@@ -285,12 +286,33 @@ struct nlm4_unlockargs {
 	struct nlm4_lock alock;
 };
 
+#ifdef RPC_HDR
+%/*
+% * The following enums are actually bit encoded for efficient
+% * boolean algebra.... DON'T change them.....
+% */
+#endif
+
+enum	fsh4_mode {
+	FSM_DN  = 0,	/* deny none */
+	FSM_DR  = 1,	/* deny read */
+	FSM_DW  = 2,	/* deny write */
+	FSM_DRW = 3	/* deny read/write */
+};
+
+enum	fsh4_access {
+	FSA_NONE = 0,	/* for completeness */
+	FSA_R    = 1,	/* read only */
+	FSA_W    = 2,	/* write only */
+	FSA_RW   = 3	/* read/write */
+};
+
 struct	nlm4_share {
 	string caller_name<LM_MAXSTRLEN>;
 	netobj	fh;
 	netobj	oh;
-	fsh_mode	mode;
-	fsh_access	access;
+	fsh4_mode	mode;
+	fsh4_access	access;
 };
 
 struct	nlm4_shareargs {
@@ -311,28 +333,11 @@ struct	nlm4_notify {
 };
 
 /*
- * Argument for the NLM call-back procedure called by rpc.statd
- * when a monitored host status changes.  The statd calls the
- * NLM prog,vers,proc specified in the SM_MON call.
- * NB: This struct must exactly match sm_inter.x:sm_status
- * and requires LM_MAXSTRLEN == SM_MAXSTRLEN
- */
-struct nlm_sm_status {
-	string mon_name<LM_MAXSTRLEN>; /* name of host */
-	int32 state;			/* new state */
-	opaque priv[16];		/* private data */
-};
-
-/*
  * Over-the-wire protocol used between the network lock managers
  */
 
 program NLM_PROG {
-
 	version NLM_VERS {
-
-		void
-			NLM_NULL(void) =			0;
 
 		nlm_testres
 			NLM_TEST(nlm_testargs) =		1;
@@ -377,17 +382,6 @@ program NLM_PROG {
 			NLM_GRANTED_RES(nlm_res) =		15;
 	} = 1;
 
-	/*
-	 * Private (loopback-only) call-backs from statd,
-	 * used to notify that some machine has restarted.
-	 * The meaning of these is up to the lock manager
-	 * implemenation.  (See the SM_MON calls.)
-	 */
-	version NLM_SM {
-		void NLM_SM_NOTIFY1(struct nlm_sm_status) =	17;
-		void NLM_SM_NOTIFY2(struct nlm_sm_status) =	18;
-	} = 2;
-
 	version NLM_VERSX {
 		nlm_shareres
 			NLM_SHARE(nlm_shareargs) =		20;
@@ -401,58 +395,58 @@ program NLM_PROG {
 
 	version NLM4_VERS {
 		void
-			NLM4_NULL(void) =			0;
+			NLMPROC4_NULL(void) =			0;
 		nlm4_testres
-			NLM4_TEST(nlm4_testargs) =		1;
+			NLMPROC4_TEST(nlm4_testargs) =		1;
 		nlm4_res
-			NLM4_LOCK(nlm4_lockargs) =		2;
+			NLMPROC4_LOCK(nlm4_lockargs) =		2;
 		nlm4_res
-			NLM4_CANCEL(nlm4_cancargs) =	3;
+			NLMPROC4_CANCEL(nlm4_cancargs) =	3;
 		nlm4_res
-			NLM4_UNLOCK(nlm4_unlockargs) =	4;
+			NLMPROC4_UNLOCK(nlm4_unlockargs) =	4;
 		/*
 		 * remote lock manager call-back to grant lock
 		 */
 		nlm4_res
-			NLM4_GRANTED(nlm4_testargs) =	5;
+			NLMPROC4_GRANTED(nlm4_testargs) =	5;
 
 		/*
 		 * message passing style of requesting lock
 		 */
 
 		void
-			NLM4_TEST_MSG(nlm4_testargs) =	6;
+			NLMPROC4_TEST_MSG(nlm4_testargs) =	6;
 		void
-			NLM4_LOCK_MSG(nlm4_lockargs) =	7;
+			NLMPROC4_LOCK_MSG(nlm4_lockargs) =	7;
 		void
-			NLM4_CANCEL_MSG(nlm4_cancargs) =	8;
+			NLMPROC4_CANCEL_MSG(nlm4_cancargs) =	8;
 		void
-			NLM4_UNLOCK_MSG(nlm4_unlockargs) =	9;
+			NLMPROC4_UNLOCK_MSG(nlm4_unlockargs) =	9;
 		void
-			NLM4_GRANTED_MSG(nlm4_testargs) =	10;
+			NLMPROC4_GRANTED_MSG(nlm4_testargs) =	10;
 		void
-			NLM4_TEST_RES(nlm4_testres) =	11;
+			NLMPROC4_TEST_RES(nlm4_testres) =	11;
 		void
-			NLM4_LOCK_RES(nlm4_res) =		12;
+			NLMPROC4_LOCK_RES(nlm4_res) =		12;
 		void
-			NLM4_CANCEL_RES(nlm4_res) =		13;
+			NLMPROC4_CANCEL_RES(nlm4_res) =		13;
 		void
-			NLM4_UNLOCK_RES(nlm4_res) =		14;
+			NLMPROC4_UNLOCK_RES(nlm4_res) =		14;
 		void
-			NLM4_GRANTED_RES(nlm4_res) =	15;
+			NLMPROC4_GRANTED_RES(nlm4_res) =	15;
 
 		/*
 		 * DOS-style file sharing
 		 */
 
 		nlm4_shareres
-			NLM4_SHARE(nlm4_shareargs) =	20;
+			NLMPROC4_SHARE(nlm4_shareargs) =	20;
 		nlm4_shareres
-			NLM4_UNSHARE(nlm4_shareargs) =	21;
+			NLMPROC4_UNSHARE(nlm4_shareargs) =	21;
 		nlm4_res
-			NLM4_NM_LOCK(nlm4_lockargs) =	22;
+			NLMPROC4_NM_LOCK(nlm4_lockargs) =	22;
 		void
-			NLM4_FREE_ALL(nlm4_notify) =	23;
+			NLMPROC4_FREE_ALL(nlm4_notify) =	23;
 	} = 4;
 
 } = 100021;

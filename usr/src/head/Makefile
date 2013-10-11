@@ -265,6 +265,7 @@ RPCSVC_GEN_HDRS = \
 	nfs_prot.h	\
 	nfs4_prot.h	\
 	nis.h		\
+	nlm_prot.h	\
 	rex.h		\
 	rquota.h	\
 	rstat.h		\
