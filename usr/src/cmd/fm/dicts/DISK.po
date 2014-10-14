@@ -122,6 +122,22 @@ msgstr "The device will not be usable.\n"
 msgid "DISK-8000-5C.action"
 msgstr "Schedule a repair procedure to replace the affected device. Use 'fmadm faulty' to find the affected disk. If this is a battery-backed RAM disk or similar device, you can also try to reactivate the device using 'fmadm acquit' once the battery is charged\n"
 #
+# code: DISK-8000-5C
+# keys: fault.io.disk.attach-failure
+#
+msgid "DISK-8000-5C.type"
+msgstr "Fault"
+msgid "DISK-8000-5C.severity"
+msgstr "Critical"
+msgid "DISK-8000-5C.description"
+msgstr "A disk device failed to attach. Either the device is broken, or it is just taking unusually long to respond. The latter is often the case with battery-backed RAM disk devices when the battery needs to be charged.\n"
+msgid "DISK-8000-5C.response"
+msgstr "None.\n"
+msgid "DISK-8000-5C.impact"
+msgstr "The device will not be usable.\n"
+msgid "DISK-8000-5C.action"
+msgstr "Schedule a repair procedure to replace the affected device. Use 'fmadm faulty' to find the affected disk. If this is a battery-backed RAM disk or similar device, you can also try to reactivate the device using 'fmadm acquit' once the battery is charged\n"
+#
 # code: DISK-8000-6R
 # keys: fault.io.disk.device-errors-exceeded
 #
