@@ -424,7 +424,7 @@ zfs_retire_device(fmd_hdl_t *hdl, char *path, boolean_t retire)
 	drt.rt_debug = (void (*)(void *, const char *, ...))fmd_hdl_debug;
 	drt.rt_hdl = hdl;
 
-	fmd_hdl_debug(hdl, "zfs_retire_recv: "
+	fmd_hdl_debug(hdl, "zfs_retire_device: "
 	    "attempting to %sretire %s", retire ? "" : "un", path);
 
 	err = retire ?
@@ -432,7 +432,7 @@ zfs_retire_device(fmd_hdl_t *hdl, char *path, boolean_t retire)
 	    di_unretire_device(path, &drt);
 
 	if (err != 0)
-		fmd_hdl_debug(hdl, "zfs_retire_recv: ",
+		fmd_hdl_debug(hdl, "zfs_retire_device: ",
 		    "di_%sretire_device failed: %d %s",
 		    retire ? "" : "un", err, path);
 
