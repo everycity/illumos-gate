@@ -187,6 +187,10 @@ struct scsi_pkt {
 #define	FLAG_PKT_PATH_INSTANCE	0x40000000	/* Tell vhci the path to use */
 #define	FLAG_PKT_COMP_CALLED	0x20000000	/* Set once pkt_comp called */
 
+/* Extended flags. */
+#define	FLAG_PKT_BUSY		0x04000000	/* Reject packet immediately. */
+#define	FLAG_PKT_TIMEOUT	0x08000000	/* Timed-out packet. */
+
 /*
  * Definitions for the pkt_reason field.
  */

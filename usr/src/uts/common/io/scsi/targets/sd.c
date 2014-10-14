@@ -1760,13 +1760,17 @@ static void sd_rmw_msg_print_handler(void *arg);
  */
 static int sd_failfast_flushctl = SD_FAILFAST_FLUSH_ALL_QUEUES;
 
+#ifdef SD_FAULT_INJECTION
+static uint_t   sd_fault_injection_on = 0;
+#endif
 
 /*
  * SD Testing Fault Injection
  */
 #ifdef SD_FAULT_INJECTION
-static void sd_faultinjection_ioctl(int cmd, intptr_t arg, struct sd_lun *un);
+static int sd_faultinjection_ioctl(int cmd, intptr_t arg, struct sd_lun *un);
 static void sd_faultinjection(struct scsi_pkt *pktp);
+static void sd_prefaultinjection(struct scsi_pkt *pktp);
 static void sd_injection_log(char *buf, struct sd_lun *un);
 #endif
 
@@ -15491,6 +15495,14 @@ got_pkt:
 		    "sd_start_cmds: calling scsi_transport()\n");
 		DTRACE_PROBE1(scsi__transport__dispatch, struct buf *, bp);
 
+#ifdef SD_FAULT_INJECTION
+		/*
+		 * Packet is ready for submission to the HBA. Perform HBA-based
+		 * fault-injection.
+		 */
+		sd_prefaultinjection(xp->xb_pktp);
+#endif /* SD_FAULT_INJECTION */
+
 		mutex_exit(SD_MUTEX(un));
 		rval = scsi_transport(xp->xb_pktp);
 		mutex_enter(SD_MUTEX(un));
@@ -15507,6 +15519,28 @@ got_pkt:
 		case TRAN_BUSY:
 			un->un_ncmds_in_transport--;
 			ASSERT(un->un_ncmds_in_transport >= 0);
+
+#ifdef SD_FAULT_INJECTION
+			/*
+			 * If the packet was rejected during active fault
+			 * injection session, move to the next fault slot
+			 * and reset packet flag related to rejection.
+			 */
+			if (sd_fault_injection_on) {
+				uint_t i = un->sd_fi_fifo_start;
+
+				if (un->sd_fi_fifo_tran[i] != NULL) {
+					kmem_free(un->sd_fi_fifo_tran[i],
+					    sizeof (struct sd_fi_tran));
+					un->sd_fi_fifo_tran[i] = NULL;
+				}
+				un->sd_fi_fifo_start++;
+			}
+
+			if (xp->xb_pktp->pkt_flags & FLAG_PKT_BUSY) {
+				xp->xb_pktp->pkt_flags &= ~FLAG_PKT_BUSY;
+			}
+#endif /* SD_FAULT_INJECTION */
 
 			/*
 			 * Don't retry request sense, the sense data
@@ -23449,11 +23483,11 @@ skip_ready_valid:
 	case SDIOCPUSH:
 	case SDIOCRETRIEVE:
 	case SDIOCRUN:
+	case SDIOCINSERTTRAN:
 		SD_INFO(SD_LOG_SDTEST, un, "sdioctl:"
 		    "SDIOC detected cmd:0x%X:\n", cmd);
 		/* call error generator */
-		sd_faultinjection_ioctl(cmd, arg, un);
-		err = 0;
+		err = sd_faultinjection_ioctl(cmd, arg, un);
 		break;
 
 #endif /* SD_FAULT_INJECTION */
@@ -30407,7 +30441,6 @@ sd_panic_for_res_conflict(struct sd_lun *un)
  */
 
 #ifdef SD_FAULT_INJECTION
-static uint_t   sd_fault_injection_on = 0;
 
 /*
  *    Function: sd_faultinjection_ioctl()
@@ -30420,11 +30453,12 @@ static uint_t   sd_fault_injection_on = 0;
  *		arg	- the arguments from user and returns
  */
 
-static void
+static int
 sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 
 	uint_t i = 0;
 	uint_t rval;
+	int ret = 0;
 
 	SD_TRACE(SD_LOG_IOERR, un, "sd_faultinjection_ioctl: entry\n");
 
@@ -30454,6 +30488,7 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			un->sd_fi_fifo_xb[i] = NULL;
 			un->sd_fi_fifo_un[i] = NULL;
 			un->sd_fi_fifo_arq[i] = NULL;
+			un->sd_fi_fifo_tran[i] = NULL;
 		}
 		un->sd_fi_fifo_start = 0;
 		un->sd_fi_fifo_end = 0;
@@ -30492,10 +30527,15 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_arq[i],
 				    sizeof (struct sd_fi_arq));
 			}
+			if (un->sd_fi_fifo_tran[i] != NULL) {
+				kmem_free(un->sd_fi_fifo_tran[i],
+				    sizeof (struct sd_fi_tran));
+			}
 			un->sd_fi_fifo_pkt[i] = NULL;
 			un->sd_fi_fifo_un[i] = NULL;
 			un->sd_fi_fifo_xb[i] = NULL;
 			un->sd_fi_fifo_arq[i] = NULL;
+			un->sd_fi_fifo_tran[i] = NULL;
 		}
 		un->sd_fi_fifo_start = 0;
 		un->sd_fi_fifo_end = 0;
@@ -30511,6 +30551,11 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 
 		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
 
+		if (un->sd_fi_fifo_tran[i] != NULL) {
+			ret = EBUSY;
+			break;
+		}
+
 		sd_fault_injection_on = 0;
 
 		/* No more that SD_FI_MAX_ERROR allowed in Queue */
@@ -30523,6 +30568,7 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			    kmem_alloc(sizeof (struct sd_fi_pkt), KM_NOSLEEP);
 			if (un->sd_fi_fifo_pkt[i] == NULL) {
 				/* Alloc failed don't store anything */
+				ret = ENOMEM;
 				break;
 			}
 			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_pkt[i],
@@ -30531,10 +30577,73 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_pkt[i],
 				    sizeof (struct sd_fi_pkt));
 				un->sd_fi_fifo_pkt[i] = NULL;
+				ret = EFAULT;
+				break;
 			}
 		} else {
 			SD_INFO(SD_LOG_IOERR, un,
 			    "sd_faultinjection_ioctl: pkt null\n");
+		}
+		break;
+
+	case SDIOCINSERTTRAN:
+		/* Store a tran packet struct to be pushed onto fifo. */
+		SD_INFO(SD_LOG_SDTEST, un,
+		    "sd_faultinjection_ioctl: Injecting Fault Insert TRAN\n");
+		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
+
+		/*
+		 * HBA-related fault injections can't be mixed with target-level
+		 * fault injections.
+		 */
+		if (un->sd_fi_fifo_pkt[i] != NULL ||
+		    un->sd_fi_fifo_xb[i] != NULL ||
+		    un->sd_fi_fifo_un[i] != NULL ||
+		    un->sd_fi_fifo_arq[i] != NULL) {
+			ret = EBUSY;
+			break;
+		}
+
+		sd_fault_injection_on = 0;
+
+		if (un->sd_fi_fifo_tran[i] != NULL) {
+			kmem_free(un->sd_fi_fifo_tran[i],
+			    sizeof (struct sd_fi_tran));
+			un->sd_fi_fifo_tran[i] = NULL;
+		}
+		if (arg != NULL) {
+			un->sd_fi_fifo_tran[i] =
+			    kmem_alloc(sizeof (struct sd_fi_tran), KM_NOSLEEP);
+			if (un->sd_fi_fifo_tran[i] == NULL) {
+				/* Alloc failed don't store anything */
+				ret = ENOMEM;
+				break;
+			}
+			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_tran[i],
+			    sizeof (struct sd_fi_tran), 0);
+
+			if (rval == 0) {
+				switch (un->sd_fi_fifo_tran[i]->tran_cmd) {
+					case SD_FLTINJ_CMD_BUSY:
+					case SD_FLTINJ_CMD_TIMEOUT:
+						break;
+					default:
+						ret = EINVAL;
+						break;
+				}
+			} else {
+				ret = EFAULT;
+			}
+
+			if (ret != 0) {
+				kmem_free(un->sd_fi_fifo_tran[i],
+				    sizeof (struct sd_fi_tran));
+				un->sd_fi_fifo_tran[i] = NULL;
+				break;
+			}
+		} else {
+			SD_INFO(SD_LOG_IOERR, un,
+			    "sd_faultinjection_ioctl: tran null\n");
 		}
 		break;
 
@@ -30544,6 +30653,11 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 		    "sd_faultinjection_ioctl: Injecting Fault Insert XB\n");
 
 		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
+
+		if (un->sd_fi_fifo_tran[i] != NULL) {
+			ret = EBUSY;
+			break;
+		}
 
 		sd_fault_injection_on = 0;
 
@@ -30557,6 +30671,7 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			    kmem_alloc(sizeof (struct sd_fi_xb), KM_NOSLEEP);
 			if (un->sd_fi_fifo_xb[i] == NULL) {
 				/* Alloc failed don't store anything */
+				ret = ENOMEM;
 				break;
 			}
 			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_xb[i],
@@ -30566,6 +30681,8 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_xb[i],
 				    sizeof (struct sd_fi_xb));
 				un->sd_fi_fifo_xb[i] = NULL;
+				ret = EFAULT;
+				break;
 			}
 		} else {
 			SD_INFO(SD_LOG_IOERR, un,
@@ -30579,6 +30696,10 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 		    "sd_faultinjection_ioctl: Injecting Fault Insert UN\n");
 
 		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
+		if (un->sd_fi_fifo_tran[i] != NULL) {
+			ret = EBUSY;
+			break;
+		}
 
 		sd_fault_injection_on = 0;
 
@@ -30592,6 +30713,7 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			    kmem_alloc(sizeof (struct sd_fi_un), KM_NOSLEEP);
 			if (un->sd_fi_fifo_un[i] == NULL) {
 				/* Alloc failed don't store anything */
+				ret = ENOMEM;
 				break;
 			}
 			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_un[i],
@@ -30600,6 +30722,8 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_un[i],
 				    sizeof (struct sd_fi_un));
 				un->sd_fi_fifo_un[i] = NULL;
+				ret = EFAULT;
+				break;
 			}
 
 		} else {
@@ -30614,6 +30738,10 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 		SD_INFO(SD_LOG_SDTEST, un,
 		    "sd_faultinjection_ioctl: Injecting Fault Insert ARQ\n");
 		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
+		if (un->sd_fi_fifo_tran[i] != NULL) {
+			ret = EBUSY;
+			break;
+		}
 
 		sd_fault_injection_on = 0;
 
@@ -30627,6 +30755,7 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			    kmem_alloc(sizeof (struct sd_fi_arq), KM_NOSLEEP);
 			if (un->sd_fi_fifo_arq[i] == NULL) {
 				/* Alloc failed don't store anything */
+				ret = ENOMEM;
 				break;
 			}
 			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_arq[i],
@@ -30635,6 +30764,8 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_arq[i],
 				    sizeof (struct sd_fi_arq));
 				un->sd_fi_fifo_arq[i] = NULL;
+				ret = EFAULT;
+				break;
 			}
 
 		} else {
@@ -30645,7 +30776,7 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 		break;
 
 	case SDIOCPUSH:
-		/* Push stored xb, pkt, un, and arq onto fifo */
+		/* Push stored xb, pkt, un, arq and tran onto fifo */
 		sd_fault_injection_on = 0;
 
 		if (arg != NULL) {
@@ -30691,6 +30822,7 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 	mutex_exit(SD_MUTEX(un));
 	SD_TRACE(SD_LOG_IOERR, un, "sd_faultinjection_ioctl:"
 			    " exit\n");
+	return (ret);
 }
 
 
@@ -30728,6 +30860,57 @@ sd_injection_log(char *buf, struct sd_lun *un)
 	}
 
 	mutex_exit(&(un->un_fi_mutex));
+}
+
+/*
+ * This function is called just before sending the packet to the HBA.
+ * Caller must hold per-LUN mutex. Mutex is held locked upon return.
+ */
+static void
+sd_prefaultinjection(struct scsi_pkt *pktp)
+{
+	uint_t i;
+	struct buf *bp;
+	/*struct sd_xbuf *xb;*/
+	struct sd_lun *un;
+	struct sd_fi_tran *fi_tran;
+
+	ASSERT(pktp != NULL);
+
+	/* pull bp xb and un from pktp */
+	bp = (struct buf *)pktp->pkt_private;
+	/*xb = SD_GET_XBUF(bp);*/
+	un = SD_GET_UN(bp);
+
+	/* if injection is off return */
+	if (sd_fault_injection_on == 0 ||
+	    un->sd_fi_fifo_start == un->sd_fi_fifo_end) {
+		return;
+	}
+
+	ASSERT(un != NULL);
+	ASSERT(mutex_owned(SD_MUTEX(un)));
+
+	/* take next set off fifo */
+	i = un->sd_fi_fifo_start % SD_FI_MAX_ERROR;
+
+	fi_tran = un->sd_fi_fifo_tran[i];
+	if (fi_tran != NULL) {
+		switch (fi_tran->tran_cmd) {
+			case SD_FLTINJ_CMD_BUSY:
+				pktp->pkt_flags |= FLAG_PKT_BUSY;
+				break;
+			case SD_FLTINJ_CMD_TIMEOUT:
+				pktp->pkt_flags |= FLAG_PKT_TIMEOUT;
+				break;
+			default:
+				return;
+		}
+	}
+	/*
+	 * We don't deallocate any data here - it will be deallocated after
+	 * the packet has been processed by the HBA.
+	 */
 }
 
 
