@@ -1619,7 +1619,7 @@ vhci_recovery_reset(scsi_vhci_lun_t *vlun, struct scsi_address *ap,
 static int
 vhci_scsi_reset_target(struct scsi_address *ap, int level, uint8_t select_path)
 {
-	dev_info_t		*vdip, *cdip;
+	dev_info_t		*vdip, *cdip = NULL;
 	mdi_pathinfo_t		*pip = NULL;
 	mdi_pathinfo_t		*npip = NULL;
 	int			rval = -1;
@@ -1639,7 +1639,14 @@ vhci_scsi_reset_target(struct scsi_address *ap, int level, uint8_t select_path)
 		return (scsi_reset(ap, level));
 	}
 
-	cdip = ADDR2DIP(ap);
+	/*
+	 * SCSI address should be interpreted according to the pHBA flags.
+	 */
+	if (ap->a_hba_tran->tran_hba_flags & SCSI_HBA_ADDR_COMPLEX)
+		cdip = ADDR2DIP(ap);
+	else if (ap->a_hba_tran->tran_hba_flags & SCSI_HBA_TRAN_CLONE)
+		cdip = ap->a_hba_tran->tran_sd->sd_dev;
+
 	ASSERT(cdip != NULL);
 	vdip = ddi_get_parent(cdip);
 	ASSERT(vdip != NULL);
