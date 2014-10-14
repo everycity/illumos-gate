@@ -1700,7 +1700,7 @@ sddump_do_read_of_rmw(struct sd_lun *un, uint64_t blkno, uint64_t nblk,
 /*
  * Function prototypes for failfast support.
  */
-static void sd_failfast_flushq(struct sd_lun *un);
+static void sd_failfast_flushq(struct sd_lun *un, boolean_t flush_all);
 static int sd_failfast_flushq_callback(struct buf *bp);
 
 /*
@@ -15068,6 +15068,32 @@ sd_start_cmds(struct sd_lun *un, struct buf *immed_bp)
 
 	SD_TRACE(SD_LOG_IO_CORE | SD_LOG_ERROR, un, "sd_start_cmds: entry\n");
 
+	/* check if LUN is retiring */
+	/* enable failfast in this case */
+	if (DEVI(un->un_sd->sd_dev)->devi_flags &
+	    DEVI_RETIRING) {
+		un->un_failfast_state = SD_FAILFAST_ACTIVE;
+		un->un_failfast_bp = NULL;
+		return;
+	}
+	/* check if LUN is in retired state */
+	/* abort IO and flush queue in case if it is */
+	if (DEVI(un->un_sd->sd_dev)->devi_flags &
+	    DEVI_RETIRED) {
+		if (immed_bp) {
+			immed_bp->b_resid = immed_bp->b_bcount;
+			bioerror(immed_bp, ENXIO);
+			biodone(immed_bp);
+		}
+		/* abort in-flight IO */
+		scsi_abort(SD_ADDRESS(un), NULL);
+		/* abort pending IO */
+		un->un_failfast_bp = NULL;
+		un->un_failfast_state = SD_FAILFAST_ACTIVE;
+		sd_failfast_flushq(un, B_TRUE);
+		return;
+	}
+
 	do {
 #if defined(__i386) || defined(__amd64)	/* DMAFREE for x86 only */
 		saved_statp = NULL;
@@ -16054,7 +16080,7 @@ sd_retry_command(struct sd_lun *un, struct buf *bp, int retry_check_flag,
 				 */
 				un->un_failfast_state = SD_FAILFAST_ACTIVE;
 				un->un_failfast_bp = NULL;
-				sd_failfast_flushq(un);
+				sd_failfast_flushq(un, B_FALSE);
 
 				/*
 				 * Fail this bp now if B_FAILFAST set;
@@ -30099,7 +30125,7 @@ done:
  */
 
 static void
-sd_failfast_flushq(struct sd_lun *un)
+sd_failfast_flushq(struct sd_lun *un, boolean_t flush_all)
 {
 	struct buf *bp;
 	struct buf *next_waitq_bp;
@@ -30117,7 +30143,8 @@ sd_failfast_flushq(struct sd_lun *un)
 	 * Check if we should flush all bufs when entering failfast state, or
 	 * just those with B_FAILFAST set.
 	 */
-	if (sd_failfast_flushctl & SD_FAILFAST_FLUSH_ALL_BUFS) {
+	if ((sd_failfast_flushctl & SD_FAILFAST_FLUSH_ALL_BUFS) ||
+	    flush_all) {
 		/*
 		 * Move *all* bp's on the wait queue to the failfast flush
 		 * queue, including those that do NOT have B_FAILFAST set.
