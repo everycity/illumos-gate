@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef	_SYS_SCSI_SCSI_PKT_H
@@ -106,6 +108,8 @@ struct scsi_pkt {
 
 	/* stage-temporary: iff scsi_pkt_allocated_correctly() */
 	void	*pkt_stmp;		/* temporary for current pkt stage */
+	hrtime_t pkt_start;
+	hrtime_t pkt_stop;
 
 #ifdef	SCSI_SIZE_CLEAN_VERIFY
 	/*

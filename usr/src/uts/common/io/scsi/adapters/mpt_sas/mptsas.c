@@ -3572,6 +3572,8 @@ mptsas_scsi_init_pkt(struct scsi_address *ap, struct scsi_pkt *pkt,
 
 	} else {
 		cmd = PKT2CMD(pkt);
+		pkt->pkt_start = 0;
+		pkt->pkt_stop = 0;
 		new_cmd = NULL;
 	}
 
@@ -5094,6 +5096,8 @@ mptsas_handle_scsi_io_success(mptsas_t *mpt,
 	}
 
 	pkt = CMD2PKT(cmd);
+	ASSERT(pkt->pkt_start != 0);
+	pkt->pkt_stop = gethrtime();
 	pkt->pkt_state |= (STATE_GOT_BUS | STATE_GOT_TARGET | STATE_SENT_CMD |
 	    STATE_GOT_STATUS);
 	if (cmd->cmd_flags & CFLAG_DMAVALID) {
@@ -5407,6 +5411,8 @@ mptsas_check_scsi_io_error(mptsas_t *mpt, pMpi2SCSIIOReply_t reply,
 	    scsi_status, ioc_status, scsi_state));
 
 	pkt = CMD2PKT(cmd);
+	ASSERT(pkt->pkt_start != 0);
+	pkt->pkt_stop = gethrtime();
 	*(pkt->pkt_scbp) = scsi_status;
 
 	if (loginfo == 0x31170000) {
@@ -8419,7 +8425,7 @@ mptsas_start_cmd(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	    SMID, (void *)io_request, (void *)cmd));
 
 	(void) ddi_dma_sync(dma_hdl, 0, 0, DDI_DMA_SYNC_FORDEV);
-
+	pkt->pkt_start = gethrtime();
 	/*
 	 * Build request descriptor and write it to the request desc post reg.
 	 */
@@ -8430,8 +8436,10 @@ mptsas_start_cmd(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	/*
 	 * Start timeout.
 	 */
-	cmd->cmd_active_expiration =
-	    gethrtime() + (hrtime_t)pkt->pkt_time * NANOSEC;
+
+	cmd->cmd_active_expiration = pkt->pkt_start +
+	    (hrtime_t)pkt->pkt_time * (hrtime_t)NANOSEC;
+
 #ifdef MPTSAS_TEST
 	/*
 	 * Force timeouts to happen immediately.

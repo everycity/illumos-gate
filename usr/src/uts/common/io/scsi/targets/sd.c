@@ -242,6 +242,14 @@ int sd_qfull_throttle_enable		= TRUE;
 
 int sd_retry_on_reservation_conflict	= 1;
 int sd_reinstate_resv_delay		= SD_REINSTATE_RESV_DELAY;
+
+/*
+ * Default safe I/O delay threshold of 2s for all devices.
+ * Can be overriden for vendor/device id in sd.conf
+ */
+
+hrtime_t sd_g_slow_io_threshold = 2 * NANOSEC;
+
 _NOTE(SCHEME_PROTECTS_DATA("safe sharing", sd_reinstate_resv_delay))
 
 static int sd_dtype_optical_bind	= -1;
@@ -4236,6 +4244,19 @@ sd_set_properties(struct sd_lun *un, char *name, char *value)
 		    "physical block size set to %d\n", un->un_phy_blocksize);
 	}
 
+	if (strcasecmp(name, "slow-io-threshold") == 0) {
+		if (ddi_strtol(value, &endptr, 0, &val) == 0) {
+			un->un_slow_io_threshold = (hrtime_t)val * NANOSEC;
+		} else {
+			un->un_slow_io_threshold =
+			    (hrtime_t)sd_g_slow_io_threshold;
+			goto value_invalid;
+		}
+		SD_INFO(SD_LOG_ATTACH_DETACH, un, "sd_set_properties: "
+		    "slow IO threshold set to %llu\n",
+		    un->un_slow_io_threshold);
+	}
+
 	if (strcasecmp(name, "retries-victim") == 0) {
 		if (ddi_strtol(value, &endptr, 0, &val) == 0) {
 			un->un_victim_retry_count = val;
@@ -7595,6 +7616,8 @@ sd_unit_attach(dev_info_t *devi)
 	 * device config table.
 	 */
 	un->un_reserve_release_time = 5;
+
+	un->un_slow_io_threshold = sd_g_slow_io_threshold;
 
 	/*
 	 * Set up the default maximum transfer size. Note that this may
@@ -16884,6 +16907,33 @@ sdrunout(caddr_t arg)
 	return (1);
 }
 
+static void
+sd_slow_io_ereport(struct scsi_pkt *pktp)
+{
+	struct buf *bp;
+	struct sd_lun *un;
+	char *devid;
+
+	ASSERT(pktp != NULL);
+	bp = (struct buf *)pktp->pkt_private;
+	ASSERT(bp != NULL);
+	un = SD_GET_UN(bp);
+	ASSERT(un != NULL);
+
+	SD_ERROR(SD_LOG_IO_CORE | SD_LOG_ERROR, un,
+	    "Slow IO detected SD: 0x%p delta in nsec: %llu",
+	    (void *)un, pktp->pkt_stop - pktp->pkt_start);
+
+	devid = DEVI(un->un_sd->sd_dev)->devi_devid_str;
+	scsi_fm_ereport_post(un->un_sd, 0, NULL, "cmd.disk.slow-io",
+	    fm_ena_generate(0, FM_ENA_FMT1), devid, NULL, DDI_NOSLEEP, NULL,
+	    FM_VERSION, DATA_TYPE_UINT8, FM_EREPORT_VERS0,
+	    "start", DATA_TYPE_UINT64, pktp->pkt_start,
+	    "stop", DATA_TYPE_UINT64, pktp->pkt_stop,
+	    "delta", DATA_TYPE_UINT64, pktp->pkt_stop - pktp->pkt_start,
+	    "threshold", DATA_TYPE_UINT64, un->un_slow_io_threshold,
+	    NULL);
+}
 
 /*
  *    Function: sdintr
@@ -16938,6 +16988,10 @@ sdintr(struct scsi_pkt *pktp)
 	un->un_in_callback++;
 
 	SD_UPDATE_KSTATS(un, kstat_runq_exit, bp);
+	if ((pktp->pkt_stop - pktp->pkt_start) > un->un_slow_io_threshold) {
+		sd_slow_io_ereport(pktp);
+	}
+
 
 #ifdef	SDDEBUG
 	if (bp == un->un_retry_bp) {

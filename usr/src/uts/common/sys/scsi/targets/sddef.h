@@ -526,6 +526,7 @@ struct sd_lun {
 	 * sense code.
 	 */
 	uint_t		un_sonoma_failure_count;
+	hrtime_t 	un_slow_io_threshold;
 
 	/*
 	 * Support for failfast operation.
