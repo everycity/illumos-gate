@@ -210,6 +210,12 @@ extern "C" {
  */
 #define	ESC_DEV_DLE		"ESC_dev_dle"
 
+/* device retired */
+#define	ESC_DEV_RETIRE		"ESC_dev_retire"
+
+/* device unretire */
+#define	ESC_DEV_UNRETIRE	"ESC_dev_unretire"
+
 /* LUN has received an eject request from the user */
 #define	ESC_DEV_EJECT_REQUEST	"ESC_dev_eject_request"
 

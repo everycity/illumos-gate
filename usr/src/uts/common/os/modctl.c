@@ -64,6 +64,8 @@
 #include <sys/sysmacros.h>
 #include <sys/sysevent.h>
 #include <sys/sysevent_impl.h>
+#include <sys/sysevent/eventdefs.h>
+#include <sys/sysevent/dev.h>
 #include <sys/instance.h>
 #include <sys/modhash.h>
 #include <sys/modhash_impl.h>
@@ -967,6 +969,52 @@ convert_constraint_string(char *constraints, size_t len)
 
 	return (array);
 }
+
+static void
+publish_retire_event(char *path, int retire)
+{
+	sysevent_t *ev;
+	sysevent_id_t eid;
+	sysevent_value_t se_val;
+	sysevent_attr_list_t *ev_attr_list = NULL;
+
+	ev = sysevent_alloc(EC_DEV_STATUS,
+	    retire ? ESC_DEV_RETIRE : ESC_DEV_UNRETIRE, EC_DEVFS, SE_SLEEP);
+	if (ev == NULL) {
+		goto fail;
+	}
+
+	se_val.value_type = SE_DATA_TYPE_STRING;
+	se_val.value.sv_string = path;
+
+	if (sysevent_add_attr(&ev_attr_list, DEV_PHYS_PATH,
+	    &se_val, SE_SLEEP) != 0) {
+		goto fail;
+	}
+
+	if (sysevent_attach_attributes(ev, ev_attr_list) != 0) {
+		goto fail;
+	}
+
+	if (log_sysevent(ev, SE_SLEEP, &eid) != 0) {
+		goto fail;
+	}
+
+	sysevent_free(ev);
+	return;
+
+fail:
+
+	cmn_err(CE_WARN, "failed to log device %s event for %s",
+	    retire ? "retire" : "unretire", path);
+
+	if (ev_attr_list != NULL) {
+		sysevent_free_attr(ev_attr_list);
+	}
+
+	sysevent_free(ev);
+}
+
 /*ARGSUSED*/
 static int
 modctl_retire(char *path, char *uconstraints, size_t ulen)
@@ -1046,6 +1094,9 @@ modctl_retire(char *path, char *uconstraints, size_t ulen)
 	}
 	if (moddebug & MODDEBUG_RETIRE)
 		cmn_err(CE_NOTE, "Persisted retire of device: %s", devpath);
+
+	/* Issue sysevent. */
+	publish_retire_event(devpath, 1);
 
 	kmem_free(devpath, strlen(devpath) + 1);
 	return (0);
@@ -1143,6 +1194,9 @@ modctl_unretire(char *path)
 		cmn_err(CE_WARN, "cannot unretire device: error %d, path %s\n",
 		    retval, devpath);
 	}
+
+	/* Issue sysevent. */
+	publish_retire_event(devpath, 0);
 
 	kmem_free(devpath, strlen(devpath) + 1);
 
