@@ -122,6 +122,22 @@ msgstr "The device will not be usable.\n"
 msgid "DISK-8000-5C.action"
 msgstr "Schedule a repair procedure to replace the affected device. Use 'fmadm faulty' to find the affected disk. If this is a battery-backed RAM disk or similar device, you can also try to reactivate the device using 'fmadm acquit' once the battery is charged\n"
 #
+# code: DISK-8000-6R
+# keys: fault.io.disk.device-errors-exceeded
+#
+msgid "DISK-8000-6R.type"
+msgstr "Fault"
+msgid "DISK-8000-6R.severity"
+msgstr "Critical"
+msgid "DISK-8000-6R.description"
+msgstr "A disk device has experienced too many device errors.\n"
+msgid "DISK-8000-6R.response"
+msgstr "An attempt has been made to take the disk out of service. If the device is part of an active ZFS pool, the device still may be in service.\n"
+msgid "DISK-8000-6R.impact"
+msgstr "Optionally degraded redundancy and performance.\n"
+msgid "DISK-8000-6R.action"
+msgstr "Determine the cause of the fault using fmdump -v -u <EVENT_ID> and schedule a repair service.\n"
+#
 # code: DISK-8000-5C
 # keys: fault.io.disk.attach-failure
 #
