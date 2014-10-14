@@ -11170,6 +11170,16 @@ sdread(dev_t dev, struct uio *uio, cred_t *cred_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
+	mutex_enter(SD_MUTEX(un));
+	while (un->un_state == SD_STATE_ATTACHING)
+		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
+
+	if (un->un_state == SD_STATE_ATTACH_FAILED) {
+		mutex_exit(SD_MUTEX(un));
+		SD_ERROR(SD_LOG_READ_WRITE, un, "sdread: attach failed\n");
+		return (EIO);
+	}
+	mutex_exit(SD_MUTEX(un));
 
 	if (!SD_IS_VALID_LABEL(un) && !ISCD(un)) {
 		mutex_enter(SD_MUTEX(un));
@@ -11179,16 +11189,8 @@ sdread(dev_t dev, struct uio *uio, cred_t *cred_p)
 		 * if it's power level is changing.
 		 */
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING) ||
-		    (un->un_state == SD_STATE_ATTACHING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-		}
-
-		if (un->un_state == SD_STATE_ATTACH_FAILED) {
-			mutex_exit(SD_MUTEX(un));
-			SD_ERROR(SD_LOG_READ_WRITE, un,
-			    "sdread: attach failed\n");
-			return (EIO);
 		}
 
 		un->un_ncmds_in_driver++;
@@ -11270,6 +11272,17 @@ sdwrite(dev_t dev, struct uio *uio, cred_t *cred_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
+	mutex_enter(SD_MUTEX(un));
+	while (un->un_state == SD_STATE_ATTACHING)
+		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
+
+	if (un->un_state == SD_STATE_ATTACH_FAILED) {
+		mutex_exit(SD_MUTEX(un));
+		SD_ERROR(SD_LOG_READ_WRITE, un, "sdwrite: attach failed\n");
+		return (EIO);
+	}
+	mutex_exit(SD_MUTEX(un));
+
 	if (!SD_IS_VALID_LABEL(un) && !ISCD(un)) {
 		mutex_enter(SD_MUTEX(un));
 		/*
@@ -11278,16 +11291,8 @@ sdwrite(dev_t dev, struct uio *uio, cred_t *cred_p)
 		 * if it's power level is changing.
 		 */
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING) ||
-		    (un->un_state == SD_STATE_ATTACHING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-		}
-
-		if (un->un_state == SD_STATE_ATTACH_FAILED) {
-			mutex_exit(SD_MUTEX(un));
-			SD_ERROR(SD_LOG_READ_WRITE, un,
-			    "sdwrite: attach failed\n");
-			return (EIO);
 		}
 
 		un->un_ncmds_in_driver++;
@@ -11369,6 +11374,17 @@ sdaread(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
+	mutex_enter(SD_MUTEX(un));
+	while (un->un_state == SD_STATE_ATTACHING)
+		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
+
+	if (un->un_state == SD_STATE_ATTACH_FAILED) {
+		mutex_exit(SD_MUTEX(un));
+		SD_ERROR(SD_LOG_READ_WRITE, un, "sdaread: attach failed\n");
+		return (EIO);
+	}
+	mutex_exit(SD_MUTEX(un));
+
 	if (!SD_IS_VALID_LABEL(un) && !ISCD(un)) {
 		mutex_enter(SD_MUTEX(un));
 		/*
@@ -11377,16 +11393,8 @@ sdaread(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 		 * if it's power level is changing.
 		 */
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING) ||
-		    (un->un_state == SD_STATE_ATTACHING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-		}
-
-		if (un->un_state == SD_STATE_ATTACH_FAILED) {
-			mutex_exit(SD_MUTEX(un));
-			SD_ERROR(SD_LOG_READ_WRITE, un,
-			    "sdaread: attach failed\n");
-			return (EIO);
 		}
 
 		un->un_ncmds_in_driver++;
@@ -11468,6 +11476,18 @@ sdawrite(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
+	mutex_enter(SD_MUTEX(un));
+	while (un->un_state == SD_STATE_ATTACHING)
+		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
+
+	if (un->un_state == SD_STATE_ATTACH_FAILED) {
+		mutex_exit(SD_MUTEX(un));
+		SD_ERROR(SD_LOG_READ_WRITE, un,
+		    "sdawrite: attach failed\n");
+		return (EIO);
+	}
+	mutex_exit(SD_MUTEX(un));
+
 	if (!SD_IS_VALID_LABEL(un) && !ISCD(un)) {
 		mutex_enter(SD_MUTEX(un));
 		/*
@@ -11476,16 +11496,8 @@ sdawrite(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 		 * if it's power level is changing.
 		 */
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING) ||
-		    (un->un_state == SD_STATE_ATTACHING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-		}
-
-		if (un->un_state == SD_STATE_ATTACH_FAILED) {
-			mutex_exit(SD_MUTEX(un));
-			SD_ERROR(SD_LOG_READ_WRITE, un,
-			    "sdawrite: attach failed\n");
-			return (EIO);
 		}
 
 		un->un_ncmds_in_driver++;
