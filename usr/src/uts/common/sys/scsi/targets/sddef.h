@@ -1173,6 +1173,8 @@ struct sd_fi_arq {
 #define	SD_STATE_DUMPING	3
 #define	SD_STATE_SUSPENDED	4
 #define	SD_STATE_PM_CHANGING	5
+#define	SD_STATE_ATTACHING	6
+#define	SD_STATE_ATTACH_FAILED	7
 
 /*
  * The table is to be interpreted as follows: The rows lists all the states
