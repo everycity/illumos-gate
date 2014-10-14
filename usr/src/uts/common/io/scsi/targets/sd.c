@@ -7658,9 +7658,9 @@ sd_unit_attach(dev_info_t *devi)
 		ddi_prop_free(variantp);
 	}
 
-	un->un_cmd_timeout	= SD_IO_TIME;
-
-	un->un_busy_timeout  = SD_BSY_TIMEOUT;
+	un->un_cmd_timeout	= ((ISCD(un)) ? 2 : 1) * (ushort_t)sd_io_time;
+	un->un_uscsi_timeout	= un->un_cmd_timeout;
+	un->un_busy_timeout	= SD_BSY_TIMEOUT;
 
 	/* Info on current states, statuses, etc. (Updated frequently) */
 	un->un_state		= SD_STATE_NORMAL;
@@ -13729,9 +13729,6 @@ sd_init_cdb_limits(struct sd_lun *un)
 
 	un->un_status_len = (int)((un->un_f_arq_enabled == TRUE)
 	    ? sizeof (struct scsi_arq_status) : 1);
-	if (!ISCD(un))
-		un->un_cmd_timeout = (ushort_t)sd_io_time;
-	un->un_uscsi_timeout = ((ISCD(un)) ? 2 : 1) * un->un_cmd_timeout;
 }
 
 
@@ -16543,7 +16540,7 @@ sd_alloc_rqs(struct scsi_device *devp, struct sd_lun *un)
 
 	/* Set up the other needed members in the ARQ scsi_pkt. */
 	un->un_rqs_pktp->pkt_comp   = sdintr;
-	un->un_rqs_pktp->pkt_time   = sd_io_time;
+	un->un_rqs_pktp->pkt_time   = ((ISCD(un)) ? 2 : 1) * sd_io_time;
 	un->un_rqs_pktp->pkt_flags |=
 	    (FLAG_SENSING | FLAG_HEAD);	/* (1222170) */
 
@@ -20162,7 +20159,7 @@ sd_send_scsi_READ_CAPACITY(sd_ssc_t *ssc, uint64_t *capp, uint32_t *lbap,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (sense_buf);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -20378,7 +20375,7 @@ sd_send_scsi_READ_CAPACITY_16(sd_ssc_t *ssc, uint64_t *capp,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (sense_buf);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
 
 	/*
 	 * Read Capacity (16) is a Service Action In command.  One
@@ -20600,7 +20597,7 @@ sd_send_scsi_START_STOP_UNIT(sd_ssc_t *ssc, int pc_flag, int flag,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 200;
+	ucmd_buf.uscsi_timeout	= 3 * un->un_uscsi_timeout;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -20819,7 +20816,7 @@ sd_send_scsi_INQUIRY(sd_ssc_t *ssc, uchar_t *bufaddr, size_t buflen,
 	ucmd_buf.uscsi_rqbuf	= NULL;
 	ucmd_buf.uscsi_rqlen	= 0;
 	ucmd_buf.uscsi_flags	= USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 200;	/* Excessive legacy value */
+	ucmd_buf.uscsi_timeout	= 2 * un->un_uscsi_timeout;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, SD_PATH_DIRECT);
@@ -20922,7 +20919,7 @@ sd_send_scsi_TEST_UNIT_READY(sd_ssc_t *ssc, int flag)
 	if ((flag & SD_DONT_RETRY_TUR) != 0) {
 		ucmd_buf.uscsi_flags |= USCSI_DIAGNOSE;
 	}
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, ((flag & SD_BYPASS_PM) ? SD_PATH_DIRECT :
@@ -21019,7 +21016,7 @@ sd_send_scsi_PERSISTENT_RESERVE_IN(sd_ssc_t *ssc, uchar_t  usr_cmd,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, SD_PATH_STANDARD);
@@ -21125,7 +21122,7 @@ sd_send_scsi_PERSISTENT_RESERVE_OUT(sd_ssc_t *ssc, uchar_t usr_cmd,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_WRITE | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
 
 	switch (usr_cmd) {
 	case SD_SCSI3_REGISTER: {
@@ -21320,7 +21317,7 @@ sd_send_scsi_SYNCHRONIZE_CACHE(struct sd_lun *un, struct dk_callback *dkc)
 	uscmd->uscsi_rqlen = SENSE_LENGTH;
 	uscmd->uscsi_rqresid = SENSE_LENGTH;
 	uscmd->uscsi_flags = USCSI_RQENABLE | USCSI_SILENT;
-	uscmd->uscsi_timeout = sd_io_time;
+	uscmd->uscsi_timeout = un->un_cmd_timeout;
 
 	/*
 	 * Allocate an sd_uscsi_info struct and fill it with the info
@@ -21538,7 +21535,7 @@ sd_send_scsi_GET_CONFIGURATION(sd_ssc_t *ssc, struct uscsi_cmd *ucmdbuf,
 	ucmdbuf->uscsi_cdblen = CDB_GROUP1;
 	ucmdbuf->uscsi_bufaddr = (caddr_t)bufaddr;
 	ucmdbuf->uscsi_buflen = buflen;
-	ucmdbuf->uscsi_timeout = sd_io_time;
+	ucmdbuf->uscsi_timeout = un->un_uscsi_timeout;
 	ucmdbuf->uscsi_rqbuf = (caddr_t)rqbuf;
 	ucmdbuf->uscsi_rqlen = rqbuflen;
 	ucmdbuf->uscsi_flags = USCSI_RQENABLE|USCSI_SILENT|USCSI_READ;
@@ -21631,7 +21628,7 @@ sd_send_scsi_feature_GET_CONFIGURATION(sd_ssc_t *ssc,
 	ucmdbuf->uscsi_cdblen = CDB_GROUP1;
 	ucmdbuf->uscsi_bufaddr = (caddr_t)bufaddr;
 	ucmdbuf->uscsi_buflen = buflen;
-	ucmdbuf->uscsi_timeout = sd_io_time;
+	ucmdbuf->uscsi_timeout = un->un_uscsi_timeout;
 	ucmdbuf->uscsi_rqbuf = (caddr_t)rqbuf;
 	ucmdbuf->uscsi_rqlen = rqbuflen;
 	ucmdbuf->uscsi_flags = USCSI_RQENABLE|USCSI_SILENT|USCSI_READ;
@@ -21744,7 +21741,7 @@ sd_send_scsi_MODE_SENSE(sd_ssc_t *ssc, int cdbsize, uchar_t *bufaddr,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -21863,7 +21860,7 @@ sd_send_scsi_MODE_SELECT(sd_ssc_t *ssc, int cdbsize, uchar_t *bufaddr,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_WRITE | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -22001,7 +21998,7 @@ sd_send_scsi_RDWR(sd_ssc_t *ssc, uchar_t cmd, void *bufaddr,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= flag | USCSI_RQENABLE | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_cmd_timeout;
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
 
@@ -22083,7 +22080,7 @@ sd_send_scsi_LOG_SENSE(sd_ssc_t *ssc, uchar_t *bufaddr, uint16_t buflen,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -22215,7 +22212,7 @@ sd_send_scsi_GET_EVENT_STATUS_NOTIFICATION(sd_ssc_t *ssc, uchar_t *bufaddr,
 	ucmd_buf.uscsi_rqbuf	= NULL;
 	ucmd_buf.uscsi_rqlen	= 0;
 	ucmd_buf.uscsi_flags	= USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 60;
+	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, SD_PATH_DIRECT);
@@ -28105,7 +28102,7 @@ sr_read_tochdr(dev_t dev, caddr_t data, int flag)
 	com->uscsi_cdblen  = CDB_GROUP1;
 	com->uscsi_bufaddr = buffer;
 	com->uscsi_buflen  = 0x04;
-	com->uscsi_timeout = 300;
+	com->uscsi_timeout = 3 * un->un_cmd_timeout;
 	com->uscsi_flags   = USCSI_DIAGNOSE|USCSI_SILENT|USCSI_READ;
 
 	rval = sd_send_scsi_cmd(dev, com, FKIOCTL, UIO_SYSSPACE,

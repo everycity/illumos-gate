@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 /*
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
@@ -51,6 +52,11 @@ int	vhci_debug = VHCI_DEBUG_DEFAULT_VAL;
 
 /* retry for the vhci_do_prout command when a not ready is returned */
 int vhci_prout_not_ready_retry = 180;
+
+/*
+ * Timeout in seconds for SCSI commands used by vHCI.
+ */
+int vhci_io_time = 30;
 
 /*
  * These values are defined to support the internal retry of
@@ -1385,7 +1391,7 @@ pkt_cleanup:
 			}
 
 			rel_pkt->pkt_cdbp[0] = SCMD_RELEASE;
-			rel_pkt->pkt_time = 60;
+			rel_pkt->pkt_time = vhci_io_time;
 
 			/*
 			 * Ignore the return value.  If it will fail
@@ -3956,7 +3962,7 @@ vhci_update_pathstates(void *arg)
 				(void) scsi_setup_cdb((union scsi_cdb *)
 				    (uintptr_t)pkt->pkt_cdbp, SCMD_READ, 1, 1,
 				    0);
-				pkt->pkt_time = 3*30;
+				pkt->pkt_time = 2 * vhci_io_time;
 				pkt->pkt_flags = FLAG_NOINTR;
 				pkt->pkt_path_instance =
 				    mdi_pi_get_path_instance(pip);
@@ -5221,7 +5227,7 @@ vhci_pathinfo_online(dev_info_t *vdip, mdi_pathinfo_t *pip, int flags)
 				goto failure;
 			}
 			pkt->pkt_cdbp[0] = SCMD_RELEASE;
-			pkt->pkt_time = 60;
+			pkt->pkt_time = vhci_io_time;
 
 			VHCI_DEBUG(1, (CE_NOTE, NULL,
 			    "!vhci_path_online: path:%p "
@@ -6977,7 +6983,7 @@ next_pathclass:
 			pkt->pkt_flags = FLAG_NOINTR;
 check_path_again:
 			pkt->pkt_path_instance = mdi_pi_get_path_instance(npip);
-			pkt->pkt_time = 3*30;
+			pkt->pkt_time = 2 * vhci_io_time;
 
 			if (scsi_transport(pkt) == TRAN_ACCEPT) {
 				switch (pkt->pkt_reason) {
@@ -8338,7 +8344,7 @@ vhci_uscsi_send_sense(struct scsi_pkt *pkt, mp_uscsi_cmd_t *mp_uscmdp)
 	mp_uscmdp->rqbp = rqbp;
 	rqbp->b_private = mp_uscmdp;
 	rqpkt->pkt_flags |= FLAG_SENSING;
-	rqpkt->pkt_time = 60;
+	rqpkt->pkt_time = vhci_io_time;
 	rqpkt->pkt_comp = vhci_uscsi_iodone;
 	rqpkt->pkt_private = mp_uscmdp;
 
@@ -8554,6 +8560,9 @@ vhci_uscsi_iostart(struct buf *bp)
 	}
 
 	pkt->pkt_time = uscmdp->uscsi_timeout;
+	if (pkt->pkt_time == 0)
+		pkt->pkt_time = vhci_io_time;
+
 	bcopy(uscmdp->uscsi_cdb, pkt->pkt_cdbp, (size_t)uscmdp->uscsi_cdblen);
 	pkt->pkt_comp = vhci_uscsi_iodone;
 	pkt->pkt_private = mp_uscmdp;
