@@ -1258,7 +1258,6 @@ static void sd_register_devid(sd_ssc_t *ssc, dev_info_t *devi,
 static int  sd_get_devid(sd_ssc_t *ssc);
 static ddi_devid_t sd_create_devid(sd_ssc_t *ssc);
 static int  sd_write_deviceid(sd_ssc_t *ssc);
-static int  sd_get_devid_page(struct sd_lun *un, uchar_t *wwn, int *len);
 static int  sd_check_vpd_page_support(sd_ssc_t *ssc);
 
 static void sd_setup_pm(sd_ssc_t *ssc, dev_info_t *devi);
@@ -6724,12 +6723,12 @@ sdpower(dev_info_t *devi, int component, int level)
 	int		medium_present;
 	time_t		intvlp;
 	struct pm_trans_data	sd_pm_tran_data;
-	uchar_t		save_state;
+	uchar_t		save_state = SD_STATE_NORMAL;
 	int		sval;
 	uchar_t		state_before_pm;
 	int		got_semaphore_here;
 	sd_ssc_t	*ssc;
-	int	last_power_level;
+	int	last_power_level = SD_SPINDLE_UNINIT;
 
 	instance = ddi_get_instance(devi);
 
@@ -8499,8 +8498,6 @@ sd_unit_attach(dev_info_t *devi)
 	 */
 wm_cache_failed:
 devid_failed:
-
-setup_pm_failed:
 	ddi_remove_minor_node(devi, NULL);
 
 cmlb_attach_failed:
@@ -8619,8 +8616,6 @@ create_errstats_failed:
 	sema_destroy(&un->un_semoclose);
 	cv_destroy(&un->un_state_cv);
 
-getrbuf_failed:
-
 	sd_free_rqs(un);
 
 alloc_rqs_failed:
@@ -8628,7 +8623,6 @@ alloc_rqs_failed:
 	devp->sd_private = NULL;
 	bzero(un, sizeof (struct sd_lun));	/* Clear any stale data! */
 
-get_softstate_failed:
 	/*
 	 * Note: the man pages are unclear as to whether or not doing a
 	 * ddi_soft_state_free(sd_state, instance) is the right way to
@@ -22569,9 +22563,9 @@ skip_ready_valid:
 
 		if ((err == 0) &&
 		    ((cmd == DKIOCSETEFI) ||
-		    (un->un_f_pkstats_enabled) &&
+		    ((un->un_f_pkstats_enabled) &&
 		    (cmd == DKIOCSAPART || cmd == DKIOCSVTOC ||
-		    cmd == DKIOCSEXTVTOC))) {
+		    cmd == DKIOCSEXTVTOC)))) {
 
 			tmprval = cmlb_validate(un->un_cmlbhandle, CMLB_SILENT,
 			    (void *)SD_PATH_DIRECT);
@@ -26116,8 +26110,7 @@ sddump(dev_t dev, caddr_t addr, daddr_t blkno, int nblk)
 			    ((uint64_t)(blkno * un->un_sys_blocksize)) -
 			    ((uint64_t)(tgt_blkno * un->un_tgt_blocksize));
 
-			ASSERT((io_start_offset >= 0) &&
-			    (io_start_offset < un->un_tgt_blocksize));
+			ASSERT(io_start_offset < un->un_tgt_blocksize);
 			/*
 			 * Do the modify portion of read modify write.
 			 */
@@ -26679,10 +26672,10 @@ sd_persistent_reservation_in_read_keys(struct sd_lun *un,
 	sd_prin_readkeys_t	*in;
 	mhioc_inkeys_t		*ptr;
 	mhioc_key_list_t	li;
-	uchar_t			*data_bufp;
-	int 			data_len;
+	uchar_t			*data_bufp = NULL;
+	int 			data_len = 0;
 	int			rval = 0;
-	size_t			copysz;
+	size_t			copysz = 0;
 	sd_ssc_t		*ssc;
 
 	if ((ptr = (mhioc_inkeys_t *)usrp) == NULL) {
@@ -26696,7 +26689,6 @@ sd_persistent_reservation_in_read_keys(struct sd_lun *un,
 	 * Get the listsize from user
 	 */
 #ifdef _MULTI_DATAMODEL
-
 	switch (ddi_model_convert_from(flag & FMODELS)) {
 	case DDI_MODEL_ILP32:
 		copysz = sizeof (struct mhioc_key_list32);
@@ -26846,7 +26838,7 @@ sd_persistent_reservation_in_read_resv(struct sd_lun *un,
 	int 			data_len;
 	int			rval = 0;
 	int			i;
-	size_t			copysz;
+	size_t			copysz = 0;
 	mhioc_resv_desc_t	*bufp;
 	sd_ssc_t		*ssc;
 
@@ -29558,8 +29550,9 @@ sd_range_lock(struct sd_lun *un, daddr_t startb, daddr_t endb, ushort_t typ)
 			 */
 			ASSERT(!(sl_wmp->wm_flags & SD_WM_BUSY));
 			if (sl_wmp->wm_wanted_count == 0) {
-				if (wmp != NULL)
+				if (wmp != NULL) {
 					CHK_N_FREEWMP(un, wmp);
+				}
 				wmp = sl_wmp;
 			}
 			sl_wmp = NULL;
