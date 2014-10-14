@@ -1309,15 +1309,6 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	TAILQ_INIT(&mpt->m_fminj_cmdq);
 #endif
 
-	/*
-	 * Disable hardware interrupt since we're not ready to
-	 * handle it yet.
-	 */
-	MPTSAS_DISABLE_INTR(mpt);
-	if (mptsas_register_intrs(mpt) == FALSE)
-		goto fail;
-	intr_added++;
-
 	mutex_enter(&mpt->m_mutex);
 	/*
 	 * Initialize power management component
