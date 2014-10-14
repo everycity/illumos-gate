@@ -7525,6 +7525,9 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		}
 	}
 
+	(void) ddi_prop_update_int(DDI_DEV_T_NONE, devi,
+	    "allow-unconstrained-retire", 1);
+
 	/*
 	 * Initialize the Request Sense command for the target
 	 */
