@@ -2938,12 +2938,25 @@ sd_prop_op(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op, int mod_flags,
 	struct sd_lun	*un;
 
 	if ((un = ddi_get_soft_state(sd_state, ddi_get_instance(dip))) == NULL)
-		return (ddi_prop_op(dev, dip, prop_op, mod_flags,
-		    name, valuep, lengthp));
+		goto fallback;
+
+	mutex_enter(SD_MUTEX(un));
+	while ((un->un_state == SD_STATE_ATTACHING))
+		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
+
+	if (un->un_state == SD_STATE_ATTACH_FAILED) {
+		mutex_exit(SD_MUTEX(un));
+		goto fallback;
+	}
+	mutex_exit(SD_MUTEX(un));
 
 	return (cmlb_prop_op(un->un_cmlbhandle,
 	    dev, dip, prop_op, mod_flags, name, valuep, lengthp,
 	    SDPART(dev), (void *)SD_PATH_DIRECT));
+
+fallback:
+	return (ddi_prop_op(dev, dip, prop_op, mod_flags, name, valuep,
+	    lengthp));
 }
 
 /*
@@ -5468,6 +5481,8 @@ sd_update_block_info(struct sd_lun *un, uint32_t lbasize, uint64_t capacity)
 }
 
 
+#define	DEVID_IF_KNOWN(d) "devid", DATA_TYPE_STRING, (d) ? (d) : "unknown"
+
 /*
  *    Function: sd_register_devid
  *
@@ -5599,20 +5614,14 @@ sd_register_devid(sd_ssc_t *ssc, dev_info_t *devi, int reservation_flag)
 	 * on the drive and have them fabricated by the ddi layer by calling
 	 * ddi_devid_init and passing the DEVID_FAB flag.
 	 */
-	if (un->un_f_opt_fab_devid == TRUE) {
-		/*
-		 * Depending on EINVAL isn't reliable, since a reserved disk
-		 * may result in invalid geometry, so check to make sure a
-		 * reservation conflict did not occur during attach.
-		 */
-		if ((sd_get_devid(ssc) == EINVAL) &&
-		    (reservation_flag != SD_TARGET_IS_RESERVED)) {
+	if (un->un_f_opt_fab_devid == TRUE &&
+	    reservation_flag != SD_TARGET_IS_RESERVED) {
+		if (sd_get_devid(ssc) == EINVAL)
 			/*
 			 * The devid is invalid AND there is no reservation
 			 * conflict.  Fabricate a new devid.
 			 */
 			(void) sd_create_devid(ssc);
-		}
 
 		/* Register the devid if it exists */
 		if (un->un_devid != NULL) {
@@ -5634,7 +5643,7 @@ sd_register_devid(sd_ssc_t *ssc, dev_info_t *devi, int reservation_flag)
 		/* devid successfully encoded, register devid */
 		(void) ddi_devid_register(SD_DEVINFO(un), un->un_devid);
 
-	} else {
+	} else if (reservation_flag != SD_TARGET_IS_RESERVED) {
 		/*
 		 * Unable to encode a devid based on data available.
 		 * This is not a Sun qualified disk.  Older Sun disk
@@ -7259,6 +7268,7 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	int	tgt;
 	dev_info_t	*pdip = ddi_get_parent(devi);
 	int		max_xfer_size;
+	sd_ssc_t	*ssc;
 	struct sd_fm_internal	*sfip = NULL;
 
 	switch (cmd) {
@@ -8000,6 +8010,34 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		else
 			sfip->fm_log_level = SD_FM_LOG_SILENT;
 	}
+
+	/* Initialize sd_ssc_t for internal uscsi commands */
+	ssc = sd_ssc_init(un);
+
+	mutex_enter(SD_MUTEX(un));
+	/*
+	 * Initialize the devid for the unit. Indicate target reservation so
+	 * that no real I/O is done for devices that need devid fabrication.
+	 * We will try again in sd_unit_attach() if necessary.
+	 */
+	if (un->un_f_devid_supported) {
+		sd_register_devid(ssc, devi, SD_TARGET_IS_RESERVED);
+	}
+	mutex_exit(SD_MUTEX(un));
+
+	/* Uninitialize sd_ssc_t pointer */
+	sd_ssc_fini(ssc);
+
+	cmlb_alloc_handle(&un->un_cmlbhandle);
+
+	if (cmlb_attach(devi, &sd_tgops, (int)devp->sd_inq->inq_dtype,
+	    VOID2BOOLEAN(un->un_f_has_removable_media != 0),
+	    VOID2BOOLEAN(un->un_f_is_hotpluggable != 0),
+	    un->un_node_type, 0, un->un_cmlbhandle,
+	    (void *)SD_PATH_DIRECT) != 0) {
+		goto cmlb_attach_failed;
+	}
+
 	/*
 	 * At this point in the attach, we have enough info in the
 	 * soft state to be able to issue commands to the target.
@@ -8012,6 +8050,10 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	if (taskq_dispatch(sd_tq, sd_unit_attach, devi, KM_PUSHPAGE) != NULL)
 		return (DDI_SUCCESS);
 
+	cmlb_detach(un->un_cmlbhandle, (void *)SD_PATH_DIRECT);
+	cmlb_free_handle(&un->un_cmlbhandle);
+
+cmlb_attach_failed:
 	mutex_enter(SD_MUTEX(un));
 
 	/* Deallocate SCSI FMA memory spaces */
@@ -8215,10 +8257,10 @@ sd_unit_attach(void *arg)
 	uint64_t	capacity;
 	uint_t		lbasize = 0;
 	dev_info_t	*pdip = ddi_get_parent(devi);
-	int		offbyone = 0;
 	int		geom_label_valid = 0;
 	sd_ssc_t	*ssc;
 	int		status;
+	char		*devid;
 
 	/*
 	 * Retrieve the target ID of the device.
@@ -8502,25 +8544,14 @@ sd_unit_attach(void *arg)
 	 */
 	sd_check_emulation_mode(ssc);
 
-	cmlb_alloc_handle(&un->un_cmlbhandle);
-
 #if defined(__i386) || defined(__amd64)
 	/*
 	 * On x86, compensate for off-by-1 legacy error
 	 */
 	if (!un->un_f_has_removable_media && !un->un_f_is_hotpluggable &&
 	    (lbasize == un->un_sys_blocksize))
-		offbyone = CMLB_OFF_BY_ONE;
+		cmlb_workaround_off_by_one(un->un_cmlbhandle);
 #endif
-
-	if (cmlb_attach(devi, &sd_tgops, (int)devp->sd_inq->inq_dtype,
-	    VOID2BOOLEAN(un->un_f_has_removable_media != 0),
-	    VOID2BOOLEAN(un->un_f_is_hotpluggable != 0),
-	    un->un_node_type, offbyone, un->un_cmlbhandle,
-	    (void *)SD_PATH_DIRECT) != 0) {
-		goto cmlb_attach_failed;
-	}
-
 
 	/*
 	 * Read and validate the device's geometry (ie, disk label)
@@ -8534,9 +8565,9 @@ sd_unit_attach(void *arg)
 	mutex_enter(SD_MUTEX(un));
 
 	/*
-	 * Read and initialize the devid for the unit.
+	 * Read and initialize the devid for the unit if not done already.
 	 */
-	if (un->un_f_devid_supported) {
+	if (un->un_f_devid_supported && un->un_devid != NULL) {
 		sd_register_devid(ssc, devi, reservation_flag);
 	}
 	mutex_exit(SD_MUTEX(un));
@@ -8686,6 +8717,7 @@ sd_unit_attach(void *arg)
 	/* attach finished, switch to SD_STATE_NORMAL */
 	mutex_enter(SD_MUTEX(un));
 	New_state(un, SD_STATE_NORMAL);
+	cv_broadcast(&un->un_suspend_cv);
 	mutex_exit(SD_MUTEX(un));
 
 	return;
@@ -8693,12 +8725,9 @@ sd_unit_attach(void *arg)
 	/*
 	 * An error occurred during the attach; clean up & return failure.
 	 */
+
 wm_cache_failed:
 devid_failed:
-	cmlb_detach(un->un_cmlbhandle, (void *)SD_PATH_DIRECT);
-	cmlb_free_handle(&un->un_cmlbhandle);
-
-cmlb_attach_failed:
 	/*
 	 * Cleanup from the scsi_ifsetcap() calls (437868)
 	 */
@@ -8719,23 +8748,23 @@ cmlb_attach_failed:
 	}
 
 spinup_failed:
+	/* attach failed, switch to SD_STATE_ATTACH_FAILED */
+	mutex_enter(SD_MUTEX(un));
+	New_state(un, SD_STATE_ATTACH_FAILED);
+	cv_broadcast(&un->un_suspend_cv);
+	mutex_exit(SD_MUTEX(un));
+
+	devid = DEVI(devi)->devi_devid_str;
 	scsi_fm_ereport_post(un->un_sd, ssc->ssc_uscsi_cmd->uscsi_path_instance,
 	    NULL, "cmd.disk.dev.attach-failed", ssc->ssc_uscsi_info->ui_ena,
-	    "unknown", NULL, DDI_NOSLEEP, NULL,
-	    FM_VERSION, DATA_TYPE_UINT8, FM_EREPORT_VERS0);
+	    devid, NULL, DDI_NOSLEEP, NULL,
+	    FM_VERSION, DATA_TYPE_UINT8, FM_EREPORT_VERS0,
+	    DEVID_IF_KNOWN(devid));
 
 	/* Uninitialize sd_ssc_t pointer */
 	sd_ssc_fini(ssc);
 	SD_ERROR(SD_LOG_ATTACH_DETACH, un, "sd_unit_attach failed: un: %p",
 	    (void *)un);
-
-	ddi_remove_minor_node(devi, NULL);
-	(void) devfs_clean(devi, NULL, DV_CLEAN_FORCE);
-
-	/* attach failed, switch to SD_STATE_ATTACH_FAILED */
-	mutex_enter(SD_MUTEX(un));
-	New_state(un, SD_STATE_ATTACH_FAILED);
-	mutex_exit(SD_MUTEX(un));
 }
 
 
@@ -9101,10 +9130,10 @@ sd_unit_detach(dev_info_t *devi)
 	/* Do not free the softstate if the callback routine is active */
 	sd_sync_with_callback(un);
 
+no_attach_cleanup:
 	cmlb_detach(un->un_cmlbhandle, (void *)SD_PATH_DIRECT);
 	cmlb_free_handle(&un->un_cmlbhandle);
 
-no_attach_cleanup:
 	/*
 	 * Hold the detach mutex here, to make sure that no other threads ever
 	 * can access a (partially) freed soft state structure.
@@ -9223,6 +9252,9 @@ no_attach_cleanup:
 	if ((tgt >= 0) && (tgt < NTARGETS_WIDE)) {
 		sd_scsi_update_lun_on_target(pdip, tgt, SD_SCSI_LUN_DETACH);
 	}
+
+	ddi_remove_minor_node(devi, NULL);
+	(void) devfs_clean(devi, NULL, DV_CLEAN_FORCE);
 
 	return (DDI_SUCCESS);
 
@@ -10394,8 +10426,17 @@ sdopen(dev_t *dev_p, int flag, int otyp, cred_t *cred_p)
 
 	if (!nodelay) {
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING) ||
+		    (un->un_state == SD_STATE_ATTACHING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
+		}
+
+		if (un->un_state == SD_STATE_ATTACH_FAILED) {
+			mutex_exit(SD_MUTEX(un));
+			rval = EIO;
+			SD_ERROR(SD_LOG_OPEN_CLOSE, un,
+			    "sdopen: attach failed, can't open\n");
+			goto open_failed_not_attached;
 		}
 
 		mutex_exit(SD_MUTEX(un));
@@ -10406,6 +10447,12 @@ sdopen(dev_t *dev_p, int flag, int otyp, cred_t *cred_p)
 			goto open_failed_with_pm;
 		}
 		mutex_enter(SD_MUTEX(un));
+	} else if (un->un_state == SD_STATE_ATTACH_FAILED) {
+		mutex_exit(SD_MUTEX(un));
+		rval = EIO;
+		SD_ERROR(SD_LOG_OPEN_CLOSE, un,
+		    "sdopen: attach failed, can't open\n");
+		goto open_failed_not_attached;
 	}
 
 	/* check for previous exclusive open */
@@ -10590,6 +10637,7 @@ open_fail:
 		sd_pm_exit(un);
 	}
 open_failed_with_pm:
+open_failed_not_attached:
 	sema_v(&un->un_semoclose);
 
 	mutex_enter(&sd_detach_mutex);
@@ -10650,8 +10698,9 @@ sdclose(dev_t dev, int flag, int otyp, cred_t *cred_p)
 
 	mutex_enter(SD_MUTEX(un));
 
-	/* Don't proceed if power is being changed. */
-	while (un->un_state == SD_STATE_PM_CHANGING) {
+	/* Don't proceed if power is being changed or we're still attaching. */
+	while ((un->un_state == SD_STATE_PM_CHANGING) ||
+	    (un->un_state == SD_STATE_ATTACHING)) {
 		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 	}
 
@@ -10693,7 +10742,7 @@ sdclose(dev_t dev, int flag, int otyp, cred_t *cred_p)
 			    (void *)SD_PATH_DIRECT);
 			mutex_enter(SD_MUTEX(un));
 
-		} else {
+		} else if (un->un_state != SD_STATE_ATTACH_FAILED) {
 			/*
 			 * Flush any outstanding writes in NVRAM cache.
 			 * Note: SYNCHRONIZE CACHE is an optional SCSI-2
@@ -11130,9 +11179,18 @@ sdread(dev_t dev, struct uio *uio, cred_t *cred_p)
 		 * if it's power level is changing.
 		 */
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING) ||
+		    (un->un_state == SD_STATE_ATTACHING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 		}
+
+		if (un->un_state == SD_STATE_ATTACH_FAILED) {
+			mutex_exit(SD_MUTEX(un));
+			SD_ERROR(SD_LOG_READ_WRITE, un,
+			    "sdread: attach failed\n");
+			return (EIO);
+		}
+
 		un->un_ncmds_in_driver++;
 		mutex_exit(SD_MUTEX(un));
 
@@ -11220,9 +11278,18 @@ sdwrite(dev_t dev, struct uio *uio, cred_t *cred_p)
 		 * if it's power level is changing.
 		 */
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING) ||
+		    (un->un_state == SD_STATE_ATTACHING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 		}
+
+		if (un->un_state == SD_STATE_ATTACH_FAILED) {
+			mutex_exit(SD_MUTEX(un));
+			SD_ERROR(SD_LOG_READ_WRITE, un,
+			    "sdwrite: attach failed\n");
+			return (EIO);
+		}
+
 		un->un_ncmds_in_driver++;
 		mutex_exit(SD_MUTEX(un));
 
@@ -11310,9 +11377,18 @@ sdaread(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 		 * if it's power level is changing.
 		 */
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING) ||
+		    (un->un_state == SD_STATE_ATTACHING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 		}
+
+		if (un->un_state == SD_STATE_ATTACH_FAILED) {
+			mutex_exit(SD_MUTEX(un));
+			SD_ERROR(SD_LOG_READ_WRITE, un,
+			    "sdaread: attach failed\n");
+			return (EIO);
+		}
+
 		un->un_ncmds_in_driver++;
 		mutex_exit(SD_MUTEX(un));
 
@@ -11400,9 +11476,18 @@ sdawrite(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 		 * if it's power level is changing.
 		 */
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING) ||
+		    (un->un_state == SD_STATE_ATTACHING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 		}
+
+		if (un->un_state == SD_STATE_ATTACH_FAILED) {
+			mutex_exit(SD_MUTEX(un));
+			SD_ERROR(SD_LOG_READ_WRITE, un,
+			    "sdawrite: attach failed\n");
+			return (EIO);
+		}
+
 		un->un_ncmds_in_driver++;
 		mutex_exit(SD_MUTEX(un));
 
@@ -11655,9 +11740,21 @@ sdstrategy(struct buf *bp)
 	 * if it's power level is changing.
 	 */
 	while ((un->un_state == SD_STATE_SUSPENDED) ||
-	    (un->un_state == SD_STATE_PM_CHANGING)) {
+	    (un->un_state == SD_STATE_PM_CHANGING) ||
+	    (un->un_state == SD_STATE_ATTACHING)) {
 		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 	}
+
+	if (un->un_state == SD_STATE_ATTACH_FAILED) {
+		mutex_exit(SD_MUTEX(un));
+		bioerror(bp, EIO);
+		bp->b_resid = bp->b_bcount;
+		biodone(bp);
+		SD_ERROR(SD_LOG_READ_WRITE, un,
+		    "sdstrategy: attach failed\n");
+		return (0);
+	}
+
 
 	un->un_ncmds_in_driver++;
 
@@ -15098,9 +15195,13 @@ sd_start_cmds(struct sd_lun *un, struct buf *immed_bp)
 		 * not be put back to normal. Doing so would would
 		 * allow new commands to proceed when they shouldn't,
 		 * the device may be going off.
+		 *
+		 * Similarly, if the state is SD_STATE_ATTACHING we should
+		 * not set it to SD_STATE_NORMAL to avoid corruption.
 		 */
 		if ((un->un_state != SD_STATE_SUSPENDED) &&
-		    (un->un_state != SD_STATE_PM_CHANGING)) {
+		    (un->un_state != SD_STATE_PM_CHANGING) &&
+		    (un->un_state != SD_STATE_ATTACHING)) {
 			New_state(un, SD_STATE_NORMAL);
 		}
 
@@ -22417,11 +22518,6 @@ sdioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cred_p, int *rval_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
-	/* Initialize sd_ssc_t for internal uscsi commands */
-	ssc = sd_ssc_init(un);
-
-	is_valid = SD_IS_VALID_LABEL(un);
-
 	/*
 	 * Moved this wait from sd_uscsi_strategy to here for
 	 * reasons of deadlock prevention. Internal driver commands,
@@ -22430,9 +22526,18 @@ sdioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cred_p, int *rval_p)
 	 */
 	mutex_enter(SD_MUTEX(un));
 	while ((un->un_state == SD_STATE_SUSPENDED) ||
-	    (un->un_state == SD_STATE_PM_CHANGING)) {
+	    (un->un_state == SD_STATE_PM_CHANGING) ||
+	    (un->un_state == SD_STATE_ATTACHING)) {
 		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 	}
+
+	if (un->un_state == SD_STATE_ATTACH_FAILED) {
+		mutex_exit(SD_MUTEX(un));
+		SD_ERROR(SD_LOG_READ_WRITE, un,
+		    "sdioctl: attach failed\n");
+		return (EIO);
+	}
+
 	/*
 	 * Twiddling the counter here protects commands from now
 	 * through to the top of sd_uscsi_strategy. Without the
@@ -22442,6 +22547,14 @@ sdioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cred_p, int *rval_p)
 	 * That would cause problems.
 	 */
 	un->un_ncmds_in_driver++;
+	mutex_exit(SD_MUTEX(un));
+
+	/* Initialize sd_ssc_t for internal uscsi commands */
+	ssc = sd_ssc_init(un);
+
+	is_valid = SD_IS_VALID_LABEL(un);
+
+	mutex_enter(SD_MUTEX(un));
 
 	if (!is_valid &&
 	    (flag & (FNDELAY | FNONBLOCK))) {
@@ -25974,6 +26087,8 @@ sddump(dev_t dev, caddr_t addr, daddr_t blkno, int nblk)
 
 	instance = SDUNIT(dev);
 	if (((un = ddi_get_soft_state(sd_state, instance)) == NULL) ||
+	    (un->un_state == SD_STATE_ATTACHING) ||
+	    (un->un_state == SD_STATE_ATTACH_FAILED) ||
 	    !SD_IS_VALID_LABEL(un) || ISCD(un)) {
 		return (ENXIO);
 	}
@@ -31403,9 +31518,6 @@ sd_tg_getinfo(dev_info_t *devi, int cmd, void *arg, void *tg_cookie)
  *
  *    Context: Kernel thread or interrupt context.
  */
-
-#define	DEVID_IF_KNOWN(d) "devid", DATA_TYPE_STRING, (d) ? (d) : "unknown"
-
 static void
 sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 {
