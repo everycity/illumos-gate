@@ -8044,6 +8044,14 @@ mptsas_restart_cmd(void *arg)
 	mptsas_target_t	*ptgt = NULL;
 
 	mutex_enter(&mpt->m_mutex);
+	/*
+	 * If HBA is being reset, drop incoming event.
+	 */
+	if (mpt->m_in_reset) {
+		NDBG20(("dropping event received prior to reset"));
+		mutex_exit(&mpt->m_mutex);
+		return;
+	}
 
 	mpt->m_restart_cmd_timeid = 0;
 
