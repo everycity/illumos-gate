@@ -233,7 +233,6 @@ int	sd_force_pm_supported		= 0;
 
 void *sd_state				= NULL;
 int sd_io_time				= SD_IO_TIME;
-int sd_failfast_enable			= 1;
 int sd_ua_retry_count			= SD_UA_RETRY_COUNT;
 int sd_report_pfa			= 1;
 int sd_max_throttle			= SD_MAX_THROTTLE;
@@ -1458,7 +1457,7 @@ static void sd_set_retry_bp(struct sd_lun *un, struct buf *bp,
 	clock_t retry_delay, void (*statp)(kstat_io_t *));
 
 static void sd_send_request_sense_command(struct sd_lun *un, struct buf *bp,
-	struct scsi_pkt *pktp);
+	int retry_check_flag, struct scsi_pkt *pktp);
 static void sd_start_retry_command(void *arg);
 static void sd_start_direct_priority_command(void *arg);
 static void sd_return_failed_command(struct sd_lun *un, struct buf *bp,
@@ -1740,6 +1739,35 @@ static void sd_rmw_msg_print_handler(void *arg);
 #define	SD_FAILFAST_ACTIVE		1
 
 /*
+ * Bitmask to control behaviour in failfast active state:
+ *
+ * SD_FAILFAST_ENABLE_FORCE_INACTIVE: When set, allow retries without
+ * SD_RETRIES_FAILFAST to cause transition to failfast inactive state.
+ *
+ * SD_FAILFAST_ENABLE_FAIL_RETRIES: When set, cause retries with the flag
+ * SD_RETRIES_FAILFAST set (following a timeout) to fail when in failfast
+ * active state.
+ *
+ * SD_FAILFAST_ENABLE_FAIL_ALL_RETRIES: When set, cause ALL retries,
+ * regardless of reason, to fail when in failfast active state. This takes
+ * precedence over SD_FAILFAST_FAIL_RETRIES.
+ *
+ * SD_FAILFAST_ENABLE_FAIL_USCSI: When set, discard all commands in the USCSI
+ * chain (sdioctl or driver generated) when in failfast active state.
+ */
+
+#define	SD_FAILFAST_ENABLE_FORCE_INACTIVE	0x01
+#define	SD_FAILFAST_ENABLE_FAIL_RETRIES		0x02
+#define	SD_FAILFAST_ENABLE_FAIL_ALL_RETRIES	0x04
+#define	SD_FAILFAST_ENABLE_FAIL_USCSI		0x08
+
+/*
+ * The default behaviour is to fail all retries due to timeout when in failfast
+ * active state, and not allow other retries to transition to inactive.
+ */
+static int sd_failfast_enable = SD_FAILFAST_ENABLE_FAIL_RETRIES;
+
+/*
  * Bitmask to control behavior of buf(9S) flushes when a transition to
  * the failfast state occurs. Optional bits include:
  *
@@ -1755,10 +1783,10 @@ static void sd_rmw_msg_print_handler(void *arg);
 #define	SD_FAILFAST_FLUSH_ALL_QUEUES	0x02
 
 /*
- * The default behavior is to only flush bufs that have B_FAILFAST set, but
- * to flush all queues within the driver.
+ * The default behavior is to flush all bufs in all queues within the driver.
  */
-static int sd_failfast_flushctl = SD_FAILFAST_FLUSH_ALL_QUEUES;
+static int sd_failfast_flushctl =
+    SD_FAILFAST_FLUSH_ALL_BUFS | SD_FAILFAST_FLUSH_ALL_QUEUES;
 
 #ifdef SD_FAULT_INJECTION
 static uint_t   sd_fault_injection_on = 0;
@@ -7581,9 +7609,12 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	un->un_reset_retry_count = (un->un_retry_count / 2);
 
 	/*
-	 * Set the victim_retry_count to the default un_retry_count
+	 * Set the victim_retry_count to the default un_retry_count.
+	 * This value is used in addition to the standard retry count.
+	 * This can be overridden by entries in sd.conf or the device
+	 * config table.
 	 */
-	un->un_victim_retry_count = (2 * un->un_retry_count);
+	un->un_victim_retry_count = un->un_retry_count;
 
 	/*
 	 * Set the reservation release timeout to the default value of
@@ -12026,6 +12057,13 @@ sd_uscsi_strategy(struct buf *bp)
 
 	mutex_exit(SD_MUTEX(un));
 
+	if (sd_failfast_enable & SD_FAILFAST_ENABLE_FAIL_USCSI) {
+		/*
+		 * Treat all commands as if they have B_FAILFAST set.
+		 */
+		bp->b_flags |= B_FAILFAST;
+	}
+
 	switch (uip->ui_flags) {
 	case SD_PATH_DIRECT:
 		chain_type = SD_CHAIN_DIRECT;
@@ -15548,7 +15586,8 @@ got_pkt:
 			 * Free up the rqs buf and retry
 			 * the original failed cmd.  Update kstat.
 			 */
-			if (bp == un->un_rqs_bp) {
+			if ((un->un_ncmds_in_transport > 0) &&
+			    (bp == un->un_rqs_bp)) {
 				SD_UPDATE_KSTATS(un, kstat_runq_exit, bp);
 				bp = sd_mark_rqs_idle(un, xp);
 				sd_retry_command(un, bp, SD_RETRIES_STANDARD,
@@ -15962,6 +16001,12 @@ sd_return_failed_command_no_restart(struct sd_lun *un, struct buf *bp,
  *		   in the pkt. If FLAG_ISOLATE is set, then the command is
  *		   not retried, it is simply failed.
  *
+ *		   Optionally may be bitwise-OR'ed with SD_RETRIES_FAILFAST
+ *		   to indicate a retry following a command timeout, and check
+ *		   if the target should transition to failfast pending or
+ *		   failfast active. If the buf has B_FAILFAST set, the
+ *		   command should be failed when failfast is active.
+ *
  *		user_funcp - Ptr to function to call before dispatching the
  *		   command. May be NULL if no action needs to be performed.
  *		   (Primarily intended for printing messages.)
@@ -16066,6 +16111,22 @@ sd_retry_command(struct sd_lun *un, struct buf *bp, int retry_check_flag,
 		}
 	}
 
+	if (sd_failfast_enable & SD_FAILFAST_ENABLE_FAIL_RETRIES) {
+		if (sd_failfast_enable & SD_FAILFAST_ENABLE_FAIL_ALL_RETRIES) {
+			/*
+			 * Fail ALL retries when in active failfast state,
+			 * regardless of reason.
+			 */
+			if (un->un_failfast_state == SD_FAILFAST_ACTIVE) {
+				goto fail_command;
+			}
+		}
+		/*
+		 * Treat bufs being retried as if they have the
+		 * B_FAILFAST flag set.
+		 */
+		bp->b_flags |= B_FAILFAST;
+	}
 
 	/*
 	 * If SD_RETRIES_FAILFAST is set, it indicates that either a
@@ -16158,8 +16219,14 @@ sd_retry_command(struct sd_lun *un, struct buf *bp, int retry_check_flag,
 		 * In this case we want to be aggressive about clearing
 		 * the failfast state. Note that this does not affect
 		 * the "failfast pending" condition.
+		 *
+		 * We limit this to retries that are not a side effect of an
+		 * unrelated event, as it would be unwise to clear failfast
+		 * active state when we see retries due to a reset.
 		 */
-		un->un_failfast_state = SD_FAILFAST_INACTIVE;
+		if ((sd_failfast_enable & SD_FAILFAST_ENABLE_FORCE_INACTIVE) &&
+		    (retry_check_flag & SD_RETRIES_MASK) != SD_RETRIES_VICTIM)
+			un->un_failfast_state = SD_FAILFAST_INACTIVE;
 	}
 
 
@@ -16602,7 +16669,7 @@ sd_start_direct_priority_command(void *arg)
 
 static void
 sd_send_request_sense_command(struct sd_lun *un, struct buf *bp,
-	struct scsi_pkt *pktp)
+	int retry_check_flag, struct scsi_pkt *pktp)
 {
 	ASSERT(bp != NULL);
 	ASSERT(un != NULL);
@@ -16629,14 +16696,11 @@ sd_send_request_sense_command(struct sd_lun *un, struct buf *bp,
 	 *    1) the sense buf is busy
 	 *    2) we have 1 or more outstanding commands on the target
 	 *    (the sense data will be cleared or invalidated any way)
-	 *
-	 * Note: There could be an issue with not checking a retry limit here,
-	 * the problem is determining which retry limit to check.
 	 */
 	if ((un->un_sense_isbusy != 0) || (un->un_ncmds_in_transport > 0)) {
 		/* Don't retry if the command is flagged as non-retryable */
 		if ((pktp->pkt_flags & FLAG_DIAGNOSE) == 0) {
-			sd_retry_command(un, bp, SD_RETRIES_NOCHECK,
+			sd_retry_command(un, bp, retry_check_flag,
 			    NULL, NULL, 0, un->un_busy_timeout,
 			    kstat_waitq_enter);
 			SD_TRACE(SD_LOG_IO_CORE | SD_LOG_ERROR, un,
@@ -17475,7 +17539,8 @@ not_successful:
 		 */
 		if ((pktp->pkt_reason == CMD_CMPLT) &&
 		    (SD_GET_PKT_STATUS(pktp) == STATUS_CHECK)) {
-			sd_send_request_sense_command(un, bp, pktp);
+			sd_send_request_sense_command(un, bp,
+			    SD_RETRIES_STANDARD, pktp);
 		} else {
 			sd_return_failed_command(un, bp, EIO);
 		}
@@ -19584,7 +19649,7 @@ sd_pkt_reason_cmd_unx_bus_free(struct sd_lun *un, struct buf *bp,
 	funcp = ((pktp->pkt_statistics & STAT_PERR) == 0) ?
 	    sd_print_retry_msg : NULL;
 
-	sd_retry_command(un, bp, (SD_RETRIES_STANDARD | SD_RETRIES_ISOLATE),
+	sd_retry_command(un, bp, (SD_RETRIES_VICTIM | SD_RETRIES_ISOLATE),
 	    funcp, NULL, EIO, SD_RESTART_TIMEOUT, NULL);
 }
 
@@ -19687,7 +19752,8 @@ sd_pkt_status_check_condition(struct sd_lun *un, struct buf *bp,
 	if (un->un_f_arq_enabled == FALSE) {
 		SD_INFO(SD_LOG_IO_CORE, un, "sd_pkt_status_check_condition: "
 		    "no ARQ, sending request sense command\n");
-		sd_send_request_sense_command(un, bp, pktp);
+		sd_send_request_sense_command(un, bp, SD_RETRIES_STANDARD,
+		    pktp);
 	} else {
 		SD_INFO(SD_LOG_IO_CORE, un, "sd_pkt_status_check_condition: "
 		    "ARQ,retrying request sense command\n");
