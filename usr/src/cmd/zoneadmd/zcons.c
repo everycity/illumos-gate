@@ -22,7 +22,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2013 Joyent, Inc.  All rights reserved.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
  */
 
 /*
@@ -121,7 +121,6 @@
 
 static int	serverfd = -1;	/* console server unix domain socket fd */
 char boot_args[BOOTARGS_MAX];
-char bad_boot_arg[BOOTARGS_MAX];
 
 /*
  * The eventstream is a simple one-directional flow of messages from the
@@ -131,7 +130,10 @@ char bad_boot_arg[BOOTARGS_MAX];
  */
 static int eventstream[2];
 
-
+/* flag used to cope with race creating master zcons devlink */
+static boolean_t master_zcons_failed = B_FALSE;
+/* flag to track if we've seen a state change when there is no master zcons */
+static boolean_t state_changed = B_FALSE;
 
 int
 eventstream_init()
@@ -412,7 +414,8 @@ devlinks:
 	 *
 	 * In very rare cases the open returns ENOENT if devfs doesn't have
 	 * everything setup yet due to heavy zone startup load. Wait for
-	 * 1 sec. and retry a few times before we fail to boot the zone.
+	 * 1 sec. and retry a few times. Even if we can't setup the zone's
+	 * console, we still go ahead and boot the zone.
 	 */
 	(void) snprintf(conspath, sizeof (conspath), "/dev/zcons/%s/%s",
 	    zone_name, ZCONS_MASTER_NAME);
@@ -425,7 +428,7 @@ devlinks:
 	if (masterfd == -1) {
 		zerror(zlogp, B_TRUE, "ERROR: could not open master side of "
 		    "zone console for %s to acquire slave handle", zone_name);
-		goto error;
+		master_zcons_failed = B_TRUE;
 	}
 
 	(void) snprintf(conspath, sizeof (conspath), "/dev/zcons/%s/%s",
@@ -436,33 +439,35 @@ devlinks:
 			break;
 		(void) sleep(1);
 	}
-	if (slavefd == -1) {
+	if (slavefd == -1)
 		zerror(zlogp, B_TRUE, "ERROR: could not open slave side of zone"
 		    " console for %s to acquire slave handle", zone_name);
-		(void) close(masterfd);
-		goto error;
-	}
+
 	/*
 	 * This ioctl can occasionally return ENXIO if devfs doesn't have
 	 * everything plumbed up yet due to heavy zone startup load. Wait for
 	 * 1 sec. and retry a few times before we fail to boot the zone.
 	 */
-	for (i = 0; i < ZCONS_RETRY; i++) {
-		if (ioctl(masterfd, ZC_HOLDSLAVE, (caddr_t)(intptr_t)slavefd)
-		    == 0) {
-			rv = 0;
-			break;
-		} else if (errno != ENXIO) {
-			break;
+	if (masterfd != -1 && slavefd != -1) {
+		for (i = 0; i < ZCONS_RETRY; i++) {
+			if (ioctl(masterfd, ZC_HOLDSLAVE,
+			    (caddr_t)(intptr_t)slavefd) == 0) {
+				rv = 0;
+				break;
+			} else if (errno != ENXIO) {
+				break;
+			}
+			(void) sleep(1);
 		}
-		(void) sleep(1);
+		if (rv != 0)
+			zerror(zlogp, B_TRUE, "ERROR: error while acquiring "
+			    "slave handle of zone console for %s", zone_name);
 	}
-	if (rv != 0)
-		zerror(zlogp, B_TRUE, "ERROR: error while acquiring slave "
-		    "handle of zone console for %s", zone_name);
 
-	(void) close(slavefd);
-	(void) close(masterfd);
+	if (slavefd != -1)
+		(void) close(slavefd);
+	if (masterfd != -1)
+		(void) close(masterfd);
 
 error:
 	if (ddef_hdl)
@@ -672,14 +677,6 @@ event_message(int clifd, char *clilocale, zone_evt_t evt)
 	case Z_EVT_ZONE_BOOTFAILED:
 		str = "NOTICE: Zone boot failed";
 		break;
-	case Z_EVT_ZONE_BADARGS:
-		/*LINTED*/
-		(void) snprintf(lmsg, sizeof (lmsg),
-		    localize_msg(clilocale,
-		    "WARNING: Ignoring invalid boot arguments: %s"),
-		    bad_boot_arg);
-		lstr = lmsg;
-		break;
 	default:
 		return;
 	}
@@ -873,7 +870,6 @@ init_console(zlog_t *zlogp)
 	if (init_console_dev(zlogp) == -1) {
 		zerror(zlogp, B_FALSE,
 		    "console setup: device initialization failed");
-		return (-1);
 	}
 
 	if ((serverfd = init_console_sock(zlogp)) == -1) {
@@ -882,6 +878,17 @@ init_console(zlog_t *zlogp)
 		return (-1);
 	}
 	return (0);
+}
+
+/*
+ * Maintain a simple flag that tracks if we have seen at least one state
+ * change. This is currently only used to handle the special case where we are
+ * running without a console device, which is what normally drives shutdown.
+ */
+void
+zcons_statechanged()
+{
+	state_changed = B_TRUE;
 }
 
 /*
@@ -902,6 +909,7 @@ serve_console(zlog_t *zlogp)
 	int masterfd;
 	zone_state_t zstate;
 	char conspath[MAXPATHLEN];
+	static boolean_t cons_warned = B_FALSE;
 
 	(void) snprintf(conspath, sizeof (conspath),
 	    "/dev/zcons/%s/%s", zone_name, ZCONS_MASTER_NAME);
@@ -909,6 +917,46 @@ serve_console(zlog_t *zlogp)
 	for (;;) {
 		masterfd = open(conspath, O_RDWR|O_NONBLOCK|O_NOCTTY);
 		if (masterfd == -1) {
+			if (master_zcons_failed) {
+				/*
+				 * If we don't have a console and the zone is
+				 * not shutting down, there may have been a
+				 * race/failure with devfs while creating the
+				 * console. In this case we want to leave the
+				 * zone up, even without a console, so
+				 * periodically recheck.
+				 */
+				int i;
+
+				/*
+				 * In the normal flow of this loop, we use
+				 * do_console_io to give things a chance to get
+				 * going first. However, in this case we can't
+				 * use that, so we have to wait for at least
+				 * one state change before checking the state.
+				 */
+				for (i = 0; i < 60; i++) {
+					if (state_changed)
+						break;
+					(void) sleep(1);
+				}
+
+				if (i < 60 && zone_get_state(zone_name,
+				    &zstate) == Z_OK &&
+				    (zstate == ZONE_STATE_READY ||
+				    zstate == ZONE_STATE_RUNNING)) {
+					if (!cons_warned) {
+						zerror(zlogp, B_FALSE,
+						    "WARNING: missing zone "
+						    "console for %s",
+						    zone_name);
+						cons_warned = B_TRUE;
+					}
+					(void) sleep(ZCONS_RETRY);
+					continue;
+				}
+			}
+
 			zerror(zlogp, B_TRUE, "failed to open console master");
 			(void) mutex_lock(&lock);
 			goto death;

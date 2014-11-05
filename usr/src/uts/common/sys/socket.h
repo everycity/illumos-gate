@@ -19,6 +19,8 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -37,6 +39,9 @@
 
 /* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
 
+/*
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ */
 #ifndef	_SYS_SOCKET_H
 #define	_SYS_SOCKET_H
 
@@ -291,8 +296,9 @@ struct	linger {
 #define	AF_INET_OFFLOAD	30		/* Sun private; do not use */
 #define	AF_TRILL	31		/* TRILL interface */
 #define	AF_PACKET	32		/* PF_PACKET Linux socket interface */
+#define	AF_LX_NETLINK	33		/* Linux-compatible netlink */
 
-#define	AF_MAX		32
+#define	AF_MAX		33
 
 /*
  * Protocol families, same as address families for now.
@@ -332,6 +338,7 @@ struct	linger {
 #define	PF_INET_OFFLOAD	AF_INET_OFFLOAD	/* Sun private; do not use */
 #define	PF_TRILL	AF_TRILL
 #define	PF_PACKET	AF_PACKET
+#define	PF_LX_NETLINK	AF_LX_NETLINK
 
 #define	PF_MAX		AF_MAX
 
@@ -522,7 +529,6 @@ struct cmsghdr {
 #endif /* (_XPG4_2) && !defined(_XPG5) */
 
 #if !defined(_KERNEL) || defined(_BOOT)
-#ifdef	__STDC__
 extern int accept(int, struct sockaddr *_RESTRICT_KYWD, Psocklen_t);
 extern int accept4(int, struct sockaddr *_RESTRICT_KYWD, Psocklen_t, int);
 extern int bind(int, const struct sockaddr *, socklen_t);
@@ -547,27 +553,6 @@ extern int socket(int, int, int);
 #if !defined(_XPG4_2) || defined(_XPG6) || defined(__EXTENSIONS__)
 extern int sockatmark(int);
 #endif /* !defined(_XPG4_2) || defined(_XPG6) || defined(__EXTENSIONS__) */
-#else	/* __STDC__ */
-extern int accept();
-extern int accept4();
-extern int bind();
-extern int connect();
-extern int getpeername();
-extern int getsockname();
-extern int getsockopt();
-extern int listen();
-extern int recv();
-extern int recvfrom();
-extern int send();
-extern int sendto();
-extern int setsockopt();
-extern int sockatmark();
-extern int socket();
-extern int recvmsg();
-extern int sendmsg();
-extern int shutdown();
-extern int socketpair();
-#endif	/* __STDC__ */
 #endif	/* !defined(_KERNEL) || defined(_BOOT) */
 
 #ifdef	__cplusplus

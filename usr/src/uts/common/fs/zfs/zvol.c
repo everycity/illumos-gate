@@ -24,8 +24,8 @@
  * Portions Copyright 2010 Robert Milkowski
  *
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -138,10 +138,20 @@ typedef struct zvol_state {
 #define	ZVOL_EXCL	0x4
 #define	ZVOL_WCE	0x8
 
+#define	VOP_LATENCY_10MS	10000000
+#define	VOP_LATENCY_100MS	100000000
+#define	VOP_LATENCY_1S		1000000000
+#define	VOP_LATENCY_10S		10000000000
+
 /*
  * zvol maximum transfer in one DMU tx.
  */
 int zvol_maxphys = DMU_MAX_ACCESS/2;
+
+/*
+ * Toggle unmap functionality.
+ */
+boolean_t zvol_unmap_enabled = B_TRUE;
 
 extern int zfs_set_prop_nvlist(const char *, zprop_source_t,
     nvlist_t *, nvlist_t *);
@@ -245,14 +255,17 @@ struct maparg {
 /*ARGSUSED*/
 static int
 zvol_map_block(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
-    const zbookmark_t *zb, const dnode_phys_t *dnp, void *arg)
+    const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
 {
 	struct maparg *ma = arg;
 	zvol_extent_t *ze;
 	int bs = ma->ma_zv->zv_volblocksize;
 
-	if (bp == NULL || zb->zb_object != ZVOL_OBJ || zb->zb_level != 0)
+	if (BP_IS_HOLE(bp) ||
+	    zb->zb_object != ZVOL_OBJ || zb->zb_level != 0)
 		return (0);
+
+	VERIFY(!BP_IS_EMBEDDED(bp));
 
 	VERIFY3U(ma->ma_blks, ==, zb->zb_blkid);
 	ma->ma_blks++;
@@ -715,6 +728,7 @@ zvol_update_volsize(objset_t *os, uint64_t volsize)
 
 	tx = dmu_tx_create(os);
 	dmu_tx_hold_zap(tx, ZVOL_ZAP_OBJ, TRUE, NULL);
+	dmu_tx_mark_netfree(tx);
 	error = dmu_tx_assign(tx, TXG_WAIT);
 	if (error) {
 		dmu_tx_abort(tx);
@@ -1370,6 +1384,9 @@ zvol_read(dev_t dev, uio_t *uio, cred_t *cr)
 	uint64_t volsize;
 	rl_t *rl;
 	int error = 0;
+	zone_t *zonep = curzone;
+	uint64_t tot_bytes;
+	hrtime_t start, lat;
 
 	zv = zfsdev_get_soft_state(minor, ZSST_ZVOL);
 	if (zv == NULL)
@@ -1388,6 +1405,12 @@ zvol_read(dev_t dev, uio_t *uio, cred_t *cr)
 
 	DTRACE_PROBE3(zvol__uio__start, dev_t, dev, uio_t *, uio, int, 0);
 
+	mutex_enter(&zonep->zone_vfs_lock);
+	kstat_runq_enter(&zonep->zone_vfs_rwstats);
+	mutex_exit(&zonep->zone_vfs_lock);
+	start = gethrtime();
+	tot_bytes = 0;
+
 	rl = zfs_range_lock(&zv->zv_znode, uio->uio_loffset, uio->uio_resid,
 	    RL_READER);
 	while (uio->uio_resid > 0 && uio->uio_loffset < volsize) {
@@ -1397,6 +1420,7 @@ zvol_read(dev_t dev, uio_t *uio, cred_t *cr)
 		if (bytes > volsize - uio->uio_loffset)
 			bytes = volsize - uio->uio_loffset;
 
+		tot_bytes += bytes;
 		error =  dmu_read_uio(zv->zv_objset, ZVOL_OBJ, uio, bytes);
 		if (error) {
 			/* convert checksum errors into IO errors */
@@ -1406,6 +1430,35 @@ zvol_read(dev_t dev, uio_t *uio, cred_t *cr)
 		}
 	}
 	zfs_range_unlock(rl);
+
+	mutex_enter(&zonep->zone_vfs_lock);
+	zonep->zone_vfs_rwstats.reads++;
+	zonep->zone_vfs_rwstats.nread += tot_bytes;
+	kstat_runq_exit(&zonep->zone_vfs_rwstats);
+	mutex_exit(&zonep->zone_vfs_lock);
+
+	lat = gethrtime() - start;
+
+	if (lat >= VOP_LATENCY_10MS) {
+		zone_vfs_kstat_t *zvp;
+
+		zvp = zonep->zone_vfs_stats;
+		if (lat < VOP_LATENCY_100MS) {
+			atomic_inc_64(&zvp->zv_10ms_ops.value.ui64);
+		} else if (lat < VOP_LATENCY_1S) {
+			atomic_inc_64(&zvp->zv_10ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_100ms_ops.value.ui64);
+		} else if (lat < VOP_LATENCY_10S) {
+			atomic_inc_64(&zvp->zv_10ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_100ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_1s_ops.value.ui64);
+		} else {
+			atomic_inc_64(&zvp->zv_10ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_100ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_1s_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_10s_ops.value.ui64);
+		}
+	}
 
 	DTRACE_PROBE4(zvol__uio__done, dev_t, dev, uio_t *, uio, int, 0, int,
 	    error);
@@ -1423,6 +1476,9 @@ zvol_write(dev_t dev, uio_t *uio, cred_t *cr)
 	rl_t *rl;
 	int error = 0;
 	boolean_t sync;
+	zone_t *zonep = curzone;
+	uint64_t tot_bytes;
+	hrtime_t start, lat;
 
 	zv = zfsdev_get_soft_state(minor, ZSST_ZVOL);
 	if (zv == NULL)
@@ -1441,6 +1497,17 @@ zvol_write(dev_t dev, uio_t *uio, cred_t *cr)
 
 	DTRACE_PROBE3(zvol__uio__start, dev_t, dev, uio_t *, uio, int, 1);
 
+	/*
+	 * For the purposes of VFS kstat consumers, the "waitq" calculation is
+	 * repurposed as the active queue for zvol write operations. There's no
+	 * actual wait queue for zvol operations.
+	 */
+	mutex_enter(&zonep->zone_vfs_lock);
+	kstat_waitq_enter(&zonep->zone_vfs_rwstats);
+	mutex_exit(&zonep->zone_vfs_lock);
+	start = gethrtime();
+	tot_bytes = 0;
+
 	sync = !(zv->zv_flags & ZVOL_WCE) ||
 	    (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
 
@@ -1454,6 +1521,7 @@ zvol_write(dev_t dev, uio_t *uio, cred_t *cr)
 		if (bytes > volsize - off)	/* don't write past the end */
 			bytes = volsize - off;
 
+		tot_bytes += bytes;
 		dmu_tx_hold_write(tx, ZVOL_OBJ, off, bytes);
 		error = dmu_tx_assign(tx, TXG_WAIT);
 		if (error) {
@@ -1474,6 +1542,35 @@ zvol_write(dev_t dev, uio_t *uio, cred_t *cr)
 
 	DTRACE_PROBE4(zvol__uio__done, dev_t, dev, uio_t *, uio, int, 1, int,
 	    error);
+
+	mutex_enter(&zonep->zone_vfs_lock);
+	zonep->zone_vfs_rwstats.writes++;
+	zonep->zone_vfs_rwstats.nwritten += tot_bytes;
+	kstat_waitq_exit(&zonep->zone_vfs_rwstats);
+	mutex_exit(&zonep->zone_vfs_lock);
+
+	lat = gethrtime() - start;
+
+	if (lat >= VOP_LATENCY_10MS) {
+		zone_vfs_kstat_t *zvp;
+
+		zvp = zonep->zone_vfs_stats;
+		if (lat < VOP_LATENCY_100MS) {
+			atomic_inc_64(&zvp->zv_10ms_ops.value.ui64);
+		} else if (lat < VOP_LATENCY_1S) {
+			atomic_inc_64(&zvp->zv_10ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_100ms_ops.value.ui64);
+		} else if (lat < VOP_LATENCY_10S) {
+			atomic_inc_64(&zvp->zv_10ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_100ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_1s_ops.value.ui64);
+		} else {
+			atomic_inc_64(&zvp->zv_10ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_100ms_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_1s_ops.value.ui64);
+			atomic_inc_64(&zvp->zv_10s_ops.value.ui64);
+		}
+	}
 
 	return (error);
 }
@@ -1640,8 +1737,6 @@ int
 zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 {
 	zvol_state_t *zv;
-	struct dk_cinfo dki;
-	struct dk_minfo dkm;
 	struct dk_callback *dkc;
 	int error = 0;
 	rl_t *rl;
@@ -1659,6 +1754,9 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 	switch (cmd) {
 
 	case DKIOCINFO:
+	{
+		struct dk_cinfo dki;
+
 		bzero(&dki, sizeof (dki));
 		(void) strcpy(dki.dki_cname, "zvol");
 		(void) strcpy(dki.dki_dname, "zvol");
@@ -1669,8 +1767,12 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 		if (ddi_copyout(&dki, (void *)arg, sizeof (dki), flag))
 			error = SET_ERROR(EFAULT);
 		return (error);
+	}
 
 	case DKIOCGMEDIAINFO:
+	{
+		struct dk_minfo dkm;
+
 		bzero(&dkm, sizeof (dkm));
 		dkm.dki_lbsize = 1U << zv->zv_min_bs;
 		dkm.dki_capacity = zv->zv_volsize >> zv->zv_min_bs;
@@ -1679,16 +1781,32 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 		if (ddi_copyout(&dkm, (void *)arg, sizeof (dkm), flag))
 			error = SET_ERROR(EFAULT);
 		return (error);
+	}
+
+	case DKIOCGMEDIAINFOEXT:
+	{
+		struct dk_minfo_ext dkmext;
+
+		bzero(&dkmext, sizeof (dkmext));
+		dkmext.dki_lbsize = 1U << zv->zv_min_bs;
+		dkmext.dki_pbsize = zv->zv_volblocksize;
+		dkmext.dki_capacity = zv->zv_volsize >> zv->zv_min_bs;
+		dkmext.dki_media_type = DK_UNKNOWN;
+		mutex_exit(&zfsdev_state_lock);
+		if (ddi_copyout(&dkmext, (void *)arg, sizeof (dkmext), flag))
+			error = SET_ERROR(EFAULT);
+		return (error);
+	}
 
 	case DKIOCGETEFI:
-		{
-			uint64_t vs = zv->zv_volsize;
-			uint8_t bs = zv->zv_min_bs;
+	{
+		uint64_t vs = zv->zv_volsize;
+		uint8_t bs = zv->zv_min_bs;
 
-			mutex_exit(&zfsdev_state_lock);
-			error = zvol_getefi((void *)arg, flag, vs, bs);
-			return (error);
-		}
+		mutex_exit(&zfsdev_state_lock);
+		error = zvol_getefi((void *)arg, flag, vs, bs);
+		return (error);
+	}
 
 	case DKIOCFLUSHWRITECACHE:
 		dkc = (struct dk_callback *)arg;
@@ -1701,31 +1819,31 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 		return (error);
 
 	case DKIOCGETWCE:
-		{
-			int wce = (zv->zv_flags & ZVOL_WCE) ? 1 : 0;
-			if (ddi_copyout(&wce, (void *)arg, sizeof (int),
-			    flag))
-				error = SET_ERROR(EFAULT);
+	{
+		int wce = (zv->zv_flags & ZVOL_WCE) ? 1 : 0;
+		if (ddi_copyout(&wce, (void *)arg, sizeof (int),
+		    flag))
+			error = SET_ERROR(EFAULT);
+		break;
+	}
+	case DKIOCSETWCE:
+	{
+		int wce;
+		if (ddi_copyin((void *)arg, &wce, sizeof (int),
+		    flag)) {
+			error = SET_ERROR(EFAULT);
 			break;
 		}
-	case DKIOCSETWCE:
-		{
-			int wce;
-			if (ddi_copyin((void *)arg, &wce, sizeof (int),
-			    flag)) {
-				error = SET_ERROR(EFAULT);
-				break;
-			}
-			if (wce) {
-				zv->zv_flags |= ZVOL_WCE;
-				mutex_exit(&zfsdev_state_lock);
-			} else {
-				zv->zv_flags &= ~ZVOL_WCE;
-				mutex_exit(&zfsdev_state_lock);
-				zil_commit(zv->zv_zilog, ZVOL_OBJ);
-			}
-			return (0);
+		if (wce) {
+			zv->zv_flags |= ZVOL_WCE;
+			mutex_exit(&zfsdev_state_lock);
+		} else {
+			zv->zv_flags &= ~ZVOL_WCE;
+			mutex_exit(&zfsdev_state_lock);
+			zil_commit(zv->zv_zilog, ZVOL_OBJ);
 		}
+		return (0);
+	}
 
 	case DKIOCGGEOM:
 	case DKIOCGVTOC:
@@ -1757,6 +1875,9 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 		dkioc_free_t df;
 		dmu_tx_t *tx;
 
+		if (!zvol_unmap_enabled)
+			break;
+
 		if (ddi_copyin((void *)arg, &df, sizeof (df), flag)) {
 			error = SET_ERROR(EFAULT);
 			break;
@@ -1769,12 +1890,13 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 		 */
 		if (df.df_start >= zv->zv_volsize)
 			break;	/* No need to do anything... */
-		if (df.df_start + df.df_length > zv->zv_volsize)
-			df.df_length = DMU_OBJECT_END;
+
+		mutex_exit(&zfsdev_state_lock);
 
 		rl = zfs_range_lock(&zv->zv_znode, df.df_start, df.df_length,
 		    RL_WRITER);
 		tx = dmu_tx_create(zv->zv_objset);
+		dmu_tx_mark_netfree(tx);
 		error = dmu_tx_assign(tx, TXG_WAIT);
 		if (error != 0) {
 			dmu_tx_abort(tx);
@@ -1808,7 +1930,7 @@ zvol_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cr, int *rvalp)
 				    dmu_objset_pool(zv->zv_objset), 0);
 			}
 		}
-		break;
+		return (error);
 	}
 
 	default:
@@ -1897,7 +2019,8 @@ zvol_dump_init(zvol_state_t *zv, boolean_t resize)
 			return (SET_ERROR(ENOTSUP));
 		(void) dsl_sync_task(spa_name(spa),
 		    zfs_mvdev_dump_feature_check,
-		    zfs_mvdev_dump_activate_feature_sync, NULL, 2);
+		    zfs_mvdev_dump_activate_feature_sync, NULL,
+		    2, ZFS_SPACE_CHECK_RESERVED);
 	}
 
 	tx = dmu_tx_create(os);

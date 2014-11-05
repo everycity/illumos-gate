@@ -32,7 +32,7 @@
  */
 
 /*
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/param.h>
@@ -8059,8 +8059,9 @@ link_call:
 	 * vnode if it already existed.
 	 */
 	if (error == 0) {
-		vnode_t *tvp;
+		vnode_t *tvp, *tovp;
 		rnode4_t *trp;
+
 		/*
 		 * Notify the vnode. Each links is represented by
 		 * a different vnode, in nfsv4.
@@ -8073,23 +8074,20 @@ link_call:
 			vnevent_rename_dest(tvp, ndvp, nnm, ct);
 		}
 
-		/*
-		 * if the source and destination directory are not the
-		 * same notify the destination directory.
-		 */
-		if (VTOR4(odvp) != VTOR4(ndvp)) {
-			trp = VTOR4(ndvp);
-			tvp = ndvp;
-			if (IS_SHADOW(ndvp, trp))
-				tvp = RTOV4(trp);
-			vnevent_rename_dest_dir(tvp, ct);
-		}
-
 		trp = VTOR4(ovp);
-		tvp = ovp;
+		tovp = ovp;
 		if (IS_SHADOW(ovp, trp))
-			tvp = RTOV4(trp);
+			tovp = RTOV4(trp);
+
 		vnevent_rename_src(tvp, odvp, onm, ct);
+
+		trp = VTOR4(ndvp);
+		tvp = ndvp;
+
+		if (IS_SHADOW(ndvp, trp))
+			tvp = RTOV4(trp);
+
+		vnevent_rename_dest_dir(tvp, tovp, nnm, ct);
 	}
 
 	if (nvp) {
@@ -10490,11 +10488,11 @@ nfs4_map(vnode_t *vp, offset_t off, struct as *as, caddr_t *addrp,
 
 	if (nfs_rw_enter_sig(&rp->r_rwlock, RW_WRITER, INTR4(vp)))
 		return (EINTR);
-	atomic_add_int(&rp->r_inmap, 1);
+	atomic_inc_uint(&rp->r_inmap);
 	nfs_rw_exit(&rp->r_rwlock);
 
 	if (nfs_rw_enter_sig(&rp->r_lkserlock, RW_READER, INTR4(vp))) {
-		atomic_add_int(&rp->r_inmap, -1);
+		atomic_dec_uint(&rp->r_inmap);
 		return (EINTR);
 	}
 
@@ -10602,7 +10600,7 @@ nfs4_map(vnode_t *vp, offset_t off, struct as *as, caddr_t *addrp,
 
 done:
 	nfs_rw_exit(&rp->r_lkserlock);
-	atomic_add_int(&rp->r_inmap, -1);
+	atomic_dec_uint(&rp->r_inmap);
 	return (error);
 }
 

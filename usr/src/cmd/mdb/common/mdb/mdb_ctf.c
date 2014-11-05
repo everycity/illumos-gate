@@ -1543,10 +1543,10 @@ vread_helper(mdb_ctf_id_t modid, char *modbuf,
  *
  * typedef struct mdb_zio {
  *         enum zio_type io_type;
- *         void *io_waiter;
+ *         uintptr_t io_waiter;
  *         struct {
  *                 struct {
- *                         void *list_next;
+ *                         uintptr_t list_next;
  *                 } list_head;
  *         } io_parent_list;
  *         int io_error;
@@ -2115,7 +2115,8 @@ mdb_ctf_synthetics_from_file(const char *file)
 	}
 
 	if ((fp = mdb_ctf_open(file, &ret)) == NULL) {
-		mdb_warn("failed to parse ctf data in %s", file);
+		mdb_warn("failed to parse ctf data in %s: %s\n", file,
+		    ctf_errmsg(ret));
 		return (1);
 	}
 

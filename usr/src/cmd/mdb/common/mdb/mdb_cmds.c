@@ -22,8 +22,12 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ */
+
+/*
  * Copyright (c) 2012 by Delphix. All rights reserved.
  * Copyright (c) 2013 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
  */
 
 #include <sys/elf.h>
@@ -1560,11 +1564,6 @@ showrev_addversion(void *vers_nv, const mdb_map_t *ignored, const char *object)
 	if (version == NULL)
 		version = "Unknown";
 
-	/*
-	 * The hash table implementation in OVERLOAD mode limits the version
-	 * name to 31 characters because we cannot specify an external name.
-	 * The full version name is available via the ::objects dcmd if needed.
-	 */
 	(void) mdb_nv_insert(vers_nv, version, NULL, (uintptr_t)objname,
 	    MDB_NV_OVERLOAD);
 
@@ -2011,7 +2010,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			if (opt_a)
 				mdb_printf("%-#32p%8T%s\n", addr, buf);
 			else if (opt_b)
-				mdb_printf("%-#10p%-#32a%8T%s\n",
+				mdb_printf("%-#?p  %-#32a%8T%s\n",
 				    addr, addr, buf);
 			else
 				mdb_printf("%-#32a%8T%s\n", addr, buf);
@@ -2035,7 +2034,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			if (opt_a)
 				mdb_printf("%-#32p%8T%s\n", oaddr, buf);
 			else if (opt_b)
-				mdb_printf("%-#10p%-#32a%8T%s\n",
+				mdb_printf("%-#?p  %-#32a%8T%s\n",
 				    oaddr, oaddr, buf);
 			else
 				mdb_printf("%-#32a%8T%s\n", oaddr, buf);
@@ -2050,7 +2049,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		if (opt_a)
 			mdb_printf("%-#32p%8T%s%", addr, buf);
 		else if (opt_b)
-			mdb_printf("%-#10p%-#32a%8T%s", addr, addr, buf);
+			mdb_printf("%-#?p  %-#32a%8T%s", addr, addr, buf);
 		else
 			mdb_printf("%-#32a%8T%s%", addr, buf);
 		mdb_printf("%</b>\n");
@@ -2063,7 +2062,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			if (opt_a)
 				mdb_printf("%-#32p%8T%s\n", addr, buf);
 			else if (opt_b)
-				mdb_printf("%-#10p%-#32a%8T%s\n",
+				mdb_printf("%-#?p  %-#32a%8T%s\n",
 				    addr, addr, buf);
 			else
 				mdb_printf("%-#32a%8T%s\n", addr, buf);
@@ -2963,7 +2962,7 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	{ "print", "?[-aCdhiLptx] [-c lim] [-l lim] [type] [member|offset ...]",
 	    "print the contents of a data structure", cmd_print, print_help,
 	    cmd_print_tab },
-	{ "printf", "?[format] [type] [member ... ]", "print and format the "
+	{ "printf", "?format type member ...", "print and format the "
 	    "member(s) of a data structure", cmd_printf, printf_help,
 	    cmd_printf_tab },
 	{ "regs", NULL, "print general purpose registers", cmd_notsup },

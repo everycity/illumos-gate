@@ -20,6 +20,7 @@
  */
 
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -147,10 +148,17 @@ _tmem_set_cleanup(void (*f)(int, void *))
 {
 }
 
-uint64_t
-atomic_swap_64(volatile uint64_t *t, uint64_t v)
+int
+isspace(int c)
 {
-	uint64_t old = *t;
-	*t = v;
-	return (old);
+	switch (c) {
+	case ' ':
+	case '\t':
+	case '\n':
+	case '\r':
+	case '\f':
+	case '\v':
+		return (1);
+	}
+	return (0);
 }

@@ -45,13 +45,6 @@ include ../Makefile.master
 #
 .PARALLEL:
 
-#
-# The $(CLOSED_BUILD) additions to SUBDIRS & MSGSUBDIRS are unfortunate,
-# but required due to the "dependencies" of using .WAIT to barrier the
-# parallel dmake builds.  once 4631488 has been fixed, they can be
-# consolidated into one $(CLOSED_BUILD)SUBDIRS += (all closed libs) as
-# shown in HDRSUBDIRS
-#
 SUBDIRS= \
 	common			.WAIT	\
 	../cmd/sgs/libconv		\
@@ -165,7 +158,10 @@ SUBDIRS += \
 	libinstzones	\
 	libpkg		\
 	libpcidb	\
-	libumem_trampoline
+	libm1		\
+	libm		\
+	libmvec		\
+	libvnd
 
 SUBDIRS += \
 	passwdutil	\
@@ -188,10 +184,7 @@ SUBDIRS += \
 	libdhcpdu	\
 	libdhcputil	\
 	libxnet		\
-	libipsecutil
-$(CLOSED_BUILD)SUBDIRS += \
-	$(CLOSED)/lib/libike
-SUBDIRS += \
+	libipsecutil	\
 	nsswitch	\
 	libuutil	\
 	libscf		\
@@ -273,8 +266,6 @@ SUBDIRS += \
 	$($(MACH)_SUBDIRS)
 
 i386_SUBDIRS=		\
-	libntfs		\
-	libparted	\
 	libfdisk	\
 	libsaveargs
 
@@ -474,6 +465,7 @@ HDRSUBDIRS=		\
 	libumem		\
 	libunistat	\
 	libuutil	\
+	libvnd		\
 	libwanboot	\
 	libwanbootutil	\
 	libwrap		\
@@ -508,11 +500,7 @@ HDRSUBDIRS=		\
 	libreparse	\
 	$($(MACH)_HDRSUBDIRS)
 
-$(CLOSED_BUILD)HDRSUBDIRS += \
-	$(CLOSED)/lib/libike
-
 i386_HDRSUBDIRS=	\
-	libparted	\
 	libfdisk	\
 	libsaveargs
 
@@ -570,7 +558,7 @@ _dc:			$(DCSUBDIRS:%=%-nodepend)
 auditd_plugins: libbsm libnsl libsecdb
 gss_mechs/mech_krb5:	libgss libnsl libsocket libresolv pkcs11
 libadt_jni:	libbsm
-libast: 	libsocket
+libast: 	libsocket libm
 libadutils: 	libldap5 libresolv libsocket libnsl
 nsswitch:	libadutils libidmap libresolv2_joy
 libbe: 		libzfs
@@ -599,11 +587,13 @@ libipadm:	libnsl libinetutil libsocket libdlpi libnvpair libdhcpagent \
 		libdladm libsecdb
 libiscsit:	libc libnvpair libstmf libuuid libnsl
 libkmf:		libcryptoutil pkcs11
+libm:		libc
+libm1:		libc libm
+libmvec:	libc libm
 libnsl:		libmd5
 libmapid:	libresolv
 librdc:		libsocket libnsl libnsctl libunistat libdscfg
 libuuid:	libdlpi
-$(CLOSED_BUILD)libike:	libipsecutil libxnet libcryptoutil
 libinetutil:	libsocket
 libipsecutil:	libtecla libsocket
 libinstzones:	libzonecfg libcontract
@@ -613,7 +603,7 @@ libsecdb:	libnsl
 libsasl:	libgss libsocket pkcs11 libmd
 sasl_plugins:	pkcs11 libgss libsocket libsasl
 libsctp:	libsocket
-libshell:	libast libcmd libdll libsocket libsecdb
+libshell:	libast libcmd libdll libsocket libsecdb libm
 libsip:		libmd5
 libsmbfs:	libcmdutils libsocket libnsl libkrb5
 libsocket:	libnsl
@@ -645,7 +635,7 @@ libsaveargs:	libdisasm
 ../cmd/sgs/libelf:	../cmd/sgs/libconv
 udapl/udapl_tavor:	udapl/libdat
 libzfs:		libdevid libgen libnvpair libuutil \
-		libadm libavl libefi libidmap libmd libzfs_core
+		libadm libavl libefi libidmap libmd libzfs_core libm
 libzfs_core:	libnvpair
 libzfs_jni:	libdiskmgt libnvpair libzfs
 libzpool:	libavl libumem libnvpair libcmdutils
@@ -671,6 +661,13 @@ libreparse:	libnvpair
 libhotplug:	libnvpair
 cfgadm_plugins:	libhotplug
 libilb:		libsocket
+libipmi:	libm
+libprtdiag:	libm
+libsqlite:	libm
+libstmf:	libm
+libvscan: 	libm
+
+
 $(INTEL_BUILD)libdiskmgt:libfdisk
 
 #

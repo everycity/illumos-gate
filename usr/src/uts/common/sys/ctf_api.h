@@ -24,7 +24,7 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
  */
 
 /*
@@ -151,6 +151,7 @@ extern ctf_file_t *ctf_bufopen(const ctf_sect_t *, const ctf_sect_t *,
 extern ctf_file_t *ctf_fdopen(int, int *);
 extern ctf_file_t *ctf_open(const char *, int *);
 extern ctf_file_t *ctf_create(int *);
+extern ctf_file_t *ctf_dup(ctf_file_t *);
 extern void ctf_close(ctf_file_t *);
 
 extern ctf_file_t *ctf_parent_file(ctf_file_t *);
@@ -168,7 +169,9 @@ extern const char *ctf_errmsg(int);
 extern int ctf_version(int);
 
 extern int ctf_func_info(ctf_file_t *, ulong_t, ctf_funcinfo_t *);
+extern int ctf_func_info_by_id(ctf_file_t *, ctf_id_t, ctf_funcinfo_t *);
 extern int ctf_func_args(ctf_file_t *, ulong_t, uint_t, ctf_id_t *);
+extern int ctf_func_args_by_id(ctf_file_t *, ctf_id_t, uint_t, ctf_id_t *);
 
 extern ctf_id_t ctf_lookup_by_name(ctf_file_t *, const char *);
 extern ctf_id_t ctf_lookup_by_symbol(ctf_file_t *, ulong_t);
@@ -176,6 +179,8 @@ extern ctf_id_t ctf_lookup_by_symbol(ctf_file_t *, ulong_t);
 extern ctf_id_t ctf_type_resolve(ctf_file_t *, ctf_id_t);
 extern ssize_t ctf_type_lname(ctf_file_t *, ctf_id_t, char *, size_t);
 extern char *ctf_type_name(ctf_file_t *, ctf_id_t, char *, size_t);
+extern char *ctf_type_qname(ctf_file_t *, ctf_id_t, char *, size_t,
+    const char *);
 extern ssize_t ctf_type_size(ctf_file_t *, ctf_id_t);
 extern ssize_t ctf_type_align(ctf_file_t *, ctf_id_t);
 extern int ctf_type_kind(ctf_file_t *, ctf_id_t);
@@ -236,6 +241,34 @@ struct module;
 extern ctf_file_t *ctf_modopen(struct module *, int *);
 
 #endif
+
+typedef struct ctf_ihelem {
+	ushort_t ih_type;	/* type ID number */
+	ushort_t ih_value;	/* type ID number in a different fp */
+	ushort_t ih_next;	/* index of next element in hash chain */
+} ctf_ihelem_t;
+
+typedef struct ctf_idhash {
+	ushort_t *ih_buckets;	/* hash bucket array (chain indices) */
+	ctf_ihelem_t *ih_chains;	/* hash chains buffer */
+	ushort_t ih_nbuckets;	/* number of elements in bucket array */
+	ushort_t ih_nelems;	/* number of elements in hash table */
+	uint_t ih_free;		/* index of next free hash element */
+} ctf_idhash_t;
+
+extern int ctf_idhash_create(ctf_idhash_t *, ulong_t);
+extern void ctf_idhash_clear(ctf_idhash_t *);
+extern int ctf_idhash_define(ctf_idhash_t *, ushort_t, ushort_t);
+extern int ctf_idhash_insert(ctf_idhash_t *, ushort_t, ushort_t);
+extern ctf_ihelem_t *ctf_idhash_lookup(ctf_idhash_t *, ushort_t);
+extern uint_t ctf_idhash_size(const ctf_idhash_t *);
+extern void ctf_idhash_destroy(ctf_idhash_t *);
+
+typedef struct ctf_idhash_iter ctf_idhash_iter_t;
+extern int ctf_idhash_iter_init(ctf_idhash_t *, ctf_idhash_iter_t **);
+extern const ctf_ihelem_t *ctf_idhash_iter(ctf_idhash_t *,
+    ctf_idhash_iter_t *);
+extern void ctf_idhash_iter_fini(ctf_idhash_t *, ctf_idhash_iter_t *);
 
 #ifdef	__cplusplus
 }

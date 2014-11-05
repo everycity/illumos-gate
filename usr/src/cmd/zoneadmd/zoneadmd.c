@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -100,6 +101,7 @@
 #include <sys/ctfs.h>
 #include <libdladm.h>
 #include <sys/dls_mgmt.h>
+#include <libscf.h>
 
 #include <libzonecfg.h>
 #include <zonestat_impl.h>
@@ -114,6 +116,7 @@ char brand_name[MAXNAMELEN];
 boolean_t zone_isnative;
 boolean_t zone_iscluster;
 boolean_t zone_islabeled;
+boolean_t shutdown_in_progress;
 static zoneid_t zone_id;
 static zoneid_t zone_did = 0;
 dladm_handle_t dld_handle = NULL;
@@ -150,7 +153,8 @@ z_cmd_name(zone_cmd_t zcmd)
 	/* This list needs to match the enum in sys/zone.h */
 	static const char *zcmdstr[] = {
 		"ready", "boot", "forceboot", "reboot", "halt",
-		"note_uninstalling", "mount", "forcemount", "unmount"
+		"note_uninstalling", "mount", "forcemount", "unmount",
+		"shutdown"
 	};
 
 	if (zcmd >= sizeof (zcmdstr) / sizeof (*zcmdstr))
@@ -259,23 +263,21 @@ zerror(zlog_t *zlogp, boolean_t use_strerror, const char *fmt, ...)
 }
 
 /*
- * Emit a warning for any boot arguments which are unrecognized.  Since
- * Solaris boot arguments are getopt(3c) compatible (see kernel(1m)), we
+ * Since Solaris boot arguments are getopt(3c) compatible (see kernel(1m)), we
  * put the arguments into an argv style array, use getopt to process them,
- * and put the resultant argument string back into outargs.
+ * and put the resultant argument string back into outargs. Non-Solaris brands
+ * may support alternate forms of boot arguments so we must handle that as well.
  *
  * During the filtering, we pull out any arguments which are truly "boot"
  * arguments, leaving only those which are to be passed intact to the
  * progenitor process.  The one we support at the moment is -i, which
  * indicates to the kernel which program should be launched as 'init'.
  *
- * A return of Z_INVAL indicates specifically that the arguments are
- * not valid; this is a non-fatal error.  Except for Z_OK, all other return
- * values are treated as fatal.
+ * Except for Z_OK, all other return values are treated as fatal.
  */
 static int
 filter_bootargs(zlog_t *zlogp, const char *inargs, char *outargs,
-    char *init_file, char *badarg)
+    char *init_file)
 {
 	int argc = 0, argc_save;
 	int i;
@@ -286,7 +288,6 @@ filter_bootargs(zlog_t *zlogp, const char *inargs, char *outargs,
 	char c;
 
 	bzero(outargs, BOOTARGS_MAX);
-	bzero(badarg, BOOTARGS_MAX);
 
 	/*
 	 * If the user didn't specify transient boot arguments, check
@@ -377,36 +378,29 @@ filter_bootargs(zlog_t *zlogp, const char *inargs, char *outargs,
 			break;
 		case '?':
 			/*
-			 * We warn about unknown arguments but pass them
-			 * along anyway-- if someone wants to develop their
-			 * own init replacement, they can pass it whatever
-			 * args they want.
+			 * If a brand has its own init, we need to pass along
+			 * whatever the user provides. We use the entire
+			 * unknown string here so that we correctly handle
+			 * unknown long options (e.g. --debug).
 			 */
-			err = Z_INVAL;
 			(void) snprintf(outargs, BOOTARGS_MAX,
-			    "%s -%c", outargs, optopt);
-			(void) snprintf(badarg, BOOTARGS_MAX,
-			    "%s -%c", badarg, optopt);
+			    "%s %s", outargs, argv[optind - 1]);
 			break;
 		}
 	}
 
 	/*
-	 * For Solaris Zones we warn about and discard non-option arguments.
-	 * Hence 'boot foo bar baz gub' --> 'boot'.  However, to be similar
-	 * to the kernel, we concat up all the other remaining boot args.
-	 * and warn on them as a group.
+	 * We need to pass along everything else since we don't know what
+	 * the brand's init is expecting. For example, an argument list like:
+	 *   --confdir /foo --debug
+	 * will cause the getopt parsing to stop at '/foo' but we need to pass
+	 * that on, along with the '--debug'. This does mean that we require
+	 * any of our known options (-ifms) to preceed the brand-specific ones.
 	 */
-	if (optind < argc) {
-		err = Z_INVAL;
-		while (optind < argc) {
-			(void) snprintf(badarg, BOOTARGS_MAX, "%s%s%s",
-			    badarg, strlen(badarg) > 0 ? " " : "",
-			    argv[optind]);
-			optind++;
-		}
-		zerror(zlogp, B_FALSE, "WARNING: Unused or invalid boot "
-		    "arguments `%s'.", badarg);
+	while (optind < argc) {
+		(void) snprintf(outargs, BOOTARGS_MAX, "%s %s", outargs,
+		    argv[optind]);
+		optind++;
 	}
 
 done:
@@ -1025,7 +1019,6 @@ zone_bootup(zlog_t *zlogp, const char *bootargs, int zstate, boolean_t debug)
 	fs_callback_t cb;
 	brand_handle_t bh;
 	zone_iptype_t iptype;
-	boolean_t links_loaded = B_FALSE;
 	dladm_status_t status;
 	char errmsg[DLADM_STRSIZE];
 	int err;
@@ -1091,11 +1084,8 @@ zone_bootup(zlog_t *zlogp, const char *bootargs, int zstate, boolean_t debug)
 
 	brand_close(bh);
 
-	err = filter_bootargs(zlogp, bootargs, nbootargs, init_file,
-	    bad_boot_arg);
-	if (err == Z_INVAL)
-		eventstream_write(Z_EVT_ZONE_BADARGS);
-	else if (err != Z_OK)
+	err = filter_bootargs(zlogp, bootargs, nbootargs, init_file);
+	if (err != Z_OK)
 		goto bad;
 
 	assert(init_file[0] != '\0');
@@ -1131,7 +1121,6 @@ zone_bootup(zlog_t *zlogp, const char *bootargs, int zstate, boolean_t debug)
 			    " %s", dladm_status2str(status, errmsg));
 			goto bad;
 		}
-		links_loaded = B_TRUE;
 	}
 
 	/*
@@ -1186,8 +1175,7 @@ bad:
 	 * state, RUNNING, and then invoke the hook as if we're halting.
 	 */
 	(void) brand_poststatechg(zlogp, ZONE_STATE_RUNNING, Z_HALT, debug);
-	if (links_loaded)
-		(void) dladm_zone_halt(dld_handle, zoneid);
+
 	return (-1);
 }
 
@@ -1221,6 +1209,133 @@ zone_halt(zlog_t *zlogp, boolean_t unmount_cmd, boolean_t rebooting, int zstate,
 
 	return (0);
 }
+
+static int
+zone_graceful_shutdown(zlog_t *zlogp)
+{
+	zoneid_t zoneid;
+	pid_t child;
+	char cmdbuf[MAXPATHLEN];
+	brand_handle_t bh = NULL;
+	char zpath[MAXPATHLEN];
+	ctid_t ct;
+	int tmpl_fd;
+	int child_status;
+
+	if (shutdown_in_progress) {
+		zerror(zlogp, B_FALSE, "shutdown already in progress");
+		return (-1);
+	}
+
+	if ((zoneid = getzoneidbyname(zone_name)) == -1) {
+		zerror(zlogp, B_TRUE, "unable to get zoneid");
+		return (-1);
+	}
+
+	/* Get a handle to the brand info for this zone */
+	if ((bh = brand_open(brand_name)) == NULL) {
+		zerror(zlogp, B_FALSE, "unable to determine zone brand");
+		return (-1);
+	}
+
+	if (zone_get_zonepath(zone_name, zpath, sizeof (zpath)) != Z_OK) {
+		zerror(zlogp, B_FALSE, "unable to determine zone path");
+		brand_close(bh);
+		return (-1);
+	}
+
+	/*
+	 * If there is a brand 'shutdown' callback, execute it now to give the
+	 * brand a chance to cleanup any custom configuration.
+	 */
+	(void) strcpy(cmdbuf, EXEC_PREFIX);
+	if (brand_get_shutdown(bh, zone_name, zpath, cmdbuf + EXEC_LEN,
+	    sizeof (cmdbuf) - EXEC_LEN) != 0 || strlen(cmdbuf) <= EXEC_LEN) {
+		(void) strcat(cmdbuf, SHUTDOWN_DEFAULT);
+	}
+	brand_close(bh);
+
+	if ((tmpl_fd = init_template()) == -1) {
+		zerror(zlogp, B_TRUE, "failed to create contract");
+		return (-1);
+	}
+
+	if ((child = fork()) == -1) {
+		(void) ct_tmpl_clear(tmpl_fd);
+		(void) close(tmpl_fd);
+		zerror(zlogp, B_TRUE, "failed to fork");
+		return (-1);
+	} else if (child == 0) {
+		(void) ct_tmpl_clear(tmpl_fd);
+		if (zone_enter(zoneid) == -1) {
+			_exit(errno);
+		}
+		_exit(execl("/bin/sh", "sh", "-c", cmdbuf, (char *)NULL));
+	}
+
+	if (contract_latest(&ct) == -1)
+		ct = -1;
+	(void) ct_tmpl_clear(tmpl_fd);
+	(void) close(tmpl_fd);
+
+	if (waitpid(child, &child_status, 0) != child) {
+		/* unexpected: we must have been signalled */
+		(void) contract_abandon_id(ct);
+		return (-1);
+	}
+
+	(void) contract_abandon_id(ct);
+	if (WEXITSTATUS(child_status) != 0) {
+		errno = WEXITSTATUS(child_status);
+		zerror(zlogp, B_FALSE, "unable to shutdown zone");
+		return (-1);
+	}
+
+	shutdown_in_progress = B_TRUE;
+
+	return (0);
+}
+
+static int
+zone_wait_shutdown(zlog_t *zlogp)
+{
+	zone_state_t zstate;
+	uint64_t *tm = NULL;
+	scf_simple_prop_t *prop = NULL;
+	int timeout;
+	int tries;
+	int rc = -1;
+
+	/* Get default stop timeout from SMF framework */
+	timeout = SHUTDOWN_WAIT;
+	if ((prop = scf_simple_prop_get(NULL, SHUTDOWN_FMRI, "stop",
+	    SCF_PROPERTY_TIMEOUT)) != NULL) {
+		if ((tm = scf_simple_prop_next_count(prop)) != NULL) {
+			if (tm != 0)
+				timeout = *tm;
+		}
+		scf_simple_prop_free(prop);
+	}
+
+	/* allow time for zone to shutdown cleanly */
+	for (tries = 0; tries < timeout; tries ++) {
+		(void) sleep(1);
+		if (zone_get_state(zone_name, &zstate) == Z_OK &&
+		    zstate == ZONE_STATE_INSTALLED) {
+			rc = 0;
+			break;
+		}
+	}
+
+	if (rc != 0)
+		zerror(zlogp, B_FALSE, "unable to shutdown zone");
+
+	shutdown_in_progress = B_FALSE;
+
+	return (rc);
+}
+
+
 
 /*
  * Generate AUE_zone_state for a command that boots a zone.
@@ -1298,6 +1413,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 	size_t rlen = getpagesize(); /* conservative */
 	fs_callback_t cb;
 	brand_handle_t bh;
+	boolean_t wait_shut = B_FALSE;
 
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
 	zargp = (zone_cmd_arg_t *)args;
@@ -1375,8 +1491,9 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 	 * Check for validity of command.
 	 */
 	if (cmd != Z_READY && cmd != Z_BOOT && cmd != Z_FORCEBOOT &&
-	    cmd != Z_REBOOT && cmd != Z_HALT && cmd != Z_NOTE_UNINSTALLING &&
-	    cmd != Z_MOUNT && cmd != Z_FORCEMOUNT && cmd != Z_UNMOUNT) {
+	    cmd != Z_REBOOT && cmd != Z_SHUTDOWN && cmd != Z_HALT &&
+	    cmd != Z_NOTE_UNINSTALLING && cmd != Z_MOUNT &&
+	    cmd != Z_FORCEMOUNT && cmd != Z_UNMOUNT) {
 		zerror(&logsys, B_FALSE, "invalid command %d", (int)cmd);
 		goto out;
 	}
@@ -1445,6 +1562,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 			rval = zone_ready(zlogp, Z_MNT_BOOT, zstate, debug);
 			if (rval == 0)
 				eventstream_write(Z_EVT_ZONE_READIED);
+			zcons_statechanged();
 			break;
 		case Z_BOOT:
 		case Z_FORCEBOOT:
@@ -1455,6 +1573,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 				    zstate, debug);
 			}
 			audit_put_record(zlogp, uc, rval, "boot");
+			zcons_statechanged();
 			if (rval != 0) {
 				bringup_failure_recovery = B_TRUE;
 				(void) zone_halt(zlogp, B_FALSE, B_FALSE,
@@ -1462,6 +1581,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 				eventstream_write(Z_EVT_ZONE_BOOTFAILED);
 			}
 			break;
+		case Z_SHUTDOWN:
 		case Z_HALT:
 			if (kernelcall)	/* Invalid; can't happen */
 				abort();
@@ -1578,6 +1698,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 			rval = zone_bootup(zlogp, zargp->bootbuf, zstate,
 			    debug);
 			audit_put_record(zlogp, uc, rval, "boot");
+			zcons_statechanged();
 			if (rval != 0) {
 				bringup_failure_recovery = B_TRUE;
 				(void) zone_halt(zlogp, B_FALSE, B_TRUE,
@@ -1592,8 +1713,10 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 			if ((rval = zone_halt(zlogp, B_FALSE, B_FALSE, zstate,
 			    debug)) != 0)
 				break;
+			zcons_statechanged();
 			eventstream_write(Z_EVT_ZONE_HALTED);
 			break;
+		case Z_SHUTDOWN:
 		case Z_REBOOT:
 		case Z_NOTE_UNINSTALLING:
 		case Z_MOUNT:
@@ -1639,6 +1762,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 			if ((rval = zone_halt(zlogp, B_FALSE, B_TRUE, zstate,
 			    debug)) != 0)
 				break;
+			zcons_statechanged();
 			if ((rval = zone_ready(zlogp, Z_MNT_BOOT, zstate,
 			    debug)) == 0)
 				eventstream_write(Z_EVT_ZONE_READIED);
@@ -1661,6 +1785,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 			    debug)) != 0)
 				break;
 			eventstream_write(Z_EVT_ZONE_HALTED);
+			zcons_statechanged();
 			break;
 		case Z_REBOOT:
 			(void) strlcpy(boot_args, zargp->bootbuf,
@@ -1672,6 +1797,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 				boot_args[0] = '\0';
 				break;
 			}
+			zcons_statechanged();
 			if ((rval = zone_ready(zlogp, Z_MNT_BOOT, zstate,
 			    debug)) != 0) {
 				eventstream_write(Z_EVT_ZONE_BOOTFAILED);
@@ -1687,6 +1813,11 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 				eventstream_write(Z_EVT_ZONE_BOOTFAILED);
 			}
 			boot_args[0] = '\0';
+			break;
+		case Z_SHUTDOWN:
+			if ((rval = zone_graceful_shutdown(zlogp)) == 0) {
+				wait_shut = B_TRUE;
+			}
 			break;
 		case Z_NOTE_UNINSTALLING:
 		case Z_MOUNT:
@@ -1712,6 +1843,11 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 
 out:
 	(void) mutex_unlock(&lock);
+
+	/* Wait for the Z_SHUTDOWN commands to complete */
+	if (wait_shut)
+		rval = zone_wait_shutdown(zlogp);
+
 	if (kernelcall) {
 		rvalp = NULL;
 		rlen = 0;
@@ -1859,10 +1995,11 @@ top:
 
 			/*
 			 * Startup a thread to perform memory capping for the
-			 * zone.
+			 * zone. zlogp won't be valid for much longer so use
+			 * logsys.
 			 */
 			if ((zid = getzoneidbyname(zone_name)) != -1)
-				create_mcap_thread(zlogp, zid);
+				create_mcap_thread(&logsys, zid);
 
 			/* recover the global configuration snapshot */
 			if (snap_hndl == NULL) {

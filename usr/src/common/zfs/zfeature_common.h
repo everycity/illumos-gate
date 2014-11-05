@@ -43,12 +43,18 @@ typedef enum spa_feature {
 	SPA_FEATURE_ASYNC_DESTROY,
 	SPA_FEATURE_EMPTY_BPOBJ,
 	SPA_FEATURE_LZ4_COMPRESS,
-	SPA_FEATURE_FS_SS_LIMIT_OBS,
 	SPA_FEATURE_MULTI_VDEV_CRASH_DUMP,
 	SPA_FEATURE_SPACEMAP_HISTOGRAM,
+	SPA_FEATURE_ENABLED_TXG,
+	SPA_FEATURE_HOLE_BIRTH,
 	SPA_FEATURE_EXTENSIBLE_DATASET,
+	SPA_FEATURE_EMBEDDED_DATA,
+	SPA_FEATURE_BOOKMARKS,
+	SPA_FEATURE_FS_SS_LIMIT,
 	SPA_FEATURES
 } spa_feature_t;
+
+#define	SPA_FEATURE_DISABLED	(-1ULL)
 
 typedef struct zfeature_info {
 	spa_feature_t fi_feature;
@@ -57,11 +63,13 @@ typedef struct zfeature_info {
 	const char *fi_desc;	/* Feature description */
 	boolean_t fi_can_readonly; /* Can open pool readonly w/o support? */
 	boolean_t fi_mos;	/* Is the feature necessary to read the MOS? */
+	/* Activate this feature at the same time it is enabled */
+	boolean_t fi_activate_on_enable;
 	/* array of dependencies, terminated by SPA_FEATURE_NONE */
 	const spa_feature_t *fi_depends;
 } zfeature_info_t;
 
-typedef int (zfeature_func_t)(zfeature_info_t *fi, void *arg);
+typedef int (zfeature_func_t)(zfeature_info_t *, void *);
 
 #define	ZFS_FEATURE_DEBUG
 
@@ -70,7 +78,8 @@ extern zfeature_info_t spa_feature_table[SPA_FEATURES];
 extern boolean_t zfeature_is_valid_guid(const char *);
 
 extern boolean_t zfeature_is_supported(const char *);
-extern int zfeature_lookup_name(const char *name, spa_feature_t *res);
+extern int zfeature_lookup_name(const char *, spa_feature_t *);
+extern boolean_t zfeature_depends_on(spa_feature_t, spa_feature_t);
 
 extern void zpool_feature_init(void);
 

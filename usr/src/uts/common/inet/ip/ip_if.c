@@ -22,6 +22,7 @@
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 1990 Mentat Inc.
  * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2014, OmniTI Computer Consulting, Inc. All rights reserved.
  */
 /*
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
@@ -9190,7 +9191,9 @@ ip_sioctl_copyin_setup(queue_t *q, mblk_t *mp)
 		return;
 
 	default:
-		cmn_err(CE_PANIC, "should not happen ");
+		cmn_err(CE_WARN, "Unknown ioctl %d/0x%x slipped through.",
+		    iocp->ioc_cmd, iocp->ioc_cmd);
+		/* FALLTHRU */
 	}
 nak:
 	if (mp->b_cont != NULL) {
@@ -11774,7 +11777,7 @@ ipif_assign_seqid(ipif_t *ipif)
 {
 	ip_stack_t	*ipst = ipif->ipif_ill->ill_ipst;
 
-	ipif->ipif_seqid = atomic_add_64_nv(&ipst->ips_ipif_g_seqid, 1);
+	ipif->ipif_seqid = atomic_inc_64_nv(&ipst->ips_ipif_g_seqid);
 }
 
 /*
@@ -12447,9 +12450,9 @@ void
 ip_update_source_selection(ip_stack_t *ipst)
 {
 	/* We skip past SRC_GENERATION_VERIFY */
-	if (atomic_add_32_nv(&ipst->ips_src_generation, 1) ==
+	if (atomic_inc_32_nv(&ipst->ips_src_generation) ==
 	    SRC_GENERATION_VERIFY)
-		atomic_add_32(&ipst->ips_src_generation, 1);
+		atomic_inc_32(&ipst->ips_src_generation);
 }
 
 /*

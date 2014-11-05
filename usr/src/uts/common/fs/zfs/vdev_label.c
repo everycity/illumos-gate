@@ -640,7 +640,7 @@ vdev_label_init(vdev_t *vd, uint64_t crtxg, vdev_labeltype_t reason)
 	/* Track the creation time for this vdev */
 	vd->vdev_crtxg = crtxg;
 
-	if (!vd->vdev_ops->vdev_op_leaf)
+	if (!vd->vdev_ops->vdev_op_leaf || !spa_writeable(spa))
 		return (0);
 
 	/*
@@ -976,7 +976,7 @@ vdev_uberblock_sync_done(zio_t *zio)
 	uint64_t *good_writes = zio->io_private;
 
 	if (zio->io_error == 0 && zio->io_vd->vdev_top->vdev_ms_array != 0)
-		atomic_add_64(good_writes, 1);
+		atomic_inc_64(good_writes);
 }
 
 /*
@@ -1051,7 +1051,7 @@ vdev_label_sync_done(zio_t *zio)
 	uint64_t *good_writes = zio->io_private;
 
 	if (zio->io_error == 0)
-		atomic_add_64(good_writes, 1);
+		atomic_inc_64(good_writes);
 }
 
 /*

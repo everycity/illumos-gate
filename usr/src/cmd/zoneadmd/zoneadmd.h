@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014, Joyent, Inc. All rights reserved.
  */
 
 #ifndef	_ZONEADMD_H
@@ -59,6 +60,10 @@ extern "C" {
 #define	CLUSTER_BRAND_NAME	"cluster"
 #define	LABELED_BRAND_NAME	"labeled"
 
+#define	SHUTDOWN_WAIT		60
+#define	SHUTDOWN_DEFAULT	"/sbin/init 0"
+#define	SHUTDOWN_FMRI	"svc:/system/zones:default"
+
 /* 0755 is the default directory mode. */
 #define	DEFAULT_DIR_MODE \
 	(S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH)
@@ -91,7 +96,6 @@ extern char pool_name[MAXNAMELEN];
 extern char brand_name[MAXNAMELEN];
 extern char default_brand[MAXNAMELEN];
 extern char boot_args[BOOTARGS_MAX];
-extern char bad_boot_arg[BOOTARGS_MAX];
 extern boolean_t zone_isnative;
 extern boolean_t zone_iscluster;
 extern dladm_handle_t dld_handle;
@@ -110,8 +114,7 @@ typedef enum {
 	Z_EVT_ZONE_HALTED,
 	Z_EVT_ZONE_READIED,
 	Z_EVT_ZONE_UNINSTALLING,
-	Z_EVT_ZONE_BOOTFAILED,
-	Z_EVT_ZONE_BADARGS
+	Z_EVT_ZONE_BOOTFAILED
 } zone_evt_t;
 
 extern int eventstream_init();
@@ -152,6 +155,7 @@ extern void resolve_lofs(zlog_t *zlogp, char *path, size_t pathlen);
  */
 extern int init_console(zlog_t *);
 extern void serve_console(zlog_t *);
+extern void zcons_statechanged();
 
 /*
  * Memory capping thread creation.

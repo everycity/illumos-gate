@@ -293,7 +293,7 @@ port_fop_femop()
 	    (fem_t **)&femp)) {
 		return (NULL);
 	}
-	if (casptr(&fop_femop, NULL, femp) != NULL) {
+	if (atomic_cas_ptr(&fop_femop, NULL, femp) != NULL) {
 		/*
 		 * some other thread beat us to it.
 		 */
@@ -311,7 +311,7 @@ port_fop_fsemop()
 	if (fsem_create("portfop_fsem", port_vfssrc_template, &fsemp)) {
 		return (NULL);
 	}
-	if (casptr(&fop_fsemop, NULL, fsemp) != NULL) {
+	if (atomic_cas_ptr(&fop_fsemop, NULL, fsemp) != NULL) {
 		/*
 		 * some other thread beat us to it.
 		 */
@@ -579,7 +579,6 @@ port_fop_femuninstall(vnode_t *vp)
 		 */
 		(void) fem_uninstall(vp, (fem_t *)pvp->pvp_femp, vp);
 		pvp->pvp_femp = NULL;
-		mutex_exit(&pvp->pvp_mutex);
 
 
 		/*
@@ -602,9 +601,8 @@ port_fop_femuninstall(vnode_t *vp)
 		} else {
 			mutex_exit(mtx);
 		}
-	} else {
-		mutex_exit(&pvp->pvp_mutex);
 	}
+	mutex_exit(&pvp->pvp_mutex);
 	return (ret);
 }
 
@@ -1089,7 +1087,7 @@ port_install_fopdata(vnode_t *vp)
 	/*
 	 * If v_fopdata is not null, some other thread beat us to it.
 	 */
-	if (casptr(&vp->v_fopdata, NULL, npvp) != NULL) {
+	if (atomic_cas_ptr(&vp->v_fopdata, NULL, npvp) != NULL) {
 		mutex_destroy(&npvp->pvp_mutex);
 		list_destroy(&npvp->pvp_pfoplist);
 		kmem_free(npvp, sizeof (*npvp));

@@ -409,9 +409,10 @@ link_by_id(datalink_id_t linkid, zoneid_t zoneid)
 	dlmgmt_link_t link, *linkp;
 
 	link.ll_linkid = linkid;
-	linkp = avl_find(&dlmgmt_id_avl, &link, NULL);
+	if ((linkp = avl_find(&dlmgmt_id_avl, &link, NULL)) == NULL)
+		return (NULL);
 	if (zoneid != GLOBAL_ZONEID && linkp->ll_zoneid != zoneid)
-		linkp = NULL;
+		return (NULL);
 	return (linkp);
 }
 
@@ -450,6 +451,7 @@ dlmgmt_create_common(const char *name, datalink_class_t class, uint32_t media,
 	linkp->ll_linkid = dlmgmt_nextlinkid;
 	linkp->ll_zoneid = zoneid;
 	linkp->ll_gen = 0;
+	linkp->ll_tomb = B_FALSE;
 
 	if (avl_find(&dlmgmt_name_avl, linkp, &name_where) != NULL ||
 	    avl_find(&dlmgmt_id_avl, linkp, &id_where) != NULL) {

@@ -20,7 +20,7 @@
 #
 
 #
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc.
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
 # Copyright (c) 2013 Gary Mills
@@ -365,6 +365,7 @@ file path=usr/lib/$(ARCH64)/libsoftcrypto.so.1
 file path=usr/lib/$(ARCH64)/libsum.so.1
 $(sparc_ONLY)file path=usr/lib/$(ARCH64)/libv12n.so.1
 file path=usr/lib/$(ARCH64)/libvolmgt.so.1
+file path=usr/lib/$(ARCH64)/libwrap.so.1.0
 file path=usr/lib/$(ARCH64)/liby.so.1
 file path=usr/lib/$(ARCH64)/libzoneinfo.so.1
 file path=usr/lib/$(ARCH64)/nss_ad.so.1
@@ -484,6 +485,7 @@ file path=usr/lib/security/$(ARCH64)/pam_passwd_auth.so.1
 file path=usr/lib/security/$(ARCH64)/pam_rhosts_auth.so.1
 file path=usr/lib/security/$(ARCH64)/pam_roles.so.1
 file path=usr/lib/security/$(ARCH64)/pam_sample.so.1
+file path=usr/lib/security/$(ARCH64)/pam_timestamp.so.1
 file path=usr/lib/security/$(ARCH64)/pam_tsol_account.so.1
 file path=usr/lib/security/$(ARCH64)/pam_unix_account.so.1
 file path=usr/lib/security/$(ARCH64)/pam_unix_auth.so.1
@@ -513,6 +515,7 @@ file path=usr/lib/security/pam_passwd_auth.so.1
 file path=usr/lib/security/pam_rhosts_auth.so.1
 file path=usr/lib/security/pam_roles.so.1
 file path=usr/lib/security/pam_sample.so.1
+file path=usr/lib/security/pam_timestamp.so.1
 file path=usr/lib/security/pam_tsol_account.so.1
 file path=usr/lib/security/pam_unix_account.so.1
 file path=usr/lib/security/pam_unix_auth.so.1
@@ -990,6 +993,8 @@ $(sparc_ONLY)link path=usr/lib/$(ARCH64)/libv12n.so target=./libv12n.so.1
 link path=usr/lib/$(ARCH64)/libvolmgt.so target=libvolmgt.so.1
 link path=usr/lib/$(ARCH64)/libw.so target=../../../lib/$(ARCH64)/libw.so.1
 link path=usr/lib/$(ARCH64)/libw.so.1 target=../../../lib/$(ARCH64)/libw.so.1
+link path=usr/lib/$(ARCH64)/libwrap.so target=libwrap.so.1.0
+link path=usr/lib/$(ARCH64)/libwrap.so.1 target=libwrap.so.1.0
 link path=usr/lib/$(ARCH64)/libxnet.so \
     target=../../../lib/$(ARCH64)/libxnet.so.1
 link path=usr/lib/$(ARCH64)/libxnet.so.1 \
@@ -1225,6 +1230,8 @@ link path=usr/lib/security/$(ARCH64)/pam_rhosts_auth.so \
     target=./pam_rhosts_auth.so.1
 link path=usr/lib/security/$(ARCH64)/pam_roles.so target=./pam_roles.so.1
 link path=usr/lib/security/$(ARCH64)/pam_sample.so target=./pam_sample.so.1
+link path=usr/lib/security/$(ARCH64)/pam_timestamp.so \
+    target=./pam_timestamp.so.1
 link path=usr/lib/security/$(ARCH64)/pam_tsol_account.so \
     target=./pam_tsol_account.so.1
 link path=usr/lib/security/$(ARCH64)/pam_unix_account.so \
@@ -1264,6 +1271,7 @@ link path=usr/lib/security/pam_passwd_auth.so target=./pam_passwd_auth.so.1
 link path=usr/lib/security/pam_rhosts_auth.so target=./pam_rhosts_auth.so.1
 link path=usr/lib/security/pam_roles.so target=./pam_roles.so.1
 link path=usr/lib/security/pam_sample.so target=./pam_sample.so.1
+link path=usr/lib/security/pam_timestamp.so target=./pam_timestamp.so.1
 link path=usr/lib/security/pam_tsol_account.so target=./pam_tsol_account.so.1
 link path=usr/lib/security/pam_unix_account.so target=./pam_unix_account.so.1
 link path=usr/lib/security/pam_unix_auth.so target=./pam_unix_auth.so.1

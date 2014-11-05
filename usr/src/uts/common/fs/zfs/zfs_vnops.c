@@ -20,9 +20,9 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
- * Copyright 2013 Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
  */
 
 /* Portions Copyright 2007 Jeremy Teo */
@@ -116,11 +116,18 @@
  *  (3)	All range locks must be grabbed before calling dmu_tx_assign(),
  *	as they can span dmu_tx_assign() calls.
  *
- *  (4)	Always pass TXG_NOWAIT as the second argument to dmu_tx_assign().
- *	This is critical because we don't want to block while holding locks.
- *	Note, in particular, that if a lock is sometimes acquired before
- *	the tx assigns, and sometimes after (e.g. z_lock), then failing to
- *	use a non-blocking assign can deadlock the system.  The scenario:
+ *  (4) If ZPL locks are held, pass TXG_NOWAIT as the second argument to
+ *      dmu_tx_assign().  This is critical because we don't want to block
+ *      while holding locks.
+ *
+ *	If no ZPL locks are held (aside from ZFS_ENTER()), use TXG_WAIT.  This
+ *	reduces lock contention and CPU usage when we must wait (note that if
+ *	throughput is constrained by the storage, nearly every transaction
+ *	must wait).
+ *
+ *      Note, in particular, that if a lock is sometimes acquired before
+ *      the tx assigns, and sometimes after (e.g. z_lock), then failing
+ *      to use a non-blocking assign can deadlock the system.  The scenario:
  *
  *	Thread A has grabbed a lock before calling dmu_tx_assign().
  *	Thread B is in an already-assigned tx, and blocks for this lock.
@@ -269,16 +276,19 @@ zfs_holey(vnode_t *vp, int cmd, offset_t *off)
 
 	error = dmu_offset_next(zp->z_zfsvfs->z_os, zp->z_id, hole, &noff);
 
-	/* end of file? */
-	if ((error == ESRCH) || (noff > file_sz)) {
-		/*
-		 * Handle the virtual hole at the end of file.
-		 */
-		if (hole) {
-			*off = file_sz;
-			return (0);
-		}
+	if (error == ESRCH)
 		return (SET_ERROR(ENXIO));
+
+	/*
+	 * We could find a hole that begins after the logical end-of-file,
+	 * because dmu_offset_next() only works on whole blocks.  If the
+	 * EOF falls mid-block, then indicate that the "virtual hole"
+	 * at the end of the file begins at the logical EOF, rather than
+	 * at the end of the last block.
+	 */
+	if (noff > file_sz) {
+		ASSERT(hole);
+		noff = file_sz;
 	}
 
 	if (noff < *off)
@@ -401,7 +411,6 @@ static int
 mappedread(vnode_t *vp, int nbytes, uio_t *uio)
 {
 	znode_t *zp = VTOZ(vp);
-	objset_t *os = zp->z_zfsvfs->z_os;
 	int64_t	start, off;
 	int len = nbytes;
 	int error = 0;
@@ -420,7 +429,8 @@ mappedread(vnode_t *vp, int nbytes, uio_t *uio)
 			zfs_unmap_page(pp, va);
 			page_unlock(pp);
 		} else {
-			error = dmu_read_uio(os, zp->z_id, uio, bytes);
+			error = dmu_read_uio_dbuf(sa_get_db(zp->z_sa_hdl),
+			    uio, bytes);
 		}
 		len -= bytes;
 		off = 0;
@@ -455,7 +465,6 @@ zfs_read(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 {
 	znode_t		*zp = VTOZ(vp);
 	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
-	objset_t	*os;
 	ssize_t		n, nbytes;
 	int		error = 0;
 	rl_t		*rl;
@@ -463,7 +472,6 @@ zfs_read(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 
 	ZFS_ENTER(zfsvfs);
 	ZFS_VERIFY_ZP(zp);
-	os = zfsvfs->z_os;
 
 	if (zp->z_pflags & ZFS_AV_QUARANTINED) {
 		ZFS_EXIT(zfsvfs);
@@ -553,10 +561,12 @@ zfs_read(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 		nbytes = MIN(n, zfs_read_chunk_size -
 		    P2PHASE(uio->uio_loffset, zfs_read_chunk_size));
 
-		if (vn_has_cached_data(vp))
+		if (vn_has_cached_data(vp)) {
 			error = mappedread(vp, nbytes, uio);
-		else
-			error = dmu_read_uio(os, zp->z_id, uio, nbytes);
+		} else {
+			error = dmu_read_uio_dbuf(sa_get_db(zp->z_sa_hdl),
+			    uio, nbytes);
+		}
 		if (error) {
 			/* convert checksum errors into IO errors */
 			if (error == ECKSUM)
@@ -653,6 +663,16 @@ zfs_write(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 	    &zp->z_pflags, 8);
 
 	/*
+	 * In a case vp->v_vfsp != zp->z_zfsvfs->z_vfs (e.g. snapshots) our
+	 * callers might not be able to detect properly that we are read-only,
+	 * so check it explicitly here.
+	 */
+	if (zfsvfs->z_vfs->vfs_flag & VFS_RDONLY) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EROFS));
+	}
+
+	/*
 	 * If immutable or not appending then return EPERM
 	 */
 	if ((zp->z_pflags & (ZFS_IMMUTABLE | ZFS_READONLY)) ||
@@ -733,7 +753,6 @@ zfs_write(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 	while (n > 0) {
 		abuf = NULL;
 		woff = uio->uio_loffset;
-again:
 		if (zfs_owner_overquota(zfsvfs, zp, B_FALSE) ||
 		    zfs_owner_overquota(zfsvfs, zp, B_TRUE)) {
 			if (abuf != NULL)
@@ -785,13 +804,8 @@ again:
 		dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_FALSE);
 		dmu_tx_hold_write(tx, zp->z_id, woff, MIN(n, max_blksz));
 		zfs_sa_upgrade_txholds(tx, zp);
-		error = dmu_tx_assign(tx, TXG_NOWAIT);
+		error = dmu_tx_assign(tx, TXG_WAIT);
 		if (error) {
-			if (error == ERESTART) {
-				dmu_tx_wait(tx);
-				dmu_tx_abort(tx);
-				goto again;
-			}
 			dmu_tx_abort(tx);
 			if (abuf != NULL)
 				dmu_return_arcbuf(abuf);
@@ -1292,7 +1306,7 @@ zfs_lookup(vnode_t *dvp, char *nm, vnode_t **vpp, struct pathname *pnp,
  *		cr	- credentials of caller.
  *		flag	- large file flag [UNUSED].
  *		ct	- caller context
- *		vsecp 	- ACL to be set
+ *		vsecp	- ACL to be set
  *
  *	OUT:	vpp	- vnode of created or trunc'd entry.
  *
@@ -1568,7 +1582,7 @@ zfs_remove(vnode_t *dvp, char *name, cred_t *cr, caller_context_t *ct,
 	zfsvfs_t	*zfsvfs = dzp->z_zfsvfs;
 	zilog_t		*zilog;
 	uint64_t	acl_obj, xattr_obj;
-	uint64_t 	xattr_obj_unlinked = 0;
+	uint64_t	xattr_obj_unlinked = 0;
 	uint64_t	obj = 0;
 	zfs_dirlock_t	*dl;
 	dmu_tx_t	*tx;
@@ -1668,6 +1682,14 @@ top:
 	/* charge as an update -- would be nice not to charge at all */
 	dmu_tx_hold_zap(tx, zfsvfs->z_unlinkedobj, FALSE, NULL);
 
+	/*
+	 * Mark this transaction as typically resulting in a net free of
+	 * space, unless object removal will be delayed indefinitely
+	 * (due to active holds on the vnode due to the file being open).
+	 */
+	if (may_delete_now)
+		dmu_tx_mark_netfree(tx);
+
 	error = dmu_tx_assign(tx, waited ? TXG_WAITED : TXG_NOWAIT);
 	if (error) {
 		zfs_dirent_unlock(dl);
@@ -1698,7 +1720,6 @@ top:
 	}
 
 	if (unlinked) {
-
 		/*
 		 * Hold z_lock so that we can make sure that the ACL obj
 		 * hasn't changed.  Could have been deleted due to
@@ -3045,12 +3066,9 @@ top:
 
 	zfs_sa_upgrade_txholds(tx, zp);
 
-	err = dmu_tx_assign(tx, TXG_NOWAIT);
-	if (err) {
-		if (err == ERESTART)
-			dmu_tx_wait(tx);
+	err = dmu_tx_assign(tx, TXG_WAIT);
+	if (err)
 		goto out;
-	}
 
 	count = 0;
 	/*
@@ -3680,9 +3698,7 @@ top:
 
 	if (error == 0) {
 		vnevent_rename_src(ZTOV(szp), sdvp, snm, ct);
-		/* notify the target dir if it is not the same as source dir */
-		if (tdvp != sdvp)
-			vnevent_rename_dest_dir(tdvp, ct);
+		vnevent_rename_dest_dir(tdvp, ZTOV(szp), tnm, ct);
 	}
 out:
 	if (zl != NULL)
@@ -4141,19 +4157,13 @@ zfs_putapage(vnode_t *vp, page_t *pp, u_offset_t *offp,
 		err = SET_ERROR(EDQUOT);
 		goto out;
 	}
-top:
 	tx = dmu_tx_create(zfsvfs->z_os);
 	dmu_tx_hold_write(tx, zp->z_id, off, len);
 
 	dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_FALSE);
 	zfs_sa_upgrade_txholds(tx, zp);
-	err = dmu_tx_assign(tx, TXG_NOWAIT);
+	err = dmu_tx_assign(tx, TXG_WAIT);
 	if (err != 0) {
-		if (err == ERESTART) {
-			dmu_tx_wait(tx);
-			dmu_tx_abort(tx);
-			goto top;
-		}
 		dmu_tx_abort(tx);
 		goto out;
 	}
@@ -4685,6 +4695,27 @@ zfs_addmap(vnode_t *vp, offset_t off, struct as *as, caddr_t addr,
 	return (0);
 }
 
+/*
+ * The reason we push dirty pages as part of zfs_delmap() is so that we get a
+ * more accurate mtime for the associated file.  Since we don't have a way of
+ * detecting when the data was actually modified, we have to resort to
+ * heuristics.  If an explicit msync() is done, then we mark the mtime when the
+ * last page is pushed.  The problem occurs when the msync() call is omitted,
+ * which by far the most common case:
+ *
+ *	open()
+ *	mmap()
+ *	<modify memory>
+ *	munmap()
+ *	close()
+ *	<time lapse>
+ *	putpage() via fsflush
+ *
+ * If we wait until fsflush to come along, we can have a modification time that
+ * is some arbitrary point in the future.  In order to prevent this in the
+ * common case, we flush pages whenever a (MAP_SHARED, PROT_WRITE) mapping is
+ * torn down.
+ */
 /* ARGSUSED */
 static int
 zfs_delmap(vnode_t *vp, offset_t off, struct as *as, caddr_t addr,
@@ -4734,6 +4765,16 @@ zfs_space(vnode_t *vp, int cmd, flock64_t *bfp, int flag,
 	if (cmd != F_FREESP) {
 		ZFS_EXIT(zfsvfs);
 		return (SET_ERROR(EINVAL));
+	}
+
+	/*
+	 * In a case vp->v_vfsp != zp->z_zfsvfs->z_vfs (e.g. snapshots) our
+	 * callers might not be able to detect properly that we are read-only,
+	 * so check it explicitly here.
+	 */
+	if (zfsvfs->z_vfs->vfs_flag & VFS_RDONLY) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EROFS));
 	}
 
 	if (error = convoff(vp, bfp, 0, offset)) {
@@ -5138,7 +5179,7 @@ const fs_operation_def_t zfs_dvnodeops_template[] = {
 	VOPNAME_PATHCONF,	{ .vop_pathconf = zfs_pathconf },
 	VOPNAME_GETSECATTR,	{ .vop_getsecattr = zfs_getsecattr },
 	VOPNAME_SETSECATTR,	{ .vop_setsecattr = zfs_setsecattr },
-	VOPNAME_VNEVENT, 	{ .vop_vnevent = fs_vnevent_support },
+	VOPNAME_VNEVENT,	{ .vop_vnevent = fs_vnevent_support },
 	NULL,			NULL
 };
 
@@ -5172,8 +5213,8 @@ const fs_operation_def_t zfs_fvnodeops_template[] = {
 	VOPNAME_GETSECATTR,	{ .vop_getsecattr = zfs_getsecattr },
 	VOPNAME_SETSECATTR,	{ .vop_setsecattr = zfs_setsecattr },
 	VOPNAME_VNEVENT,	{ .vop_vnevent = fs_vnevent_support },
-	VOPNAME_REQZCBUF, 	{ .vop_reqzcbuf = zfs_reqzcbuf },
-	VOPNAME_RETZCBUF, 	{ .vop_retzcbuf = zfs_retzcbuf },
+	VOPNAME_REQZCBUF,	{ .vop_reqzcbuf = zfs_reqzcbuf },
+	VOPNAME_RETZCBUF,	{ .vop_retzcbuf = zfs_retzcbuf },
 	NULL,			NULL
 };
 

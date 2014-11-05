@@ -20,7 +20,6 @@ MANSECT= 	4
 
 _MANFILES=	Intro.4				\
 		NISLDAPmapping.4		\
-		TIMEZONE.4			\
 		a.out.4				\
 		admin.4				\
 		alias.4				\
@@ -44,6 +43,7 @@ _MANFILES=	Intro.4				\
 		core.4				\
 		crypt.conf.4			\
 		crypto_certs.4			\
+		ctf.4				\
 		d_passwd.4			\
 		dacf.conf.4			\
 		dat.conf.4			\
@@ -71,11 +71,6 @@ _MANFILES=	Intro.4				\
 		fspec.4				\
 		fstypes.4			\
 		ftp.4				\
-		ftpaccess.4			\
-		ftpconversions.4		\
-		ftpgroups.4			\
-		ftphosts.4			\
-		ftpservers.4			\
 		ftpusers.4			\
 		fx_dptbl.4			\
 		gateways.4			\
@@ -92,6 +87,7 @@ _MANFILES=	Intro.4				\
 		ike.preshared.4			\
 		inet_type.4			\
 		inetd.conf.4			\
+		init.4				\
 		init.d.4			\
 		inittab.4			\
 		ipaddrsel.conf.4		\
@@ -108,6 +104,7 @@ _MANFILES=	Intro.4				\
 		logindevperm.4			\
 		loginlog.4			\
 		magic.4				\
+		mailer.conf.4			\
 		md.tab.4			\
 		mddb.cf.4			\
 		mech.4				\
@@ -186,7 +183,7 @@ _MANFILES=	Intro.4				\
 		smbautohome.4			\
 		smhba.conf.4			\
 		sndr.4				\
-		sock2path.4			\
+		sock2path.d.4			\
 		space.4				\
 		ssh_config.4			\
 		sshd_config.4			\
@@ -210,7 +207,6 @@ _MANFILES=	Intro.4				\
 		volume-request.4		\
 		wanboot.conf.4			\
 		warn.conf.4			\
-		xferlog.4			\
 		ypfiles.4			\
 		yppasswdd.4			\
 		ypserv.4			\

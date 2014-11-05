@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Joyent, Inc. All rights reserved.
  */
 
 #include <sys/errno.h>
@@ -78,7 +79,11 @@ struct brand_ops sn1_brops = {
 	sn1_elfexec,
 	NULL,
 	NULL,
+	NULL,
 	NSIG,
+	NULL,
+	NULL,
+	NULL
 };
 
 #ifdef	sparc
@@ -94,9 +99,11 @@ struct brand_mach_ops sn1_mops = {
 
 struct brand_mach_ops sn1_mops = {
 	sn1_brand_sysenter_callback,
+	NULL,
 	sn1_brand_int91_callback,
 	sn1_brand_syscall_callback,
-	sn1_brand_syscall32_callback
+	sn1_brand_syscall32_callback,
+	NULL
 };
 
 #else	/* ! __amd64 */
@@ -104,7 +111,9 @@ struct brand_mach_ops sn1_mops = {
 struct brand_mach_ops sn1_mops = {
 	sn1_brand_sysenter_callback,
 	NULL,
+	NULL,
 	sn1_brand_syscall_callback,
+	NULL,
 	NULL
 };
 #endif	/* __amd64 */
@@ -115,7 +124,8 @@ struct brand	sn1_brand = {
 	BRAND_VER_1,
 	"sn1",
 	&sn1_brops,
-	&sn1_mops
+	&sn1_mops,
+	sizeof (brand_proc_data_t),
 };
 
 static struct modlbrand modlbrand = {

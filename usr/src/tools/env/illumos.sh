@@ -32,6 +32,7 @@
 #       DEBUG build only (-D, -F)
 #       do not bringover from the parent (-n)
 #       runs 'make check' (-C)
+#       checks for new interfaces in libraries (-A)
 #       runs lint in usr/src (-l plus the LINTDIRS variable)
 #       sends mail on completion (-m and the MAILTO variable)
 #       creates packages for PIT/RE (-p)
@@ -43,7 +44,7 @@
 # - This script is only interpreted by ksh93 and explicitly allows the
 #   use of ksh93 language extensions.
 #
-export NIGHTLY_OPTIONS='-FnCDlmprt'
+export NIGHTLY_OPTIONS='-FnCDAlmprt'
 
 #
 # -- PLEASE READ THIS --
@@ -127,8 +128,7 @@ export MAILTO="$STAFFER"
 # specified, the build is simply run in a new task in the current project.
 export BUILD_PROJECT=''
 
-# You should not need to change the next four lines
-export LOCKNAME="$(basename -- "$CODEMGR_WS")_nightly.lock"
+# You should not need to change the next three lines
 export ATLOG="$CODEMGR_WS/log"
 export LOGFILE="$ATLOG/nightly.log"
 export MACH="$(uname -p)"
@@ -229,3 +229,9 @@ export SPRO_VROOT="$SPRO_ROOT"
 
 # Uncomment this to disable support for SMB printing.
 # export ENABLE_SMB_PRINTING='#'
+
+#
+# These checks ensure that if we accidentally run a program linked against the
+# proto area, that we then fail the build.
+#
+export LD_TOXIC_PATH="$ROOT/lib:$ROOT/usr/lib"

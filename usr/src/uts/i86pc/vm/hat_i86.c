@@ -27,7 +27,7 @@
  */
 /*
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright 2012 Joyent, Inc.  All rights reserved.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
  */
 
 /*
@@ -945,7 +945,7 @@ hat_init_finish(void)
 
 /*
  * On 32 bit PAE mode, PTE's are 64 bits, but ordinary atomic memory references
- * are 32 bit, so for safety we must use cas64() to install these.
+ * are 32 bit, so for safety we must use atomic_cas_64() to install these.
  */
 #ifdef __i386
 static void
@@ -968,7 +968,7 @@ reload_pae32(hat_t *hat, cpu_t *cpu)
 			pte = dest[i];
 			if (pte == src[i])
 				break;
-			if (cas64(dest + i, pte, src[i]) != src[i])
+			if (atomic_cas_64(dest + i, pte, src[i]) != src[i])
 				break;
 		}
 	}
@@ -1228,14 +1228,14 @@ hat_get_mapped_size(hat_t *hat)
 int
 hat_stats_enable(hat_t *hat)
 {
-	atomic_add_32(&hat->hat_stats, 1);
+	atomic_inc_32(&hat->hat_stats);
 	return (1);
 }
 
 void
 hat_stats_disable(hat_t *hat)
 {
-	atomic_add_32(&hat->hat_stats, -1);
+	atomic_dec_32(&hat->hat_stats);
 }
 
 /*
@@ -1989,7 +1989,7 @@ flush_all_tlb_entries(void)
 #define	TLB_CPU_HALTED	(01ul)
 #define	TLB_INVAL_ALL	(02ul)
 #define	CAS_TLB_INFO(cpu, old, new)	\
-	caslong((ulong_t *)&(cpu)->cpu_m.mcpu_tlb_info, (old), (new))
+	atomic_cas_ulong((ulong_t *)&(cpu)->cpu_m.mcpu_tlb_info, (old), (new))
 
 /*
  * Record that a CPU is going idle
@@ -1997,7 +1997,7 @@ flush_all_tlb_entries(void)
 void
 tlb_going_idle(void)
 {
-	atomic_or_long((ulong_t *)&CPU->cpu_m.mcpu_tlb_info, TLB_CPU_HALTED);
+	atomic_or_ulong((ulong_t *)&CPU->cpu_m.mcpu_tlb_info, TLB_CPU_HALTED);
 }
 
 /*
@@ -3295,7 +3295,7 @@ hat_page_getattr(struct page *pp, uint_t flag)
 
 
 /*
- * common code used by hat_pageunload() and hment_steal()
+ * common code used by hat_page_inval() and hment_steal()
  */
 hment_t *
 hati_page_unmap(page_t *pp, htable_t *ht, uint_t entry)
@@ -3353,11 +3353,11 @@ extern int	vpm_enable;
 /*
  * Unload translations to a page. If the page is a subpage of a large
  * page, the large page mappings are also removed.
- * If unloadflag is HAT_CURPROC_PGUNLOAD, then we only unload the translation
- * for the current process, otherwise all translations are unloaded.
+ * If curhat is not NULL, then we only unload the translation
+ * for the given process, otherwise all translations are unloaded.
  */
-static int
-hati_pageunload(struct page *pp, uint_t pg_szcd, uint_t unloadflag)
+void
+hat_page_inval(struct page *pp, uint_t pg_szcd, struct hat *curhat)
 {
 	page_t		*cur_pp = pp;
 	hment_t		*hm;
@@ -3365,19 +3365,9 @@ hati_pageunload(struct page *pp, uint_t pg_szcd, uint_t unloadflag)
 	htable_t	*ht;
 	uint_t		entry;
 	level_t		level;
-	struct hat	*curhat;
 	ulong_t		cnt;
 
 	XPV_DISALLOW_MIGRATE();
-
-	/*
-	 * prevent recursion due to kmem_free()
-	 */
-	++curthread->t_hatdepth;
-	ASSERT(curthread->t_hatdepth < 16);
-
-	if (unloadflag == HAT_CURPROC_PGUNLOAD)
-		curhat = curthread->t_procp->p_as->a_hat;
 
 #if defined(__amd64)
 	/*
@@ -3391,7 +3381,7 @@ hati_pageunload(struct page *pp, uint_t pg_szcd, uint_t unloadflag)
 	 * The loop with next_size handles pages with multiple pagesize mappings
 	 */
 next_size:
-	if (unloadflag == HAT_CURPROC_PGUNLOAD)
+	if (curhat != NULL)
 		cnt = hat_page_getshare(cur_pp);
 	for (;;) {
 
@@ -3409,10 +3399,8 @@ curproc_done:
 				 * If not part of a larger page, we're done.
 				 */
 				if (cur_pp->p_szc <= pg_szcd) {
-					ASSERT(curthread->t_hatdepth > 0);
-					--curthread->t_hatdepth;
 					XPV_ALLOW_MIGRATE();
-					return (0);
+					return;
 				}
 
 				/*
@@ -3432,11 +3420,10 @@ curproc_done:
 			 */
 			level = ht->ht_level;
 			if (level == pg_szcd) {
-				if (unloadflag != HAT_CURPROC_PGUNLOAD ||
-				    ht->ht_hat == curhat)
+				if (curhat == NULL || ht->ht_hat == curhat)
 					break;
 				/*
-				 * unloadflag == HAT_CURPROC_PGUNLOAD but it's
+				 * Unloading only the given process but it's
 				 * not the hat for the current process. Leave
 				 * entry in place. Also do a safety check to
 				 * ensure we don't get in an infinite loop
@@ -3457,9 +3444,35 @@ curproc_done:
 			hment_free(hm);
 
 		/* Perform check above for being part of a larger page. */
-		if (unloadflag == HAT_CURPROC_PGUNLOAD)
+		if (curhat != NULL)
 			goto curproc_done;
 	}
+}
+
+/*
+ * Unload translations to a page. If unloadflag is HAT_CURPROC_PGUNLOAD, then
+ * we only unload the translation for the current process, otherwise all
+ * translations are unloaded.
+ */
+static int
+hati_pageunload(struct page *pp, uint_t pg_szcd, uint_t unloadflag)
+{
+	struct hat	*curhat = NULL;
+
+	/*
+	 * prevent recursion due to kmem_free()
+	 */
+	++curthread->t_hatdepth;
+	ASSERT(curthread->t_hatdepth < 16);
+
+	if (unloadflag == HAT_CURPROC_PGUNLOAD)
+		curhat = curthread->t_procp->p_as->a_hat;
+
+	hat_page_inval(pp, pg_szcd, curhat);
+
+	ASSERT(curthread->t_hatdepth > 0);
+	--curthread->t_hatdepth;
+	return (0);
 }
 
 int

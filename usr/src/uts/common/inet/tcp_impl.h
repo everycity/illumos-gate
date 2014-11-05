@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, Joyent Inc. All rights reserved.
+ * Copyright (c) 2013, Joyent Inc. All rights reserved.
  * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
  */
@@ -61,9 +61,9 @@ extern sock_downcalls_t sock_tcp_downcalls;
  * by setting it to 0.
  */
 #define	TCP_XMIT_LOWATER	4096
-#define	TCP_XMIT_HIWATER	49152
+#define	TCP_XMIT_HIWATER	128000
 #define	TCP_RECV_LOWATER	2048
-#define	TCP_RECV_HIWATER	128000
+#define	TCP_RECV_HIWATER	1048576
 
 /*
  * Bind hash list size and has function.  It has to be a power of 2 for
@@ -371,7 +371,7 @@ typedef struct tcp_listen_cnt_s {
 #define	TCP_DECR_LISTEN_CNT(tcp)					\
 {									\
 	ASSERT((tcp)->tcp_listen_cnt->tlc_cnt > 0);			\
-	if (atomic_add_32_nv(&(tcp)->tcp_listen_cnt->tlc_cnt, -1) == 0) \
+	if (atomic_dec_32_nv(&(tcp)->tcp_listen_cnt->tlc_cnt) == 0) \
 		kmem_free((tcp)->tcp_listen_cnt, sizeof (tcp_listen_cnt_t)); \
 	(tcp)->tcp_listen_cnt = NULL;					\
 }

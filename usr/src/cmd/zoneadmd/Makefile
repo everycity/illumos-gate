@@ -20,12 +20,14 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc. All rights reserved.
 # Copyright (c) 2011, Joyent, Inc. All rights reserved.
 #
 
 PROG= zoneadmd
 
 include ../Makefile.cmd
+include ../Makefile.ctf
 
 $(64ONLY)SUBDIRS= $(MACH)
 $(BUILD64)SUBDIRS += $(MACH64)

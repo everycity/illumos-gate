@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1984,	 1986, 1987, 1988, 1989 AT&T	*/
@@ -2686,6 +2686,103 @@ prread(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr, caller_context_t *ct)
 #endif
 }
 
+/*
+ * We make pr_write_psinfo_fname() somewhat simpler by asserting at compile
+ * time that PRFNSZ has the same definition as MAXCOMLEN.
+ */
+#if PRFNSZ != MAXCOMLEN
+#error PRFNSZ/MAXCOMLEN mismatch
+#endif
+
+static int
+pr_write_psinfo_fname(prnode_t *pnp, uio_t *uiop)
+{
+	char fname[PRFNSZ];
+	int offset = offsetof(psinfo_t, pr_fname), error;
+
+#ifdef _SYSCALL32_IMPL
+	if (curproc->p_model != DATAMODEL_LP64)
+		offset = offsetof(psinfo32_t, pr_fname);
+#endif
+
+	/*
+	 * If this isn't a write to pr_fname (or if the size doesn't match
+	 * PRFNSZ) return.
+	 */
+	if (uiop->uio_offset != offset || uiop->uio_resid != PRFNSZ)
+		return (0);
+
+	if ((error = uiomove(fname, PRFNSZ, UIO_WRITE, uiop)) != 0)
+		return (error);
+
+	fname[PRFNSZ - 1] = '\0';
+
+	if ((error = prlock(pnp, ZNO)) != 0)
+		return (error);
+
+	bcopy(fname, pnp->pr_common->prc_proc->p_user.u_comm, PRFNSZ);
+
+	prunlock(pnp);
+
+	return (0);
+}
+
+/*
+ * We make pr_write_psinfo_psargs() somewhat simpler by asserting at compile
+ * time that PRARGSZ has the same definition as PSARGSZ.
+ */
+#if PRARGSZ != PSARGSZ
+#error PRARGSZ/PSARGSZ mismatch
+#endif
+
+static int
+pr_write_psinfo_psargs(prnode_t *pnp, uio_t *uiop)
+{
+	char psargs[PRARGSZ];
+	int offset = offsetof(psinfo_t, pr_psargs), error;
+
+#ifdef _SYSCALL32_IMPL
+	if (curproc->p_model != DATAMODEL_LP64)
+		offset = offsetof(psinfo32_t, pr_psargs);
+#endif
+
+	/*
+	 * If this isn't a write to pr_psargs (or if the size doesn't match
+	 * PRARGSZ) return.
+	 */
+	if (uiop->uio_offset != offset || uiop->uio_resid != PRARGSZ)
+		return (0);
+
+	if ((error = uiomove(psargs, PRARGSZ, UIO_WRITE, uiop)) != 0)
+		return (error);
+
+	psargs[PRARGSZ - 1] = '\0';
+
+	if ((error = prlock(pnp, ZNO)) != 0)
+		return (error);
+
+	bcopy(psargs, pnp->pr_common->prc_proc->p_user.u_psargs, PRARGSZ);
+
+	prunlock(pnp);
+
+	return (0);
+}
+
+int
+pr_write_psinfo(prnode_t *pnp, uio_t *uiop)
+{
+	int error;
+
+	if ((error = pr_write_psinfo_fname(pnp, uiop)) != 0)
+		return (error);
+
+	if ((error = pr_write_psinfo_psargs(pnp, uiop)) != 0)
+		return (error);
+
+	return (0);
+}
+
+
 /* ARGSUSED */
 static int
 prwrite(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr, caller_context_t *ct)
@@ -2763,6 +2860,9 @@ prwrite(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr, caller_context_t *ct)
 		if (error == EINTR)
 			uiop->uio_resid = resid;
 		return (error);
+
+	case PR_PSINFO:
+		return (pr_write_psinfo(pnp, uiop));
 
 	default:
 		return ((vp->v_type == VDIR)? EISDIR : EBADF);
@@ -4429,8 +4529,8 @@ prlwpnode(prnode_t *pnp, uint_t tid)
 static	uint32_t nprnode;
 static	uint32_t nprcommon;
 
-#define	INCREMENT(x)	atomic_add_32(&x, 1);
-#define	DECREMENT(x)	atomic_add_32(&x, -1);
+#define	INCREMENT(x)	atomic_inc_32(&x);
+#define	DECREMENT(x)	atomic_dec_32(&x);
 
 #else
 
@@ -4546,6 +4646,9 @@ prgetnode(vnode_t *dp, prnodetype_t type)
 		break;
 
 	case PR_PSINFO:
+		pnp->pr_mode = 0644;	/* readable by all + owner can write */
+		break;
+
 	case PR_LPSINFO:
 	case PR_LWPSINFO:
 	case PR_USAGE:
@@ -6010,7 +6113,7 @@ prpoll(vnode_t *vp, short events, int anyyet, short *reventsp,
 	}
 
 	*reventsp = revents;
-	if (!anyyet && revents == 0) {
+	if ((!anyyet && revents == 0) || (events & POLLET)) {
 		/*
 		 * Arrange to wake up the polling lwp when
 		 * the target process/lwp stops or terminates

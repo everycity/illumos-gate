@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  *
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <sys/cpuvar.h>
@@ -2173,6 +2173,18 @@ iscsit_deferred_dispatch(idm_pdu_t *rx_pdu)
 	iscsit_conn_t *ict = rx_pdu->isp_ic->ic_handle;
 
 	/*
+	 * If this isn't a login packet, we need a session.  Otherwise
+	 * this is a protocol error (perhaps one IDM should've caught?).
+	 */
+	if (IDM_PDU_OPCODE(rx_pdu) != ISCSI_OP_LOGIN_CMD &&
+	    ict->ict_sess == NULL) {
+		DTRACE_PROBE2(iscsi__idm__deferred__no__session,
+		    iscsit_conn_t *, ict, idm_pdu_t *, rx_pdu);
+		idm_pdu_complete(rx_pdu, IDM_STATUS_FAIL);
+		return;
+	}
+
+	/*
 	 * If the connection has been lost then ignore new PDU's
 	 */
 	mutex_enter(&ict->ict_mutex);
@@ -3113,7 +3125,7 @@ iscsit_check_cmdsn_and_queue(idm_pdu_t *rx_pdu)
 		 * staging queue, the commands are processed out of the
 		 * queue in cmdSN order only.
 		 */
-		rx_pdu->isp_queue_time = ddi_get_time();
+		rx_pdu->isp_queue_time = gethrtime();
 		iscsit_add_pdu_to_queue(ist, rx_pdu);
 		mutex_exit(&ist->ist_sn_mutex);
 		return (ISCSIT_CMDSN_GT_EXPCMDSN);
@@ -3383,8 +3395,8 @@ iscsit_rxpdu_queue_monitor_session(iscsit_sess_t *ist)
 			 * stop scanning the staging queue until the timer
 			 * fires again
 			 */
-			if ((ddi_get_time() - next_pdu->isp_queue_time)
-			    < rxpdu_queue_threshold) {
+			if ((gethrtime() - next_pdu->isp_queue_time)
+			    < (rxpdu_queue_threshold * NANOSEC)) {
 				mutex_exit(&ist->ist_sn_mutex);
 				return;
 			}

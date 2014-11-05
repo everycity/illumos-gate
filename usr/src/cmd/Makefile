@@ -21,15 +21,16 @@
 
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
-# Copyright (c) 2013 Joyent, Inc.  All rights reserved.
+# Copyright (c) 2014 Joyent, Inc.  All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright (c) 2013 DEY Storage Systems, Inc. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 
 include ../Makefile.master
 
 #
-#	Note that the commands 'perl', and 'man' are first in
-#	the list, violating alphabetical order.  This is because they are very
+#	Note that if the 'lp' command were built, it would be first in
+#	the list, violating alphabetical order.  This is because it is very
 #	long-running and should be given the most wall-clock time for a
 #	parallel build.
 #
@@ -51,7 +52,6 @@ COMMON_SUBDIRS=		\
 	allocate	\
 	availdevs	\
 	perl		\
-	man		\
 	Adm		\
 	abi		\
 	adbgen		\
@@ -104,6 +104,7 @@ COMMON_SUBDIRS=		\
 	crypt		\
 	csh		\
 	csplit		\
+	ctfdiff		\
 	ctrun		\
 	ctstat		\
 	ctwatch		\
@@ -157,7 +158,6 @@ COMMON_SUBDIRS=		\
 	filesync	\
 	fgrep		\
 	file		\
-	filebench	\
 	find		\
 	flowadm		\
 	flowstat	\
@@ -248,8 +248,11 @@ COMMON_SUBDIRS=		\
 	mach		\
 	machid		\
 	mail		\
+	mailwrapper	\
 	mailx		\
 	makekey		\
+	man		\
+	mandoc		\
 	mdb		\
 	mesg		\
 	mkdir		\
@@ -431,6 +434,8 @@ COMMON_SUBDIRS=		\
 	valtools	\
 	vgrind		\
 	vi		\
+	vndadm		\
+	vndstat		\
 	volcheck	\
 	volrmmount	\
 	vrrpadm		\
@@ -466,27 +471,12 @@ COMMON_SUBDIRS=		\
 	zstreamdump	\
 	ztest
 
-$(CLOSED_BUILD)COMMON_SUBDIRS += \
-	$(CLOSED)/cmd/iconv	\
-	$(CLOSED)/cmd/ksh	\
-	$(CLOSED)/cmd/localedef	\
-	$(CLOSED)/cmd/more_xpg4	\
-	$(CLOSED)/cmd/mtst	\
-	$(CLOSED)/cmd/od	\
-	$(CLOSED)/cmd/patch	\
-	$(CLOSED)/cmd/pax	\
-	$(CLOSED)/cmd/printf	\
-	$(CLOSED)/cmd/sed	\
-	$(CLOSED)/cmd/sed_xpg4
-
 i386_SUBDIRS=		\
 	acpihpd		\
 	addbadsec	\
 	biosdev		\
 	diskscan	\
 	lms		\
-	ntfsprogs	\
-	parted		\
 	rtc		\
 	ucodeadm	\
 	xvm
@@ -508,11 +498,10 @@ sparc_SUBDIRS=		\
 	vntsd
 
 #
-# Commands that are messaged.  Note that 'man' comes first
-# (see previous comment about 'man').
+# Commands that are messaged.  Note that 'lp' comes first
+# (see previous comment about 'lp'.)
 #
 MSGSUBDIRS=		\
-	man		\
 	abi		\
 	acctadm		\
 	allocate	\
@@ -625,6 +614,7 @@ MSGSUBDIRS=		\
 	ls		\
 	luxadm		\
 	mailx		\
+	man		\
 	mesg		\
 	mkdir		\
 	mkpwdict	\
@@ -744,18 +734,6 @@ MSGSUBDIRS=		\
 	zpool		\
 	zonestat
 
-$(CLOSED_BUILD)MSGSUBDIRS += \
-	$(CLOSED)/cmd/iconv	\
-	$(CLOSED)/cmd/ksh	\
-	$(CLOSED)/cmd/localedef	\
-	$(CLOSED)/cmd/more_xpg4	\
-	$(CLOSED)/cmd/od	\
-	$(CLOSED)/cmd/patch	\
-	$(CLOSED)/cmd/pax	\
-	$(CLOSED)/cmd/printf	\
-	$(CLOSED)/cmd/sed	\
-	$(CLOSED)/cmd/sed_xpg4
-
 sparc_MSGSUBDIRS=	\
 	fruadm		\
 	prtdscp		\
@@ -781,9 +759,6 @@ DCSUBDIRS=		\
 	who		\
 	whodo		\
 	write
-
-$(CLOSED_BUILD)DCSUBDIRS += \
-	$(CLOSED)/cmd/pax
 
 #
 # commands that belong only to audit.
@@ -848,6 +823,7 @@ _dc: $(DCSUBDIRS)
 fs.d: fstyp
 ksh:	shcomp isaexec
 mdb:	terminfo
+print:	lp
 
 $(FIRST_SUBDIRS) $(BWOSDIRS) $(SUBDIRS) $(AUDITSUBDIRS): FRC
 	@if [ -f $@/Makefile  ]; then \

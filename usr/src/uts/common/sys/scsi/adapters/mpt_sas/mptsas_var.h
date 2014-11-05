@@ -21,8 +21,9 @@
 
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Tegile Systems Inc. All rights reserved.
  */
 
 /*
@@ -56,9 +57,11 @@
 #define	_SYS_SCSI_ADAPTERS_MPTVAR_H
 
 #include <sys/byteorder.h>
+#include <sys/queue.h>
 #include <sys/isa_defs.h>
 #include <sys/sunmdi.h>
 #include <sys/mdi_impldefs.h>
+#include <sys/scsi/adapters/mpt_sas/mptsas_hash.h>
 #include <sys/scsi/adapters/mpt_sas/mptsas_ioctl.h>
 #include <sys/scsi/adapters/mpt_sas/mpi/mpi2_tool.h>
 #include <sys/scsi/adapters/mpt_sas/mpi/mpi2_cnfg.h>
@@ -88,6 +91,15 @@ typedef uint16_t		mptsas_phymask_t;
 
 #define	MPTSAS_INVALID_DEVHDL	0xffff
 #define	MPTSAS_SATA_GUID	"sata-guid"
+
+/*
+ * Hash table sizes for SMP targets (i.e., expanders) and ordinary SSP/STP
+ * targets.  There's no need to go overboard here, as the ordinary paths for
+ * I/O do not normally require hashed target lookups.  These should be good
+ * enough and then some for any fabric within the hardware's capabilities.
+ */
+#define	MPTSAS_SMP_BUCKET_COUNT		23
+#define	MPTSAS_TARGET_BUCKET_COUNT	97
 
 /*
  * MPT HW defines
@@ -130,15 +142,21 @@ typedef uint16_t		mptsas_phymask_t;
 #define	MPTSAS_MAX_FRAME_SGES(mpt) \
 	(((mpt->m_req_frame_size - (sizeof (MPI2_SCSI_IO_REQUEST))) / 8) + 1)
 
+#define	MPTSAS_SGE_SIZE(mpt)					\
+	((mpt)->m_MPI25 ? sizeof (MPI2_IEEE_SGE_SIMPLE64) :	\
+	    sizeof (MPI2_SGE_SIMPLE64))
+
 /*
- * Caculating how many 64-bit DMA simple elements can be stored in the first
+ * Calculating how many 64-bit DMA simple elements can be stored in the first
  * frame. Note that msg_scsi_io_request contains 2 double-words (8 bytes) for
  * element storage.  And 64-bit dma element is 3 double-words (12 bytes) in
- * size.
+ * size. IEEE 64-bit dma element used for SAS3 controllers is 4 double-words
+ * (16 bytes).
  */
 #define	MPTSAS_MAX_FRAME_SGES64(mpt) \
 	((mpt->m_req_frame_size - \
-	(sizeof (MPI2_SCSI_IO_REQUEST)) + sizeof (MPI2_SGE_IO_UNION)) / 12)
+	sizeof (MPI2_SCSI_IO_REQUEST) + sizeof (MPI2_SGE_IO_UNION)) / \
+	MPTSAS_SGE_SIZE(mpt))
 
 /*
  * Scatter-gather list structure defined by HBA hardware
@@ -185,20 +203,23 @@ typedef	struct NcrTableIndirect {	/* Table Indirect entries */
 #define	MPTSAS_RAID_WWID(wwid) \
 	((wwid & 0x0FFFFFFFFFFFFFFF) | 0x3000000000000000)
 
+typedef struct mptsas_target_addr {
+	uint64_t mta_wwn;
+	mptsas_phymask_t mta_phymask;
+} mptsas_target_addr_t;
+
+TAILQ_HEAD(mptsas_active_cmdq, mptsas_cmd);
+typedef struct mptsas_active_cmdq mptsas_active_cmdq_t;
+
 typedef	struct mptsas_target {
-		uint64_t		m_sas_wwn;	/* hash key1 */
-		mptsas_phymask_t	m_phymask;	/* hash key2 */
-		/*
-		 * m_dr_flag is a flag for DR, make sure the member
-		 * take the place of dr_flag of mptsas_hash_data.
-		 */
-		uint8_t			m_dr_flag;	/* dr_flag */
+		mptsas_target_addr_t	m_addr;
+		refhash_link_t		m_link;
+		uint8_t			m_dr_flag;
 		uint16_t		m_devhdl;
 		uint32_t		m_deviceinfo;
 		uint8_t			m_phynum;
 		uint32_t		m_dups;
-		int32_t			m_timeout;
-		int32_t			m_timebase;
+		mptsas_active_cmdq_t	m_active_cmdq;
 		int32_t			m_t_throttle;
 		int32_t			m_t_ncmds;
 		int32_t			m_reset_delay;
@@ -206,30 +227,27 @@ typedef	struct mptsas_target {
 
 		uint16_t		m_qfull_retry_interval;
 		uint8_t			m_qfull_retries;
+		uint16_t		m_io_flags;
 		uint16_t		m_enclosure;
 		uint16_t		m_slot_num;
 		uint32_t		m_tgt_unconfigured;
 		uint8_t			m_led_status;
+		uint8_t			m_scsi_req_desc_type;
 
 } mptsas_target_t;
 
+/*
+ * If you change this structure, be sure that mptsas_smp_target_copy()
+ * does the right thing.
+ */
 typedef struct mptsas_smp {
-	uint64_t	m_sasaddr;	/* hash key1 */
-	mptsas_phymask_t m_phymask;	/* hash key2 */
-	uint8_t		reserved1;
-	uint16_t	m_devhdl;
-	uint32_t	m_deviceinfo;
-	uint16_t	m_pdevhdl;
-	uint32_t	m_pdevinfo;
+	mptsas_target_addr_t	m_addr;
+	refhash_link_t		m_link;
+	uint16_t		m_devhdl;
+	uint32_t		m_deviceinfo;
+	uint16_t		m_pdevhdl;
+	uint32_t		m_pdevinfo;
 } mptsas_smp_t;
-
-typedef struct mptsas_hash_data {
-	uint64_t	key1;
-	mptsas_phymask_t key2;
-	uint8_t		dr_flag;
-	uint16_t	devhdl;
-	uint32_t	device_info;
-} mptsas_hash_data_t;
 
 typedef struct mptsas_cache_frames {
 	ddi_dma_handle_t m_dma_hdl;
@@ -259,8 +277,9 @@ typedef struct	mptsas_cmd {
 
 	int			cmd_pkt_flags;
 
-	/* timer for command in active slot */
-	int			cmd_active_timeout;
+	/* pending expiration time for command in active slot */
+	hrtime_t		cmd_active_expiration;
+	TAILQ_ENTRY(mptsas_cmd)	cmd_active_link;
 
 	struct scsi_pkt		*cmd_pkt;
 	struct scsi_arq_status	cmd_scb;
@@ -361,6 +380,8 @@ typedef struct mptsas_pt_request {
 	uint32_t data_size;
 	uint32_t dataout_size;
 	uint32_t direction;
+	uint8_t simple;
+	uint16_t sgl_offset;
 	ddi_dma_cookie_t data_cookie;
 	ddi_dma_cookie_t dataout_cookie;
 } mptsas_pt_request_t;
@@ -445,17 +466,24 @@ typedef struct mptsas_raidconfig {
 } m_raidconfig_t;
 
 /*
- * Structure to hold active outstanding cmds.  Also, keep
- * timeout on a per target basis.
+ * Track outstanding commands.  The index into the m_slot array is the SMID
+ * (system message ID) of the outstanding command.  SMID 0 is reserved by the
+ * software/firmware protocol and is never used for any command we generate;
+ * as such, the assertion m_slot[0] == NULL is universally true.  The last
+ * entry in the array is slot number MPTSAS_TM_SLOT(mpt) and is used ONLY for
+ * task management commands.  No normal SCSI or ATA command will ever occupy
+ * that slot.  Finally, the relationship m_slot[X]->cmd_slot == X holds at any
+ * time that a consistent view of the target array is obtainable.
+ *
+ * As such, m_n_normal is the maximum number of slots available to ordinary
+ * commands, and the relationship:
+ * mpt->m_active->m_n_normal == mpt->m_max_requests - 2
+ * always holds after initialisation.
  */
 typedef struct mptsas_slots {
-	mptsas_hash_table_t	m_tgttbl;
-	mptsas_hash_table_t	m_smptbl;
-	m_raidconfig_t		m_raidconfig[MPTSAS_MAX_RAIDCONFIGS];
-	uint8_t			m_num_raid_configs;
-	uint16_t		m_tags;
-	size_t			m_size;
-	uint16_t		m_n_slots;
+	size_t			m_size;		/* size of struct, bytes */
+	uint_t			m_n_normal;	/* see above */
+	uint_t			m_rotor;	/* next slot idx to consider */
 	mptsas_cmd_t		*m_slot[1];
 } mptsas_slots_t;
 
@@ -673,6 +701,12 @@ typedef struct mptsas {
 	 */
 	uint_t		m_softstate;
 
+	refhash_t	*m_targets;
+	refhash_t	*m_smp_targets;
+
+	m_raidconfig_t	m_raidconfig[MPTSAS_MAX_RAIDCONFIGS];
+	uint8_t		m_num_raid_configs;
+
 	struct mptsas_slots *m_active;	/* outstanding cmds */
 
 	mptsas_cmd_t	*m_waitq;	/* cmd queue for active request */
@@ -876,6 +910,9 @@ typedef struct mptsas {
 	mptsas_fw_diagnostic_buffer_t
 		m_fw_diag_buffer_list[MPI2_DIAG_BUF_TYPE_COUNT];
 
+	/* GEN3 support */
+	uint8_t			m_MPI25;
+
 	/*
 	 * Event Replay flag (MUR support)
 	 */
@@ -920,9 +957,7 @@ _NOTE(SCHEME_PROTECTS_DATA("stable data", mptsas::m_kmem_cache))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas::m_io_dma_attr.dma_attr_sgllen))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas::m_devid))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas::m_productid))
-_NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas::m_port_type))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas::m_mpxio_enable))
-_NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas::m_ntargets))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas::m_instance))
 
 /*
@@ -1150,7 +1185,7 @@ _NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas::m_instance))
  */
 #define	DEFAULT_SCSI_OPTIONS	SCSI_OPTIONS_DR
 #define	DEFAULT_TAG_AGE_LIMIT	2
-#define	DEFAULT_WD_TICK		10
+#define	DEFAULT_WD_TICK		1
 
 /*
  * invalid hostid.
@@ -1316,7 +1351,7 @@ int mptsas_ioc_init(mptsas_t *mpt);
 int mptsas_get_sas_device_page0(mptsas_t *mpt, uint32_t page_address,
     uint16_t *dev_handle, uint64_t *sas_wwn, uint32_t *dev_info,
     uint8_t *physport, uint8_t *phynum, uint16_t *pdevhandle,
-    uint16_t *slot_num, uint16_t *enclosure);
+    uint16_t *slot_num, uint16_t *enclosure, uint16_t *io_flags);
 int mptsas_get_sas_io_unit_page(mptsas_t *mpt);
 int mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt);
 int mptsas_get_sas_expander_page0(mptsas_t *mpt, uint32_t page_address,
@@ -1351,14 +1386,25 @@ void mptsas_raid_action_system_shutdown(mptsas_t *mpt);
 #define	MPTSAS_IOCSTATUS(status) (status & MPI2_IOCSTATUS_MASK)
 /*
  * debugging.
+ * MPTSAS_DBGLOG_LINECNT must be a power of 2.
  */
+#define	MPTSAS_DBGLOG_LINECNT	128
+#define	MPTSAS_DBGLOG_LINELEN	256
+#define	MPTSAS_DBGLOG_BUFSIZE	(MPTSAS_DBGLOG_LINECNT * MPTSAS_DBGLOG_LINELEN)
+
 #if defined(MPTSAS_DEBUG)
 
+extern uint32_t mptsas_debugprt_flags;
+extern uint32_t mptsas_debuglog_flags;
+
 void mptsas_printf(char *fmt, ...);
+void mptsas_debug_log(char *fmt, ...);
 
 #define	MPTSAS_DBGPR(m, args)	\
-	if (mptsas_debug_flags & (m)) \
-		mptsas_printf args
+	if (mptsas_debugprt_flags & (m)) \
+		mptsas_printf args;   \
+	if (mptsas_debuglog_flags & (m)) \
+		mptsas_debug_log args
 #else	/* ! defined(MPTSAS_DEBUG) */
 #define	MPTSAS_DBGPR(m, args)
 #endif	/* defined(MPTSAS_DEBUG) */
@@ -1381,9 +1427,9 @@ void mptsas_printf(char *fmt, ...);
 #define	NDBG12(args)	MPTSAS_DBGPR(0x1000, args)	/* enumeration */
 #define	NDBG13(args)	MPTSAS_DBGPR(0x2000, args)	/* configuration page */
 #define	NDBG14(args)	MPTSAS_DBGPR(0x4000, args)	/* LED control */
-#define	NDBG15(args)	MPTSAS_DBGPR(0x8000, args)
+#define	NDBG15(args)	MPTSAS_DBGPR(0x8000, args)	/* Passthrough */
 
-#define	NDBG16(args)	MPTSAS_DBGPR(0x010000, args)
+#define	NDBG16(args)	MPTSAS_DBGPR(0x010000, args)	/* SAS Broadcasts */
 #define	NDBG17(args)	MPTSAS_DBGPR(0x020000, args)	/* scatter/gather */
 #define	NDBG18(args)	MPTSAS_DBGPR(0x040000, args)
 #define	NDBG19(args)	MPTSAS_DBGPR(0x080000, args)	/* handshaking */

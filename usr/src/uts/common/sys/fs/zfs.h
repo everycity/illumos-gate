@@ -21,9 +21,9 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -46,10 +46,11 @@ extern "C" {
  * combined into masks that can be passed to various functions.
  */
 typedef enum {
-	ZFS_TYPE_FILESYSTEM	= 0x1,
-	ZFS_TYPE_SNAPSHOT	= 0x2,
-	ZFS_TYPE_VOLUME		= 0x4,
-	ZFS_TYPE_POOL		= 0x8
+	ZFS_TYPE_FILESYSTEM	= (1 << 0),
+	ZFS_TYPE_SNAPSHOT	= (1 << 1),
+	ZFS_TYPE_VOLUME		= (1 << 2),
+	ZFS_TYPE_POOL		= (1 << 3),
+	ZFS_TYPE_BOOKMARK	= (1 << 4)
 } zfs_type_t;
 
 typedef enum dmu_objset_type {
@@ -141,6 +142,12 @@ typedef enum {
 	ZFS_PROP_LOGICALUSED,
 	ZFS_PROP_LOGICALREFERENCED,
 	ZFS_PROP_INCONSISTENT,		/* not exposed to the user */
+	ZFS_PROP_FILESYSTEM_LIMIT,
+	ZFS_PROP_SNAPSHOT_LIMIT,
+	ZFS_PROP_FILESYSTEM_COUNT,
+	ZFS_PROP_SNAPSHOT_COUNT,
+	ZFS_PROP_REDUNDANT_METADATA,
+	ZFS_PROP_PREV_SNAP,
 	ZFS_NUM_PROPS
 } zfs_prop_t;
 
@@ -183,6 +190,8 @@ typedef enum {
 	ZPOOL_PROP_COMMENT,
 	ZPOOL_PROP_EXPANDSZ,
 	ZPOOL_PROP_FREEING,
+	ZPOOL_PROP_FRAGMENTATION,
+	ZPOOL_PROP_LEAKED,
 	ZPOOL_NUM_PROPS
 } zpool_prop_t;
 
@@ -334,6 +343,10 @@ typedef enum {
 	ZFS_SYNC_DISABLED = 2
 } zfs_sync_type_t;
 
+typedef enum {
+	ZFS_REDUNDANT_METADATA_ALL,
+	ZFS_REDUNDANT_METADATA_MOST
+} zfs_redundant_metadata_type_t;
 
 /*
  * On-disk version number.
@@ -577,6 +590,13 @@ typedef struct zpool_rewind_policy {
 #define	SPA_MINDEVSIZE		(64ULL << 20)
 
 /*
+ * Set if the fragmentation has not yet been calculated. This can happen
+ * because the space maps have not been upgraded or the histogram feature
+ * is not enabled.
+ */
+#define	ZFS_FRAG_INVALID	UINT64_MAX
+
+/*
  * The location of the pool configuration repository, shared between kernel and
  * userland.
  */
@@ -713,6 +733,7 @@ typedef struct vdev_stat {
 	uint64_t	vs_self_healed;		/* self-healed bytes	*/
 	uint64_t	vs_scan_removing;	/* removing?	*/
 	uint64_t	vs_scan_processed;	/* scan processed bytes	*/
+	uint64_t	vs_fragmentation;	/* device fragmentation */
 } vdev_stat_t;
 
 /*
@@ -828,6 +849,9 @@ typedef enum zfs_ioc {
 	ZFS_IOC_SEND_NEW,
 	ZFS_IOC_SEND_SPACE,
 	ZFS_IOC_CLONE,
+	ZFS_IOC_BOOKMARK,
+	ZFS_IOC_GET_BOOKMARKS,
+	ZFS_IOC_DESTROY_BOOKMARKS,
 	ZFS_IOC_LAST
 } zfs_ioc_t;
 

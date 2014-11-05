@@ -24,6 +24,7 @@
  * Copyright 2012 Joyent, Inc.  All rights reserved.
  *
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2014 Gary Mills
  */
 
 /*
@@ -66,9 +67,14 @@
 #include <blowfish/blowfish_impl.h>
 
 static const char USAGE[] =
-	"Usage: %s [-r] -a file [ device ] "
-	" [-c aes-128-cbc|aes-192-cbc|aes-256-cbc|des3-cbc|blowfish-cbc]"
-	" [-e] [-k keyfile] [-T [token]:[manuf]:[serial]:key]\n"
+	"Usage: %s [-r] -a file [ device ]\n"
+	"       %s [-r] -c crypto_algorithm -a file [device]\n"
+	"       %s [-r] -c crypto_algorithm -k raw_key_file -a file [device]\n"
+	"       %s [-r] -c crypto_algorithm -T [token]:[manuf]:[serial]:key "
+	"-a file [device]\n"
+	"       %s [-r] -c crypto_algorithm -T [token]:[manuf]:[serial]:key "
+	"-k wrapped_key_file -a file [device]\n"
+	"       %s [-r] -c crypto_algorithm -e -a file [device]\n"
 	"       %s -d file | device\n"
 	"       %s -C [gzip|gzip-6|gzip-9|lzma] [-s segment_size] file\n"
 	"       %s -U file\n"
@@ -151,7 +157,7 @@ static void
 usage(const char *pname)
 {
 	(void) fprintf(stderr, gettext(USAGE), pname, pname, pname,
-	    pname, pname);
+	    pname, pname, pname, pname, pname, pname, pname);
 	exit(E_USAGE);
 }
 
@@ -163,7 +169,7 @@ gzip_compress(void *src, size_t srclen, void *dst, size_t *dstlen, int level)
 
 	/*
 	 * The first time we are called, attempt to dlopen()
-	 * libz.so and get a pointer to the compress2() function
+	 * libz.so.1 and get a pointer to the compress2() function
 	 */
 	if (compress2p == NULL) {
 		if ((libz_hdl = openlib(LIBZ)) == NULL)

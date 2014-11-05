@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
  */
 
 /*
@@ -2850,6 +2851,43 @@ highbit(ulong_t i)
 #if defined(__lint)
 
 /*ARGSUSED*/
+int
+highbit64(uint64_t i)
+{ return (0); }
+
+#else	/* __lint */
+
+#if defined(__amd64)
+
+	ENTRY(highbit64)
+	movl	$-1, %eax
+	bsrq	%rdi, %rax
+	incl	%eax
+	ret
+	SET_SIZE(highbit64)
+
+#elif defined(__i386)
+
+	ENTRY(highbit64)
+	bsrl	8(%esp), %eax
+	jz	.lowbit
+	addl	$32, %eax
+	jmp	.done
+
+.lowbit:
+	movl	$-1, %eax
+	bsrl	4(%esp), %eax
+.done:
+	incl	%eax
+	ret
+	SET_SIZE(highbit64)
+
+#endif	/* __i386 */
+#endif	/* __lint */
+
+#if defined(__lint)
+
+/*ARGSUSED*/
 uint64_t
 rdmsr(uint_t r)
 { return (0); }
@@ -3910,6 +3948,8 @@ bcmp(const void *s1, const void *s2, size_t count)
 	pushq	%rbp
 	movq	%rsp, %rbp
 #ifdef DEBUG
+	testq	%rdx,%rdx
+	je	1f
 	movq	postbootkernelbase(%rip), %r11
 	cmpq	%r11, %rdi
 	jb	0f
@@ -3938,6 +3978,8 @@ bcmp(const void *s1, const void *s2, size_t count)
 	pushl	%ebp
 	movl	%esp, %ebp	/ create new stack frame
 #ifdef DEBUG
+	cmpl	$0, ARG_LENGTH(%ebp)
+	je	1f
 	movl    postbootkernelbase, %eax
 	cmpl    %eax, ARG_S1(%ebp)
 	jb	0f

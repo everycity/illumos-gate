@@ -22,6 +22,7 @@
 #
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 
 #
@@ -44,18 +45,6 @@ NATIVE_ADJUNCT=	/usr
 # RELEASE_BUILD should be cleared for final release builds.
 # NOT_RELEASE_BUILD is exactly what the name implies.
 #
-# INTERNAL_RELEASE_BUILD is a subset of RELEASE_BUILD. It mostly controls
-# identification strings. Enabling RELEASE_BUILD automatically enables
-# INTERNAL_RELEASE_BUILD.
-#
-# CLOSED_BUILD controls whether we try to build files under
-# usr/closed.  ("" means to build closed code, "#" means don't try to
-# build it.)  Skipping the closed code implies doing an export release
-# build.
-#
-# STRIP_COMMENTS toggles comment section striping. Generally the same setting
-# as INTERNAL_RELEASE_BUILD.
-#
 # __GNUC toggles the building of ON components using gcc and related tools.
 # Normally set to `#', set it to `' to do gcc build.
 #
@@ -75,15 +64,9 @@ PRE_POUND=				pre\#
 POUND_SIGN=				$(PRE_POUND:pre\%=%)
 
 NOT_RELEASE_BUILD=
-INTERNAL_RELEASE_BUILD=			$(POUND_SIGN)
 RELEASE_BUILD=				$(POUND_SIGN)
 $(RELEASE_BUILD)NOT_RELEASE_BUILD=	$(POUND_SIGN)
-$(RELEASE_BUILD)INTERNAL_RELEASE_BUILD=
 PATCH_BUILD=				$(POUND_SIGN)
-
-# If CLOSED_IS_PRESENT is not set, assume the closed tree is present.
-CLOSED_BUILD_1=	$(CLOSED_IS_PRESENT:yes=)
-CLOSED_BUILD=	$(CLOSED_BUILD_1:no=$(POUND_SIGN))
 
 # SPARC_BLD is '#' for an Intel build.
 # INTEL_BLD is '#' for a Sparc build.
@@ -92,25 +75,13 @@ SPARC_BLD=      $(SPARC_BLD_1:sparc=)
 INTEL_BLD_1=    $(MACH:sparc=$(POUND_SIGN))
 INTEL_BLD=      $(INTEL_BLD_1:i386=)
 
-STRIP_COMMENTS=	$(INTERNAL_RELEASE_BUILD)
-
-# Are we building tonic closedbins? Unless you have used the
-# -O flag to nightly or bldenv, leave the definition of TONICBUILD
-# as $(POUND_SIGN).
-#
-# IF YOU CHANGE CLOSEDROOT, you MUST change install.bin
-# to match the new definition.
-TONICBUILD=     $(POUND_SIGN)
-$(TONICBUILD)CLOSEDROOT= $(ROOT)-closed
-
-
 # The variables below control the compilers used during the build.
 # There are a number of permutations.
 #
 # __GNUC and __SUNC control (and indicate) the primary compiler.  Whichever
 # one is not POUND_SIGN is the primary, with the other as the shadow.  They
 # may also be used to control entirely compiler-specific Makefile assignments.
-# __SUNC and Sun Studio are the default.
+# __GNUC and GCC are the default.
 #
 # __GNUC64 indicates that the 64bit build should use the GNU C compiler.
 # There is no Sun C analogue.
@@ -120,8 +91,8 @@ $(TONICBUILD)CLOSEDROOT= $(ROOT)-closed
 # used.  They also allow compiler-version specific Makefile fragments.
 #
 
-__GNUC=			$(POUND_SIGN)
-$(__GNUC)__SUNC=	$(POUND_SIGN)
+__SUNC=			$(POUND_SIGN)
+$(__SUNC)__GNUC=	$(POUND_SIGN)
 __GNUC64=		$(__GNUC)
 
 # CLOSED is the root of the tree that contains source which isn't released
@@ -184,6 +155,7 @@ JAVADOC=	$(JAVA_ROOT)/bin/javadoc
 RMIC=		$(JAVA_ROOT)/bin/rmic
 JAR=		$(JAVA_ROOT)/bin/jar
 CTFCONVERT=	$(ONBLD_TOOLS)/bin/$(MACH)/ctfconvert
+CTFDIFF=	$(ONBLD_TOOLS)/bin/$(MACH)/ctfdiff
 CTFMERGE=	$(ONBLD_TOOLS)/bin/$(MACH)/ctfmerge
 CTFSTABS=	$(ONBLD_TOOLS)/bin/$(MACH)/ctfstabs
 CTFSTRIP=	$(ONBLD_TOOLS)/bin/$(MACH)/ctfstrip
@@ -194,6 +166,8 @@ CTFFINDMOD=	$(ONBLD_TOOLS)/bin/ctffindmod
 XREF=		$(ONBLD_TOOLS)/bin/xref
 FIND=		/usr/bin/find
 PERL=		/usr/bin/perl
+PERL_VERSION=	5.12
+PERL_PKGVERS=	-512
 PYTHON_26=	/usr/bin/python2.6
 PYTHON=		$(PYTHON_26)
 SORT=		/usr/bin/sort
@@ -249,12 +223,6 @@ MANIFEST_CHECK=	\
 	SVCCFG_CONFIGD_PATH=$(SRC)/cmd/svc/configd/svc.configd-native \
 	$(SRC)/cmd/svc/svccfg/svccfg-native validate $<
 
-#
-# IMPORTANT:: If you change any of INS.file, INS.dir, INS.rename,
-# INS.link or INS.symlink here, then you must also change the
-# corresponding override definitions in $CLOSED/Makefile.tonic.
-# If you do not do this, then the closedbins build for the OpenSolaris
-# community will break. PS, the gatekeepers will be upset too.
 INS.file=	$(RM) $@; $(INS) -s -m $(FILEMODE) -f $(@D) $<
 INS.dir=	$(INS) -s -d -m $(DIRMODE) $@
 # installs and renames at once
@@ -700,8 +668,9 @@ MAPFILE.NGB =		$(MAPFILE.NGB_$(MACH))
 MAPFILE.INT =		mapfile-intf
 
 #
-# LDLIBS32 can be set in the environment to override the following assignment.
-# LDLIBS64 can be set to override the assignment made in Makefile.master.64.
+# LDLIBS32 and LDLIBS64 can be set in the environment to override the following
+# assignments.
+#
 # These environment settings make sure that no libraries are searched outside
 # of the local workspace proto area:
 #	LDLIBS32=-YP,$ROOT/lib:$ROOT/usr/lib
@@ -711,6 +680,12 @@ LDLIBS32 =	$(ENVLDLIBS1) $(ENVLDLIBS2) $(ENVLDLIBS3)
 LDLIBS32 +=	$(ADJUNCT_PROTO:%=-L%/usr/lib -L%/lib)
 LDLIBS.cmd = 	$(LDLIBS32)
 LDLIBS.lib =	$(LDLIBS32)
+
+LDLIBS64 =	$(ENVLDLIBS1:%=%/$(MACH64)) \
+		$(ENVLDLIBS2:%=%/$(MACH64)) \
+		$(ENVLDLIBS3:%=%/$(MACH64))
+LDLIBS64 +=     $(ADJUNCT_PROTO:%=-L%/usr/lib/$(MACH64) -L%/lib/$(MACH64))
+
 #
 # Define compilation macros.
 #
@@ -1002,8 +977,7 @@ PATCH_DATE=	$(RELEASE_DATE)
 RELEASE_CM=	"@($(POUND_SIGN))SunOS $(RELEASE) $(PATCHID) $(PATCH_DATE)"
 DEV_CM=		"@($(POUND_SIGN))SunOS Internal Development: non-nightly build"
 
-PROCESS_COMMENT=		   @?${MCS} -c -a $(RELEASE_CM) -a $(DEV_CM)
-$(STRIP_COMMENTS)PROCESS_COMMENT=  @?${MCS} -d -a $(RELEASE_CM) -a $(DEV_CM)
+PROCESS_COMMENT=  @?${MCS} -d -a $(RELEASE_CM) -a $(DEV_CM)
 $(RELEASE_BUILD)PROCESS_COMMENT=   @?${MCS} -d -a $(RELEASE_CM)
 
 STRIP_STABS=			   :

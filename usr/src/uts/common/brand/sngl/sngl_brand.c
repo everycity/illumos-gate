@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2014, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/errno.h>
@@ -80,7 +80,11 @@ struct brand_ops sngl_brops = {
 	sngl_elfexec,
 	NULL,
 	NULL,
+	NULL,
 	NSIG,
+	NULL,
+	NULL,
+	NULL
 };
 
 #ifdef	__amd64
@@ -106,7 +110,8 @@ struct brand	sngl_brand = {
 	BRAND_VER_1,
 	"sngl",
 	&sngl_brops,
-	&sngl_mops
+	&sngl_mops,
+	sizeof (brand_proc_data_t),
 };
 
 static struct modlbrand modlbrand = {
@@ -147,7 +152,8 @@ sngl_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 	int	res;
 
 	*rval = 0;
-	res = brand_solaris_cmd(cmd, arg1, arg2, arg3, &sngl_brand, SNGL_VERSION);
+	res = brand_solaris_cmd(cmd, arg1, arg2, arg3, &sngl_brand,
+	    SNGL_VERSION);
 	if (res >= 0)
 		return (res);
 

@@ -175,7 +175,9 @@ PKGMOG_DEFINES= \
 	PKGVERS_COMPONENT=$(PKGVERS_COMPONENT) \
 	PKGVERS_BUILTON=$(PKGVERS_BUILTON) \
 	PKGVERS_BRANCH=$(PKGVERS_BRANCH) \
-	PKGVERS=$(PKGVERS)
+	PKGVERS=$(PKGVERS) \
+	PERL_VERSION=$(PERL_VERSION) \
+	PERL_PKGVERS=$(PERL_PKGVERS)
 
 PKGDEP_TOKENS_i386= \
 	'PLATFORM=i86hvm' \
@@ -328,7 +330,7 @@ PKGLISTS= \
 #
 #		repository metadata (catalogs and search indices)
 #			|
-#			| pkg.depotd
+#			| pkgrepo refresh
 #			|
 #		published packages
 #		 |		|
@@ -393,10 +395,8 @@ $(PDIR)/gendeps: $(DEP_SYNTH_PKGS) $(DEP_PKGS)
 install: $(ALL_TARGETS) repository-metadata
 
 repository-metadata: publish_pkgs
-	@print "Creating repository metadata"
 	$(PKGDEBUG)for r in $(REPOS); do \
-		/usr/lib/pkg.depotd -d $(PKGDEST)/repo.$$r \
-			--add-content --exit-ready; \
+		pkgrepo refresh -s $(PKGDEST)/repo.$$r; \
 	done
 
 #

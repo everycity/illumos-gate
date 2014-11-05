@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Igor Kozhukhov <ikozhukhov@gmail.com>.
  * Copyright 2013, Joyent, Inc. All rights reserved.
  */
 
@@ -239,7 +241,7 @@ typedef enum {
  */
 typedef enum zone_cmd {
 	Z_READY, Z_BOOT, Z_FORCEBOOT, Z_REBOOT, Z_HALT, Z_NOTE_UNINSTALLING,
-	Z_MOUNT, Z_FORCEMOUNT, Z_UNMOUNT
+	Z_MOUNT, Z_FORCEMOUNT, Z_UNMOUNT, Z_SHUTDOWN
 } zone_cmd_t;
 
 /*
@@ -328,7 +330,7 @@ typedef struct zone_net_data {
  * libraries which may be defining ther own versions.
  */
 #include <sys/list.h>
-#include <sys/cpuvar.h>
+#include <sys/loadavg.h>
 
 #define	GLOBAL_ZONEUNIQID	0	/* uniqid of the global zone */
 

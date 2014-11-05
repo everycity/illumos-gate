@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
@@ -198,7 +198,18 @@ zfs_prop_init(void)
 		{ NULL }
 	};
 
+	static zprop_index_t redundant_metadata_table[] = {
+		{ "all",	ZFS_REDUNDANT_METADATA_ALL },
+		{ "most",	ZFS_REDUNDANT_METADATA_MOST },
+		{ NULL }
+	};
+
 	/* inherit index properties */
+	zprop_register_index(ZFS_PROP_REDUNDANT_METADATA, "redundant_metadata",
+	    ZFS_REDUNDANT_METADATA_ALL,
+	    PROP_INHERIT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
+	    "all | most", "REDUND_MD",
+	    redundant_metadata_table);
 	zprop_register_index(ZFS_PROP_SYNC, "sync", ZFS_SYNC_STANDARD,
 	    PROP_INHERIT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
 	    "standard | always | disabled", "SYNC",
@@ -312,7 +323,8 @@ zfs_prop_init(void)
 	    PROP_INHERIT, ZFS_TYPE_FILESYSTEM, "on | off | share(1M) options",
 	    "SHARENFS");
 	zprop_register_string(ZFS_PROP_TYPE, "type", NULL, PROP_READONLY,
-	    ZFS_TYPE_DATASET, "filesystem | volume | snapshot", "TYPE");
+	    ZFS_TYPE_DATASET | ZFS_TYPE_BOOKMARK,
+	    "filesystem | volume | snapshot | bookmark", "TYPE");
 	zprop_register_string(ZFS_PROP_SHARESMB, "sharesmb", "off",
 	    PROP_INHERIT, ZFS_TYPE_FILESYSTEM,
 	    "on | off | sharemgr(1M) options", "SHARESMB");
@@ -370,6 +382,18 @@ zfs_prop_init(void)
 	zprop_register_number(ZFS_PROP_REFRESERVATION, "refreservation", 0,
 	    PROP_DEFAULT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
 	    "<size> | none", "REFRESERV");
+	zprop_register_number(ZFS_PROP_FILESYSTEM_LIMIT, "filesystem_limit",
+	    UINT64_MAX, PROP_DEFAULT, ZFS_TYPE_FILESYSTEM,
+	    "<count> | none", "FSLIMIT");
+	zprop_register_number(ZFS_PROP_SNAPSHOT_LIMIT, "snapshot_limit",
+	    UINT64_MAX, PROP_DEFAULT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
+	    "<count> | none", "SSLIMIT");
+	zprop_register_number(ZFS_PROP_FILESYSTEM_COUNT, "filesystem_count",
+	    UINT64_MAX, PROP_DEFAULT, ZFS_TYPE_FILESYSTEM,
+	    "<count>", "FSCOUNT");
+	zprop_register_number(ZFS_PROP_SNAPSHOT_COUNT, "snapshot_count",
+	    UINT64_MAX, PROP_DEFAULT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
+	    "<count>", "SSCOUNT");
 
 	/* inherit number properties */
 	zprop_register_number(ZFS_PROP_RECORDSIZE, "recordsize",
@@ -378,18 +402,18 @@ zfs_prop_init(void)
 
 	/* hidden properties */
 	zprop_register_hidden(ZFS_PROP_CREATETXG, "createtxg", PROP_TYPE_NUMBER,
-	    PROP_READONLY, ZFS_TYPE_DATASET, "CREATETXG");
+	    PROP_READONLY, ZFS_TYPE_DATASET | ZFS_TYPE_BOOKMARK, "CREATETXG");
 	zprop_register_hidden(ZFS_PROP_NUMCLONES, "numclones", PROP_TYPE_NUMBER,
 	    PROP_READONLY, ZFS_TYPE_SNAPSHOT, "NUMCLONES");
 	zprop_register_hidden(ZFS_PROP_NAME, "name", PROP_TYPE_STRING,
-	    PROP_READONLY, ZFS_TYPE_DATASET, "NAME");
+	    PROP_READONLY, ZFS_TYPE_DATASET | ZFS_TYPE_BOOKMARK, "NAME");
 	zprop_register_hidden(ZFS_PROP_ISCSIOPTIONS, "iscsioptions",
 	    PROP_TYPE_STRING, PROP_INHERIT, ZFS_TYPE_VOLUME, "ISCSIOPTIONS");
 	zprop_register_hidden(ZFS_PROP_STMF_SHAREINFO, "stmf_sbd_lu",
 	    PROP_TYPE_STRING, PROP_INHERIT, ZFS_TYPE_VOLUME,
 	    "STMF_SBD_LU");
 	zprop_register_hidden(ZFS_PROP_GUID, "guid", PROP_TYPE_NUMBER,
-	    PROP_READONLY, ZFS_TYPE_DATASET, "GUID");
+	    PROP_READONLY, ZFS_TYPE_DATASET | ZFS_TYPE_BOOKMARK, "GUID");
 	zprop_register_hidden(ZFS_PROP_USERACCOUNTING, "useraccounting",
 	    PROP_TYPE_NUMBER, PROP_READONLY, ZFS_TYPE_DATASET,
 	    "USERACCOUNTING");
@@ -399,10 +423,12 @@ zfs_prop_init(void)
 	    PROP_READONLY, ZFS_TYPE_DATASET, "OBJSETID");
 	zprop_register_hidden(ZFS_PROP_INCONSISTENT, "inconsistent",
 	    PROP_TYPE_NUMBER, PROP_READONLY, ZFS_TYPE_DATASET, "INCONSISTENT");
+	zprop_register_hidden(ZFS_PROP_PREV_SNAP, "prevsnap", PROP_TYPE_STRING,
+	    PROP_READONLY, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME, "PREVSNAP");
 
 	/* oddball properties */
 	zprop_register_impl(ZFS_PROP_CREATION, "creation", PROP_TYPE_NUMBER, 0,
-	    NULL, PROP_READONLY, ZFS_TYPE_DATASET,
+	    NULL, PROP_READONLY, ZFS_TYPE_DATASET | ZFS_TYPE_BOOKMARK,
 	    "<date>", "CREATION", B_FALSE, B_TRUE, NULL);
 }
 

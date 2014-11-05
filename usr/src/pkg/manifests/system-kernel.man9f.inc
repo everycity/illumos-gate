@@ -11,8 +11,8 @@
 
 #
 # Copyright 2011, Richard Lowe
-# Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
 # Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 
 file path=usr/share/man/man9f/ASSERT.9f
@@ -197,7 +197,6 @@ file path=usr/share/man/man9f/ddi_io_get8.9f
 file path=usr/share/man/man9f/ddi_io_put8.9f
 file path=usr/share/man/man9f/ddi_io_rep_get8.9f
 file path=usr/share/man/man9f/ddi_io_rep_put8.9f
-file path=usr/share/man/man9f/ddi_iomin.9f
 file path=usr/share/man/man9f/ddi_log_sysevent.9f
 file path=usr/share/man/man9f/ddi_map_regs.9f
 file path=usr/share/man/man9f/ddi_mem_get8.9f
@@ -673,7 +672,6 @@ link path=usr/share/man/man9f/ddi_dmae_disable.9f target=ddi_dmae.9f
 link path=usr/share/man/man9f/ddi_dmae_enable.9f target=ddi_dmae.9f
 link path=usr/share/man/man9f/ddi_dmae_getattr.9f target=ddi_dmae.9f
 link path=usr/share/man/man9f/ddi_dmae_getcnt.9f target=ddi_dmae.9f
-link path=usr/share/man/man9f/ddi_dmae_getlim.9f target=ddi_dmae.9f
 link path=usr/share/man/man9f/ddi_dmae_prog.9f target=ddi_dmae.9f
 link path=usr/share/man/man9f/ddi_dmae_release.9f target=ddi_dmae.9f
 link path=usr/share/man/man9f/ddi_dmae_stop.9f target=ddi_dmae.9f
@@ -868,6 +866,7 @@ link path=usr/share/man/man9f/ddi_umem_free.9f target=ddi_umem_alloc.9f
 link path=usr/share/man/man9f/ddi_umem_unlock.9f target=ddi_umem_lock.9f
 link path=usr/share/man/man9f/ddi_unmap_regs.9f target=ddi_map_regs.9f
 link path=usr/share/man/man9f/desballoc.9f target=esballoc.9f
+link path=usr/share/man/man9f/dev_err.9f target=cmn_err.9f
 link path=usr/share/man/man9f/devmap_load.9f target=devmap_unload.9f
 link path=usr/share/man/man9f/devmap_umem_setup.9f \
     target=devmap_devmem_setup.9f
@@ -1181,8 +1180,6 @@ link path=usr/share/man/man9f/rw_tryupgrade.9f target=rwlock.9f
 link path=usr/share/man/man9f/samestr.9f target=SAMESTR.9f
 link path=usr/share/man/man9f/scsi_dmafree.9f target=scsi_dmaget.9f
 link path=usr/share/man/man9f/scsi_dname.9f target=scsi_cname.9f
-link path=usr/share/man/man9f/scsi_hba_attach.9f \
-    target=scsi_hba_attach_setup.9f
 link path=usr/share/man/man9f/scsi_hba_detach.9f \
     target=scsi_hba_attach_setup.9f
 link path=usr/share/man/man9f/scsi_hba_fini.9f target=scsi_hba_init.9f
@@ -1237,5 +1234,6 @@ link path=usr/share/man/man9f/va_copy.9f target=va_arg.9f
 link path=usr/share/man/man9f/va_end.9f target=va_arg.9f
 link path=usr/share/man/man9f/va_start.9f target=va_arg.9f
 link path=usr/share/man/man9f/vcmn_err.9f target=cmn_err.9f
+link path=usr/share/man/man9f/vzcmn_err.9f target=cmn_err.9f
 link path=usr/share/man/man9f/wr.9f target=WR.9f
 link path=usr/share/man/man9f/zcmn_err.9f target=cmn_err.9f

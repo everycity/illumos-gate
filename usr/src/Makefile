@@ -22,6 +22,7 @@
 #
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 
 #
@@ -64,6 +65,9 @@ PARALLEL_DIRS = uts lib man
 
 # The check target also causes smf(5) service manifests to be validated.
 CHKMFSTSUBDIRS=	cmd
+
+# And man page formats
+CHKMANSUBDIRS = man
 
 MSGSUBDIRS=	cmd ucbcmd lib
 DOMAINS= \
@@ -135,22 +139,20 @@ clobber_local:
 
 closedbins: bldtools $(ROOTDIRS) FRC
 	@CLOSED_ROOT="$$ON_CLOSED_BINS/root_$(MACH)$${RELEASE_BUILD+-nd}"; \
-	if [ "$$CLOSED_IS_PRESENT" = no ]; then \
-		if [ ! -d "$$CLOSED_ROOT" ]; then \
-			$(ECHO) "Error: if closed sources are not present," \
-			    "ON_CLOSED_BINS must point to closed binaries."; \
-			$(ECHO) "root_$(MACH)$${RELEASE_BUILD+-nd} is not" \
-			    "present in $$ON_CLOSED_BINS."; \
-			exit 1; \
-		fi; \
-		$(ECHO) "Copying closed binaries from $$CLOSED_ROOT"; \
-		(cd $$CLOSED_ROOT; \
-		    $(TAR) cfX - $(CODEMGR_WS)/exception_lists/closed-bins .) | \
-		    (cd $(ROOT); $(TAR) xBpf -); \
-		( cd $(ROOT); $(CTFSTRIP) $$(cd $$CLOSED_ROOT; $(FIND) \
-		    ./kernel ./usr/kernel ./platform/*/kernel -type f -a -perm -u+x | \
-		    $(EGREP) -vf $(CODEMGR_WS)/exception_lists/closed-bins) ); \
-	fi
+	if [ ! -d "$$CLOSED_ROOT" ]; then \
+		$(ECHO) "Error: ON_CLOSED_BINS must point to closed" \
+		    "binaries."; \
+		$(ECHO) "root_$(MACH)$${RELEASE_BUILD+-nd} is not" \
+		    "present in $$ON_CLOSED_BINS."; \
+		exit 1; \
+	fi; \
+	$(ECHO) "Copying closed binaries from $$CLOSED_ROOT"; \
+	(cd $$CLOSED_ROOT; \
+	    $(TAR) cfX - $(CODEMGR_WS)/exception_lists/closed-bins .) | \
+	    (cd $(ROOT); $(TAR) xBpf -); \
+	( cd $(ROOT); $(CTFSTRIP) $$(cd $$CLOSED_ROOT; $(FIND) \
+	    ./kernel ./usr/kernel ./platform/*/kernel -type f -a -perm -u+x | \
+	    $(EGREP) -vf $(CODEMGR_WS)/exception_lists/closed-bins) )
 
 #
 # Declare what parts can be built in parallel
@@ -210,16 +212,14 @@ cmdheaders: FRC
 	@cd cmd/fm; pwd; $(MAKE) install_h
 	@cd cmd/mdb; pwd; $(MAKE) install_h
 
-check:	$(CHKHDRSUBDIRS) $(CHKMFSTSUBDIRS)
+check:	$(CHKHDRSUBDIRS) $(CHKMFSTSUBDIRS) $(CHKMANSUBDIRS)
 
 #
 # Cross-reference customization: skip all of the subdirectories that
 # don't contain actual source code.
 #
-$(CLOSED_BUILD)XRDIRS += ../closed
 XRPRUNE = pkg prototypes
 XRINCDIRS = uts/common head ucbhead
-$(CLOSED_BUILD)XRINCDIRS = uts/common ../closed/uts/common head ucbhead
 
 cscope.out tags: FRC
 	$(XREF) -f -x $@

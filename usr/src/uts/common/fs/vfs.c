@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -468,7 +468,7 @@ vfs_setops(vfs_t *vfsp, vfsops_t *vfsops)
 	op = vfsp->vfs_op;
 	membar_consumer();
 	if (vfsp->vfs_femhead == NULL &&
-	    casptr(&vfsp->vfs_op, op, vfsops) == op) {
+	    atomic_cas_ptr(&vfsp->vfs_op, op, vfsops) == op) {
 		return;
 	}
 	fsem_setvfsops(vfsp, vfsops);
@@ -905,6 +905,7 @@ vfs_mountroot(void)
 	vfs_mountfs("mntfs", "/etc/mnttab", "/etc/mnttab");
 	vfs_mountfs("tmpfs", "/etc/svc/volatile", "/etc/svc/volatile");
 	vfs_mountfs("objfs", "objfs", OBJFS_ROOT);
+	vfs_mountfs("bootfs", "bootfs", "/system/boot");
 
 	if (getzoneid() == GLOBAL_ZONEID) {
 		vfs_mountfs("sharefs", "sharefs", "/etc/dfs/sharetab");
@@ -1594,7 +1595,7 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	/*
 	 * Serialize with zone state transitions.
 	 * See vfs_list_add; zone mounted into is:
-	 *     zone_find_by_path(refstr_value(vfsp->vfs_mntpt))
+	 * 	zone_find_by_path(refstr_value(vfsp->vfs_mntpt))
 	 * not the zone doing the mount (curproc->p_zone), but if we're already
 	 * inside a NGZ, then we know what zone we are.
 	 */
@@ -2987,7 +2988,7 @@ vfs_mono_time(timespec_t *ts)
 		oldhrt = hrt;
 		if (newhrt <= hrt)
 			newhrt = hrt + 1;
-		if (cas64((uint64_t *)&hrt, oldhrt, newhrt) == oldhrt)
+		if (atomic_cas_64((uint64_t *)&hrt, oldhrt, newhrt) == oldhrt)
 			break;
 	}
 	hrt2ts(newhrt, ts);
@@ -4351,7 +4352,7 @@ vfs_free(vfs_t *vfsp)
 void
 vfs_hold(vfs_t *vfsp)
 {
-	atomic_add_32(&vfsp->vfs_count, 1);
+	atomic_inc_32(&vfsp->vfs_count);
 	ASSERT(vfsp->vfs_count != 0);
 }
 
@@ -4364,7 +4365,7 @@ void
 vfs_rele(vfs_t *vfsp)
 {
 	ASSERT(vfsp->vfs_count != 0);
-	if (atomic_add_32_nv(&vfsp->vfs_count, -1) == 0) {
+	if (atomic_dec_32_nv(&vfsp->vfs_count) == 0) {
 		VFS_FREEVFS(vfsp);
 		lofi_remove(vfsp);
 		if (vfsp->vfs_zone)

@@ -15,7 +15,6 @@
 #
 
 file path=usr/share/man/man4/Intro.4
-file path=usr/share/man/man4/TIMEZONE.4
 file path=usr/share/man/man4/audit.log.4
 file path=usr/share/man/man4/audit_class.4
 file path=usr/share/man/man4/audit_control.4
@@ -26,6 +25,7 @@ file path=usr/share/man/man4/contract.4
 file path=usr/share/man/man4/core.4
 file path=usr/share/man/man4/crypt.conf.4
 file path=usr/share/man/man4/crypto_certs.4
+file path=usr/share/man/man4/ctf.4
 file path=usr/share/man/man4/d_passwd.4
 file path=usr/share/man/man4/dacf.conf.4
 file path=usr/share/man/man4/default_fs.4
@@ -42,6 +42,7 @@ file path=usr/share/man/man4/exec_attr.4
 file path=usr/share/man/man4/format.dat.4
 file path=usr/share/man/man4/fspec.4
 file path=usr/share/man/man4/fstypes.4
+file path=usr/share/man/man4/ftpusers.4
 file path=usr/share/man/man4/fx_dptbl.4
 file path=usr/share/man/man4/group.4
 file path=usr/share/man/man4/hosts.4
@@ -49,6 +50,7 @@ file path=usr/share/man/man4/ike.config.4
 file path=usr/share/man/man4/ike.preshared.4
 file path=usr/share/man/man4/inet_type.4
 file path=usr/share/man/man4/inetd.conf.4
+file path=usr/share/man/man4/init.4
 file path=usr/share/man/man4/init.d.4
 file path=usr/share/man/man4/inittab.4
 file path=usr/share/man/man4/ipaddrsel.conf.4

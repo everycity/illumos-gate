@@ -19,8 +19,11 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2014 Garrrett D'Amore <garrett@damore.org>
+ *
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -38,8 +41,6 @@
 
 #ifndef _SYS_RESOURCE_H
 #define	_SYS_RESOURCE_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/feature_tests.h>
 
@@ -191,6 +192,7 @@ struct	rusage {
 #define	_RUSAGESYS_GETRUSAGE_CHLD	1	/* rusage child process */
 #define	_RUSAGESYS_GETRUSAGE_LWP	2	/* rusage lwp */
 #define	_RUSAGESYS_GETVMUSAGE		3	/* getvmusage */
+#define	_RUSAGESYS_INVALMAP		4	/* vm_map_inval */
 
 #if defined(_SYSCALL32)
 
@@ -258,8 +260,6 @@ struct proc;
 #endif
 #endif	/* _LP64 && _LARGEFILE64_SOURCE */
 
-#if defined(__STDC__)
-
 extern int setrlimit(int, const struct rlimit *);
 extern int getrlimit(int, struct rlimit *);
 
@@ -273,24 +273,6 @@ extern int getrlimit64(int, struct rlimit64 *);
 extern int getpriority(int, id_t);
 extern int setpriority(int, id_t, int);
 extern int getrusage(int, struct rusage *);
-
-#else	/* __STDC__ */
-
-extern int getrlimit();
-extern int setrlimit();
-
-/* transitional large file interfaces */
-#if	defined(_LARGEFILE64_SOURCE) && !((_FILE_OFFSET_BITS == 64) && \
-	    !defined(__PRAGMA_REDEFINE_EXTNAME))
-extern int setrlimit64();
-extern int getrlimit64();
-#endif	/* _LARGEFILE64_SOURCE... */
-
-extern	int getpriority();
-extern	int setpriority();
-extern	int getrusage();
-
-#endif  /* __STDC__ */
 
 #endif	/* _KERNEL */
 

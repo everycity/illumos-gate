@@ -22,6 +22,8 @@
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright (c) 2014, Tegile Systems Inc. All rights reserved.
  */
 
 /*
@@ -87,10 +89,6 @@
  * FMA header files.
  */
 #include <sys/fm/io/ddi.h>
-
-#if defined(MPTSAS_DEBUG)
-extern uint32_t mptsas_debug_flags;
-#endif
 
 /*
  *  prototypes
@@ -309,6 +307,7 @@ mptsas_access_config_page(mptsas_t *mpt, uint8_t action, uint8_t page_type,
 	uint16_t		iocstatus = 0;
 	uint32_t		iocloginfo;
 	caddr_t			page_memp;
+	boolean_t		free_dma = B_FALSE;
 
 	va_start(ap, callback);
 	ASSERT(mutex_owned(&mpt->m_mutex));
@@ -465,8 +464,14 @@ mptsas_access_config_page(mptsas_t *mpt, uint8_t action, uint8_t page_type,
 	if (mptsas_dma_addr_create(mpt, attrs,
 	    &cmd->cmd_dmahandle, &accessp, &page_memp,
 	    len, &cookie) == FALSE) {
+		rval = DDI_FAILURE;
+		mptsas_log(mpt, CE_WARN,
+		    "mptsas_dma_addr_create(len=0x%x) failed", (int)len);
 		goto page_done;
 	}
+	/* NOW we can safely call mptsas_dma_addr_destroy(). */
+	free_dma = B_TRUE;
+
 	cmd->cmd_dma_addr = cookie.dmac_laddress;
 	bzero(page_memp, len);
 
@@ -584,7 +589,8 @@ page_done:
 		    mpt->m_free_index);
 	}
 
-	mptsas_dma_addr_destroy(&cmd->cmd_dmahandle, &accessp);
+	if (free_dma)
+		mptsas_dma_addr_destroy(&cmd->cmd_dmahandle, &accessp);
 
 	if (cmd && (cmd->cmd_flags & CFLAG_PREPARED)) {
 		mptsas_remove_cmd(mpt, cmd);
@@ -1199,6 +1205,83 @@ mptsas_ioc_task_management(mptsas_t *mpt, int task_type, uint16_t dev_handle,
 	return (rval);
 }
 
+/*
+ * Complete firmware download frame for v2.0 cards.
+ */
+static void
+mptsas_uflash2(pMpi2FWDownloadRequest fwdownload,
+    ddi_acc_handle_t acc_hdl, uint32_t size, uint8_t type,
+    ddi_dma_cookie_t flsh_cookie)
+{
+	pMpi2FWDownloadTCSGE_t	tcsge;
+	pMpi2SGESimple64_t	sge;
+	uint32_t		flagslength;
+
+	ddi_put8(acc_hdl, &fwdownload->Function,
+	    MPI2_FUNCTION_FW_DOWNLOAD);
+	ddi_put8(acc_hdl, &fwdownload->ImageType, type);
+	ddi_put8(acc_hdl, &fwdownload->MsgFlags,
+	    MPI2_FW_DOWNLOAD_MSGFLGS_LAST_SEGMENT);
+	ddi_put32(acc_hdl, &fwdownload->TotalImageSize, size);
+
+	tcsge = (pMpi2FWDownloadTCSGE_t)&fwdownload->SGL;
+	ddi_put8(acc_hdl, &tcsge->ContextSize, 0);
+	ddi_put8(acc_hdl, &tcsge->DetailsLength, 12);
+	ddi_put8(acc_hdl, &tcsge->Flags, 0);
+	ddi_put32(acc_hdl, &tcsge->ImageOffset, 0);
+	ddi_put32(acc_hdl, &tcsge->ImageSize, size);
+
+	sge = (pMpi2SGESimple64_t)(tcsge + 1);
+	flagslength = size;
+	flagslength |= ((uint32_t)(MPI2_SGE_FLAGS_LAST_ELEMENT |
+	    MPI2_SGE_FLAGS_END_OF_BUFFER |
+	    MPI2_SGE_FLAGS_SIMPLE_ELEMENT |
+	    MPI2_SGE_FLAGS_SYSTEM_ADDRESS |
+	    MPI2_SGE_FLAGS_64_BIT_ADDRESSING |
+	    MPI2_SGE_FLAGS_HOST_TO_IOC |
+	    MPI2_SGE_FLAGS_END_OF_LIST) << MPI2_SGE_FLAGS_SHIFT);
+	ddi_put32(acc_hdl, &sge->FlagsLength, flagslength);
+	ddi_put32(acc_hdl, &sge->Address.Low,
+	    flsh_cookie.dmac_address);
+	ddi_put32(acc_hdl, &sge->Address.High,
+	    (uint32_t)(flsh_cookie.dmac_laddress >> 32));
+}
+
+/*
+ * Complete firmware download frame for v2.5 cards.
+ */
+static void
+mptsas_uflash25(pMpi25FWDownloadRequest fwdownload,
+    ddi_acc_handle_t acc_hdl, uint32_t size, uint8_t type,
+    ddi_dma_cookie_t flsh_cookie)
+{
+	pMpi2IeeeSgeSimple64_t	sge;
+	uint8_t			flags;
+
+	ddi_put8(acc_hdl, &fwdownload->Function,
+	    MPI2_FUNCTION_FW_DOWNLOAD);
+	ddi_put8(acc_hdl, &fwdownload->ImageType, type);
+	ddi_put8(acc_hdl, &fwdownload->MsgFlags,
+	    MPI2_FW_DOWNLOAD_MSGFLGS_LAST_SEGMENT);
+	ddi_put32(acc_hdl, &fwdownload->TotalImageSize, size);
+
+	ddi_put32(acc_hdl, &fwdownload->ImageOffset, 0);
+	ddi_put32(acc_hdl, &fwdownload->ImageSize, size);
+
+	sge = (pMpi2IeeeSgeSimple64_t)&fwdownload->SGL;
+	flags = MPI2_IEEE_SGE_FLAGS_SIMPLE_ELEMENT |
+	    MPI2_IEEE_SGE_FLAGS_SYSTEM_ADDR |
+	    MPI25_IEEE_SGE_FLAGS_END_OF_LIST;
+	ddi_put8(acc_hdl, &sge->Flags, flags);
+	ddi_put32(acc_hdl, &sge->Length, size);
+	ddi_put32(acc_hdl, &sge->Address.Low,
+	    flsh_cookie.dmac_address);
+	ddi_put32(acc_hdl, &sge->Address.High,
+	    (uint32_t)(flsh_cookie.dmac_laddress >> 32));
+}
+
+static int mptsas_enable_mpi25_flashupdate = 0;
+
 int
 mptsas_update_flash(mptsas_t *mpt, caddr_t ptrbuffer, uint32_t size,
     uint8_t type, int mode)
@@ -1216,15 +1299,23 @@ mptsas_update_flash(mptsas_t *mpt, caddr_t ptrbuffer, uint32_t size,
 	ddi_dma_handle_t	flsh_dma_handle;
 	ddi_acc_handle_t	flsh_accessp;
 	caddr_t			memp, flsh_memp;
-	uint32_t		flagslength;
-	pMpi2FWDownloadRequest	fwdownload;
-	pMpi2FWDownloadTCSGE_t	tcsge;
-	pMpi2SGESimple64_t	sge;
 	mptsas_cmd_t		*cmd;
 	struct scsi_pkt		*pkt;
 	int			i;
 	int			rvalue = 0;
 	uint32_t		request_desc_low;
+
+	if (mpt->m_MPI25 && !mptsas_enable_mpi25_flashupdate) {
+		/*
+		 * The code is there but not tested yet.
+		 * User has to know there are risks here.
+		 */
+		mptsas_log(mpt, CE_WARN, "mptsas_update_flash(): "
+		    "Updating firmware through MPI 2.5 has not been "
+		    "tested yet!\n"
+		    "To enable set mptsas_enable_mpi25_flashupdate to 1\n");
+		return (-1);
+	} /* Otherwise, you pay your money and you take your chances. */
 
 	if ((rvalue = (mptsas_request_from_pool(mpt, &cmd, &pkt))) == -1) {
 		mptsas_log(mpt, CE_WARN, "mptsas_update_flash(): allocation "
@@ -1285,35 +1376,13 @@ mptsas_update_flash(mptsas_t *mpt, caddr_t ptrbuffer, uint32_t size,
 	ASSERT(cmd->cmd_slot != 0);
 	memp = mpt->m_req_frame + (mpt->m_req_frame_size * cmd->cmd_slot);
 	bzero(memp, mpt->m_req_frame_size);
-	fwdownload = (void *)memp;
-	ddi_put8(mpt->m_acc_req_frame_hdl, &fwdownload->Function,
-	    MPI2_FUNCTION_FW_DOWNLOAD);
-	ddi_put8(mpt->m_acc_req_frame_hdl, &fwdownload->ImageType, type);
-	ddi_put8(mpt->m_acc_req_frame_hdl, &fwdownload->MsgFlags,
-	    MPI2_FW_DOWNLOAD_MSGFLGS_LAST_SEGMENT);
-	ddi_put32(mpt->m_acc_req_frame_hdl, &fwdownload->TotalImageSize, size);
 
-	tcsge = (pMpi2FWDownloadTCSGE_t)&fwdownload->SGL;
-	ddi_put8(mpt->m_acc_req_frame_hdl, &tcsge->ContextSize, 0);
-	ddi_put8(mpt->m_acc_req_frame_hdl, &tcsge->DetailsLength, 12);
-	ddi_put8(mpt->m_acc_req_frame_hdl, &tcsge->Flags, 0);
-	ddi_put32(mpt->m_acc_req_frame_hdl, &tcsge->ImageOffset, 0);
-	ddi_put32(mpt->m_acc_req_frame_hdl, &tcsge->ImageSize, size);
-
-	sge = (pMpi2SGESimple64_t)(tcsge + 1);
-	flagslength = size;
-	flagslength |= ((uint32_t)(MPI2_SGE_FLAGS_LAST_ELEMENT |
-	    MPI2_SGE_FLAGS_END_OF_BUFFER |
-	    MPI2_SGE_FLAGS_SIMPLE_ELEMENT |
-	    MPI2_SGE_FLAGS_SYSTEM_ADDRESS |
-	    MPI2_SGE_FLAGS_64_BIT_ADDRESSING |
-	    MPI2_SGE_FLAGS_HOST_TO_IOC |
-	    MPI2_SGE_FLAGS_END_OF_LIST) << MPI2_SGE_FLAGS_SHIFT);
-	ddi_put32(mpt->m_acc_req_frame_hdl, &sge->FlagsLength, flagslength);
-	ddi_put32(mpt->m_acc_req_frame_hdl, &sge->Address.Low,
-	    flsh_cookie.dmac_address);
-	ddi_put32(mpt->m_acc_req_frame_hdl, &sge->Address.High,
-	    (uint32_t)(flsh_cookie.dmac_laddress >> 32));
+	if (mpt->m_MPI25)
+		mptsas_uflash25((pMpi25FWDownloadRequest)memp,
+		    mpt->m_acc_req_frame_hdl, size, type, flsh_cookie);
+	else
+		mptsas_uflash2((pMpi2FWDownloadRequest)memp,
+		    mpt->m_acc_req_frame_hdl, size, type, flsh_cookie);
 
 	/*
 	 * Start command
@@ -1357,7 +1426,7 @@ mptsas_sasdevpage_0_cb(mptsas_t *mpt, caddr_t page_memp,
 	uint64_t		*sas_wwn;
 	uint32_t		*dev_info;
 	uint8_t			*physport, *phynum;
-	uint16_t		*pdevhdl;
+	uint16_t		*pdevhdl, *io_flags;
 	uint32_t		page_address;
 
 	if ((iocstatus != MPI2_IOCSTATUS_SUCCESS) &&
@@ -1391,7 +1460,7 @@ mptsas_sasdevpage_0_cb(mptsas_t *mpt, caddr_t page_memp,
 	pdevhdl = va_arg(ap, uint16_t *);
 	bay_num = va_arg(ap, uint16_t *);
 	enclosure = va_arg(ap, uint16_t *);
-
+	io_flags = va_arg(ap, uint16_t *);
 
 	sasdevpage = (pMpi2SasDevicePage0_t)page_memp;
 
@@ -1408,6 +1477,19 @@ mptsas_sasdevpage_0_cb(mptsas_t *mpt, caddr_t page_memp,
 	*pdevhdl = ddi_get16(accessp, &sasdevpage->ParentDevHandle);
 	*bay_num = ddi_get16(accessp, &sasdevpage->Slot);
 	*enclosure = ddi_get16(accessp, &sasdevpage->EnclosureHandle);
+	*io_flags = ddi_get16(accessp, &sasdevpage->Flags);
+
+	if (*io_flags & MPI25_SAS_DEVICE0_FLAGS_FAST_PATH_CAPABLE) {
+		/*
+		 * Leave a messages about FP cabability in the log.
+		 */
+		mptsas_log(mpt, CE_CONT,
+		    "!w%016"PRIx64" FastPath Capable%s", *sas_wwn,
+		    (*io_flags &
+		    MPI25_SAS_DEVICE0_FLAGS_ENABLED_FAST_PATH)?
+		    " and Enabled":" but Disabled");
+	}
+
 	return (rval);
 }
 
@@ -1419,7 +1501,7 @@ int
 mptsas_get_sas_device_page0(mptsas_t *mpt, uint32_t page_address,
     uint16_t *dev_handle, uint64_t *sas_wwn, uint32_t *dev_info,
     uint8_t *physport, uint8_t *phynum, uint16_t *pdev_handle,
-    uint16_t *bay_num, uint16_t *enclosure)
+    uint16_t *bay_num, uint16_t *enclosure, uint16_t *io_flags)
 {
 	int rval = DDI_SUCCESS;
 
@@ -1434,7 +1516,7 @@ mptsas_get_sas_device_page0(mptsas_t *mpt, uint32_t page_address,
 	    MPI2_CONFIG_EXTPAGETYPE_SAS_DEVICE, 0, page_address,
 	    mptsas_sasdevpage_0_cb, page_address, dev_handle, sas_wwn,
 	    dev_info, physport, phynum, pdev_handle,
-	    bay_num, enclosure);
+	    bay_num, enclosure, io_flags);
 
 	return (rval);
 }
@@ -1522,7 +1604,7 @@ mptsas_get_sas_expander_page0(mptsas_t *mpt, uint32_t page_address,
 	    MPI2_CONFIG_ACTION_PAGE_READ_CURRENT,
 	    MPI2_CONFIG_EXTPAGETYPE_SAS_EXPANDER, 0, page_address,
 	    mptsas_sasexpdpage_0_cb, page_address, &info->m_devhdl,
-	    &info->m_sasaddr, &info->m_phymask, &info->m_pdevhdl);
+	    &info->m_addr.mta_wwn, &info->m_addr.mta_phymask, &info->m_pdevhdl);
 
 	return (rval);
 }
@@ -1857,6 +1939,7 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 	uint32_t		reply_size = 256; /* Big enough for any page */
 	uint_t			state;
 	int			rval = DDI_FAILURE;
+	boolean_t		free_recv = B_FALSE, free_page = B_FALSE;
 
 	/*
 	 * Initialize our "state machine".  This is a bit convoluted,
@@ -1883,6 +1966,8 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 		    "mptsas_get_sas_io_unit_page_hndshk: recv dma failed");
 		goto cleanup;
 	}
+	/* Now safe to call mptsas_dma_addr_destroy(recv_dma_handle). */
+	free_recv = B_TRUE;
 
 	page_dma_attrs = mpt->m_msg_dma_attr;
 	page_dma_attrs.dma_attr_sgllen = 1;
@@ -1895,6 +1980,8 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 		    "mptsas_get_sas_io_unit_page_hndshk: page dma failed");
 		goto cleanup;
 	}
+	/* Now safe to call mptsas_dma_addr_destroy(page_dma_handle). */
+	free_page = B_TRUE;
 
 	/*
 	 * Now we cycle through the state machine.  Here's what happens:
@@ -2130,8 +2217,10 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 	}
 
 cleanup:
-	mptsas_dma_addr_destroy(&recv_dma_handle, &recv_accessp);
-	mptsas_dma_addr_destroy(&page_dma_handle, &page_accessp);
+	if (free_recv)
+		mptsas_dma_addr_destroy(&recv_dma_handle, &recv_accessp);
+	if (free_page)
+		mptsas_dma_addr_destroy(&page_dma_handle, &page_accessp);
 	if (rval != DDI_SUCCESS) {
 		mptsas_fm_ereport(mpt, DDI_FM_DEVICE_NO_RESPONSE);
 		ddi_fm_service_impact(mpt->m_dip, DDI_SERVICE_LOST);
@@ -2159,6 +2248,7 @@ mptsas_get_manufacture_page5(mptsas_t *mpt)
 	uint32_t			flagslength;
 	int				rval = DDI_SUCCESS;
 	uint_t				iocstatus;
+	boolean_t		free_recv = B_FALSE, free_page = B_FALSE;
 
 	MPTSAS_DISABLE_INTR(mpt);
 
@@ -2179,8 +2269,11 @@ mptsas_get_manufacture_page5(mptsas_t *mpt)
 	if (mptsas_dma_addr_create(mpt, recv_dma_attrs,
 	    &recv_dma_handle, &recv_accessp, &recv_memp,
 	    (sizeof (MPI2_CONFIG_REPLY)), NULL) == FALSE) {
+		rval = DDI_FAILURE;
 		goto done;
 	}
+	/* Now safe to call mptsas_dma_addr_destroy(recv_dma_handle). */
+	free_recv = B_TRUE;
 
 	bzero(recv_memp, sizeof (MPI2_CONFIG_REPLY));
 	configreply = (pMpi2ConfigReply_t)recv_memp;
@@ -2213,8 +2306,12 @@ mptsas_get_manufacture_page5(mptsas_t *mpt)
 	if (mptsas_dma_addr_create(mpt, page_dma_attrs, &page_dma_handle,
 	    &page_accessp, &page_memp, (sizeof (MPI2_CONFIG_PAGE_MAN_5)),
 	    &page_cookie) == FALSE) {
+		rval = DDI_FAILURE;
 		goto done;
 	}
+	/* Now safe to call mptsas_dma_addr_destroy(page_dma_handle). */
+	free_page = B_TRUE;
+
 	bzero(page_memp, sizeof (MPI2_CONFIG_PAGE_MAN_5));
 	m5 = (pMpi2ManufacturingPage5_t)page_memp;
 
@@ -2303,8 +2400,10 @@ done:
 	/*
 	 * free up memory
 	 */
-	mptsas_dma_addr_destroy(&recv_dma_handle, &recv_accessp);
-	mptsas_dma_addr_destroy(&page_dma_handle, &page_accessp);
+	if (free_recv)
+		mptsas_dma_addr_destroy(&recv_dma_handle, &recv_accessp);
+	if (free_page)
+		mptsas_dma_addr_destroy(&page_dma_handle, &page_accessp);
 	MPTSAS_ENABLE_INTR(mpt);
 
 	return (rval);
@@ -2525,6 +2624,7 @@ mptsas_get_manufacture_page0(mptsas_t *mpt)
 	int				rval = DDI_SUCCESS;
 	uint_t				iocstatus;
 	uint8_t				i = 0;
+	boolean_t		free_recv = B_FALSE, free_page = B_FALSE;
 
 	MPTSAS_DISABLE_INTR(mpt);
 
@@ -2545,8 +2645,12 @@ mptsas_get_manufacture_page0(mptsas_t *mpt)
 	if (mptsas_dma_addr_create(mpt, recv_dma_attrs, &recv_dma_handle,
 	    &recv_accessp, &recv_memp, (sizeof (MPI2_CONFIG_REPLY)),
 	    NULL) == FALSE) {
+		rval = DDI_FAILURE;
 		goto done;
 	}
+	/* Now safe to call mptsas_dma_addr_destroy(recv_dma_handle). */
+	free_recv = B_TRUE;
+
 	bzero(recv_memp, sizeof (MPI2_CONFIG_REPLY));
 	configreply = (pMpi2ConfigReply_t)recv_memp;
 	recv_numbytes = sizeof (MPI2_CONFIG_REPLY);
@@ -2578,8 +2682,12 @@ mptsas_get_manufacture_page0(mptsas_t *mpt)
 	if (mptsas_dma_addr_create(mpt, page_dma_attrs, &page_dma_handle,
 	    &page_accessp, &page_memp, (sizeof (MPI2_CONFIG_PAGE_MAN_0)),
 	    &page_cookie) == FALSE) {
+		rval = DDI_FAILURE;
 		goto done;
 	}
+	/* Now safe to call mptsas_dma_addr_destroy(page_dma_handle). */
+	free_page = B_TRUE;
+
 	bzero(page_memp, sizeof (MPI2_CONFIG_PAGE_MAN_0));
 	m0 = (pMpi2ManufacturingPage0_t)page_memp;
 
@@ -2673,8 +2781,10 @@ done:
 	/*
 	 * free up memory
 	 */
-	mptsas_dma_addr_destroy(&recv_dma_handle, &recv_accessp);
-	mptsas_dma_addr_destroy(&page_dma_handle, &page_accessp);
+	if (free_recv)
+		mptsas_dma_addr_destroy(&recv_dma_handle, &recv_accessp);
+	if (free_page)
+		mptsas_dma_addr_destroy(&page_dma_handle, &page_accessp);
 	MPTSAS_ENABLE_INTR(mpt);
 
 	return (rval);

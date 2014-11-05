@@ -23,7 +23,7 @@
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 #ifndef _THR_UBERDATA_H
@@ -494,7 +494,8 @@ typedef struct {
  * As part of per-thread caching libumem (ptcumem), we add a small amount to the
  * thread's uberdata to facilitate it. The tm_roots are the roots of linked
  * lists which is used by libumem to chain together allocations. tm_size is used
- * to track the total amount of data stored across those linked lists.
+ * to track the total amount of data stored across those linked lists. For more
+ * information, see libumem's big theory statement.
  */
 #define	NTMEMBASE	16
 
@@ -931,6 +932,7 @@ typedef struct uberdata {
 	int	ndaemons;	/* total number of THR_DAEMON threads/lwps */
 	pid_t	pid;		/* the current process's pid */
 	void	(*sigacthandler)(int, siginfo_t *, void *);
+	int	(*setctxt)(const ucontext_t *);
 	ulwp_t	*lwp_stacks;
 	ulwp_t	*lwp_laststack;
 	int	nfreestack;
@@ -943,6 +945,7 @@ typedef struct uberdata {
 	robust_t	**robustlocks;	/* table of registered robust locks */
 	robust_t	*robustlist;	/* list of registered robust locks */
 	char	*progname;	/* the basename of the program, from argv[0] */
+	char	*ub_broot;	/* the root of the native code in the brand */
 	struct uberdata **tdb_bootstrap;
 	tdb_t	tdb;		/* thread debug interfaces (for libc_db) */
 } uberdata_t;
@@ -1143,6 +1146,7 @@ typedef struct uberdata32 {
 	int		ndaemons;
 	int		pid;
 	caddr32_t	sigacthandler;
+	caddr32_t	setctxt;
 	caddr32_t	lwp_stacks;
 	caddr32_t	lwp_laststack;
 	int		nfreestack;
@@ -1242,6 +1246,7 @@ extern	void	rwl_free(ulwp_t *);
 extern	void	heldlock_exit(void);
 extern	void	heldlock_free(ulwp_t *);
 extern	void	sigacthandler(int, siginfo_t *, void *);
+extern	int	setctxt(const ucontext_t *);
 extern	void	signal_init(void);
 extern	int	sigequalset(const sigset_t *, const sigset_t *);
 extern	void	mutex_setup(void);

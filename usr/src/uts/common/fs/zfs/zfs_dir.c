@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2013, 2014 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -554,6 +554,7 @@ zfs_purgedir(znode_t *dzp)
 		dmu_tx_hold_zap(tx, zfsvfs->z_unlinkedobj, FALSE, NULL);
 		/* Is this really needed ? */
 		zfs_sa_upgrade_txholds(tx, xzp);
+		dmu_tx_mark_netfree(tx);
 		error = dmu_tx_assign(tx, TXG_WAIT);
 		if (error) {
 			dmu_tx_abort(tx);
@@ -937,7 +938,6 @@ zfs_make_xattrdir(znode_t *zp, vattr_t *vap, vnode_t **xvpp, cred_t *cr)
 		return (SET_ERROR(EDQUOT));
 	}
 
-top:
 	tx = dmu_tx_create(zfsvfs->z_os);
 	dmu_tx_hold_sa_create(tx, acl_ids.z_aclp->z_acl_bytes +
 	    ZFS_SA_BASE_ATTR_SIZE);
@@ -946,13 +946,8 @@ top:
 	fuid_dirtied = zfsvfs->z_fuid_dirty;
 	if (fuid_dirtied)
 		zfs_fuid_txhold(zfsvfs, tx);
-	error = dmu_tx_assign(tx, TXG_NOWAIT);
+	error = dmu_tx_assign(tx, TXG_WAIT);
 	if (error) {
-		if (error == ERESTART) {
-			dmu_tx_wait(tx);
-			dmu_tx_abort(tx);
-			goto top;
-		}
 		zfs_acl_ids_free(&acl_ids);
 		dmu_tx_abort(tx);
 		return (error);

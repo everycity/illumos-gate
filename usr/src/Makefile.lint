@@ -19,6 +19,9 @@
 # CDDL HEADER END
 #
 
+#
+# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+#
 # Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
 
@@ -129,7 +132,6 @@ COMMON_SUBDIRS = \
 	cmd/fdisk \
 	cmd/fgrep \
 	cmd/file \
-	cmd/filebench \
 	cmd/find \
 	cmd/fmthard \
 	cmd/fmtmsg \
@@ -196,6 +198,7 @@ COMMON_SUBDIRS = \
 	cmd/luxadm \
 	cmd/lvm \
 	cmd/machid \
+	cmd/mailwrapper \
 	cmd/makekey \
 	cmd/mdb \
 	cmd/mesg \
@@ -397,6 +400,9 @@ COMMON_SUBDIRS = \
 	lib/libkstat \
 	lib/liblgrp \
 	lib/liblm \
+	lib/libm \
+	lib/libm1 \
+	lib/libmvec \
 	lib/libmalloc \
 	lib/libmapmalloc \
 	lib/libmapid \
@@ -486,6 +492,7 @@ i386_SUBDIRS= \
 	cmd/biosdev \
 	cmd/rtc \
 	cmd/ucodeadm \
+	lib/brand/lx \
 	lib/cfgadm_plugins/sata \
 	lib/cfgadm_plugins/sbd \
 	lib/libfdisk

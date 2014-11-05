@@ -20,9 +20,11 @@
  */
 
 /*
+ * Copyright (c) 1990 Mentat Inc.
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
- * Copyright (c) 1990 Mentat Inc.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
  */
 
 #ifndef	_INET_IP_H
@@ -718,14 +720,14 @@ typedef struct ipsec_latch_s
 } ipsec_latch_t;
 
 #define	IPLATCH_REFHOLD(ipl) { \
-	atomic_add_32(&(ipl)->ipl_refcnt, 1);		\
+	atomic_inc_32(&(ipl)->ipl_refcnt);		\
 	ASSERT((ipl)->ipl_refcnt != 0);			\
 }
 
 #define	IPLATCH_REFRELE(ipl) {				\
 	ASSERT((ipl)->ipl_refcnt != 0);				\
 	membar_exit();						\
-	if (atomic_add_32_nv(&(ipl)->ipl_refcnt, -1) == 0)	\
+	if (atomic_dec_32_nv(&(ipl)->ipl_refcnt) == 0)	\
 		iplatch_free(ipl);				\
 }
 
@@ -3452,7 +3454,8 @@ extern	void	ire_untrace_ref(ire_t *);
 
 extern int	ip_srcid_insert(const in6_addr_t *, zoneid_t, ip_stack_t *);
 extern int	ip_srcid_remove(const in6_addr_t *, zoneid_t, ip_stack_t *);
-extern void	ip_srcid_find_id(uint_t, in6_addr_t *, zoneid_t, netstack_t *);
+extern boolean_t ip_srcid_find_id(uint_t, in6_addr_t *, zoneid_t, boolean_t,
+    netstack_t *);
 extern uint_t	ip_srcid_find_addr(const in6_addr_t *, zoneid_t, netstack_t *);
 
 extern uint8_t	ipoptp_next(ipoptp_t *);
@@ -3709,6 +3712,15 @@ extern mblk_t	*ip_recv_attr_to_mblk(ip_recv_attr_t *);
 extern boolean_t ip_recv_attr_from_mblk(mblk_t *, ip_recv_attr_t *);
 extern mblk_t	*ip_recv_attr_free_mblk(mblk_t *);
 extern boolean_t ip_recv_attr_is_mblk(mblk_t *);
+
+#ifdef __PRAGMA_REDEFINE_EXTNAME
+#pragma redefine_extname inet_pton _inet_pton
+#else /* __PRAGMA_REDEFINE_EXTNAME */
+#define	inet_pton _inet_pton
+#endif /* __PRAGMA_REDEFINE_EXTNAME */
+
+extern char	*inet_ntop(int, const void *, char *, int);
+extern int	inet_pton(int, char *, void *);
 
 /*
  * Squeue tags. Tags only need to be unique when the callback function is the

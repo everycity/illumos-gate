@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2014, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -187,11 +187,38 @@ uint_t		zfs_zone_rw_lat_limit = 10;
 
 /*
  * The I/O throttle will only start delaying zones when it detects disk
- * utilization has reached a certain level.  This tunable controls the threshold
- * at which the throttle will start delaying zones. The calculation should
- * correspond closely with the %b column from iostat.
+ * utilization has reached a certain level.  This tunable controls the
+ * threshold at which the throttle will start delaying zones.  When the number
+ * of vdevs is small, the calculation should correspond closely with the %b
+ * column from iostat -- but as the number of vdevs becomes large, it will
+ * correlate less and less to any single device (therefore making it a poor
+ * approximation for the actual I/O utilization on such systems).  We
+ * therefore use our derived utilization conservatively:  we know that low
+ * derived utilization does indeed correlate to low I/O use -- but that a high
+ * rate of derived utilization does not necesarily alone denote saturation;
+ * where we see a high rate of utilization, we also look for laggard I/Os to
+ * attempt to detect saturation.
  */
 uint_t		zfs_zone_util_threshold = 80;
+uint_t		zfs_zone_underutil_threshold = 60;
+
+/*
+ * There are three important tunables here:  zfs_zone_laggard_threshold denotes
+ * the threshold at which an I/O is considered to be of notably high latency;
+ * zfs_zone_laggard_recent denotes the number of microseconds before the
+ * current time after which the last laggard is considered to be sufficiently
+ * recent to merit increasing the throttle; zfs_zone_laggard_ancient denotes
+ * the microseconds before the current time before which the last laggard is
+ * considered to be sufficiently old to merit decreasing the throttle.  The
+ * most important tunable of these three is the zfs_zone_laggard_threshold: in
+ * modeling data from a large public cloud, this tunable was found to have a
+ * much greater effect on the throttle than the two time-based thresholds.
+ * This must be set high enough to not result in spurious throttling, but not
+ * so high as to allow pathological I/O to persist in the system.
+ */
+uint_t		zfs_zone_laggard_threshold = 50000;	/* 50 ms */
+uint_t		zfs_zone_laggard_recent = 1000000;	/* 1000 ms */
+uint_t		zfs_zone_laggard_ancient = 5000000;	/* 5000 ms */
 
 /*
  * Throughout this subsystem, our timestamps are in microseconds.  Our system
@@ -224,6 +251,8 @@ typedef struct {
 	uint64_t zi_totutil;
 	int zi_active;
 	uint_t zi_diskutil;
+	boolean_t zi_underutil;
+	boolean_t zi_overutil;
 } zoneio_stats_t;
 
 static sys_lat_cycle_t	rd_lat;
@@ -247,6 +276,7 @@ hrtime_t	zfs_disk_rlastupdate = 0; /* time last IO dispatched */
 hrtime_t	zfs_disk_last_rtime = 0; /* prev. cycle's zfs_disk_rtime val */
 /* time that we last updated per-zone throttle info */
 hrtime_t	zfs_zone_last_checked = 0;
+hrtime_t	zfs_disk_last_laggard = 0;
 
 /*
  * Data used to keep track of how often txg sync is running.
@@ -682,13 +712,13 @@ zfs_zone_wait_adjust_delay_cb(zone_t *zonep, void *arg)
 	 * Adjust each IO's delay.  If the overall delay becomes too high, avoid
 	 * increasing beyond the ceiling value.
 	 */
-	if (zonep->zone_io_util > fairutil &&
-	    sp->zi_diskutil > zfs_zone_util_threshold) {
+	if (zonep->zone_io_util > fairutil && sp->zi_overutil) {
 		zonep->zone_io_util_above_avg = B_TRUE;
 
 		if (sp->zi_active > 1)
 			zfs_zone_delay_inc(zonep);
-	} else if (zonep->zone_io_util < fairutil || sp->zi_active <= 1) {
+	} else if (zonep->zone_io_util < fairutil || sp->zi_underutil ||
+	    sp->zi_active <= 1) {
 		zfs_zone_delay_dec(zonep);
 	}
 
@@ -716,6 +746,7 @@ static void
 zfs_zone_wait_adjust(hrtime_t unow, hrtime_t last_checked)
 {
 	zoneio_stats_t stats;
+	hrtime_t laggard_udelta = 0;
 
 	(void) bzero(&stats, sizeof (stats));
 
@@ -741,6 +772,23 @@ zfs_zone_wait_adjust(hrtime_t unow, hrtime_t last_checked)
 		    ((unow - last_checked) * 1000);
 	}
 	zfs_disk_last_rtime = zfs_disk_rtime;
+
+	if (unow > zfs_disk_last_laggard)
+		laggard_udelta = unow - zfs_disk_last_laggard;
+
+	/*
+	 * To minimize porpoising, we have three separate states for our
+	 * assessment of I/O performance:  overutilized, underutilized, and
+	 * neither overutilized nor underutilized.  We will increment the
+	 * throttle if a zone is using more than its fair share _and_ I/O
+	 * is overutilized; we will decrement the throttle if a zone is using
+	 * less than its fair share _or_ I/O is underutilized.
+	 */
+	stats.zi_underutil = stats.zi_diskutil < zfs_zone_underutil_threshold ||
+	    laggard_udelta > zfs_zone_laggard_ancient;
+
+	stats.zi_overutil = stats.zi_diskutil > zfs_zone_util_threshold &&
+	    laggard_udelta < zfs_zone_laggard_recent;
 
 	/*
 	 * sdt:::zfs-zone-stats
@@ -892,7 +940,7 @@ get_next_zio(vdev_queue_class_t *vqc, int qdepth, zio_priority_t p)
 /*
  * Add our zone ID to the zio so we can keep track of which zones are doing
  * what, even when the current thread processing the zio is not associated
- * with the zone (e.g. the kernel taskq which pushes out RX groups).
+ * with the zone (e.g. the kernel taskq which pushes out TX groups).
  */
 void
 zfs_zone_zio_init(zio_t *zp)
@@ -903,9 +951,12 @@ zfs_zone_zio_init(zio_t *zp)
 }
 
 /*
- * Track IO operations per zone.  Called from dmu_tx_count_write for write ops
- * and dmu_read_uio for read ops.  For each operation, increment that zone's
- * counter based on the type of operation.
+ * Track and throttle IO operations per zone. Called from:
+ *   - dmu_tx_count_write for (logical) write ops (both dataset and zvol writes
+ *     go through this path)
+ *   - arc_read for read ops that miss the ARC (both dataset and zvol)
+ * For each operation, increment that zone's counter based on the type of
+ * operation, then delay the operation, if necessary.
  *
  * There are three basic ways that we can see write ops:
  * 1) An application does write syscalls.  Those ops go into a TXG which
@@ -913,7 +964,9 @@ zfs_zone_zio_init(zio_t *zp)
  *    vdev IO as zone 0) will perform some number of physical writes to commit
  *    the TXG to disk.  Those writes are not associated with the zone which
  *    made the write syscalls and the number of operations is not correlated
- *    between the taskq and the zone.
+ *    between the taskq and the zone. We only see logical writes in this
+ *    function, we see the physcial writes in the zfs_zone_zio_start and
+ *    zfs_zone_zio_done functions.
  * 2) An application opens a file with O_SYNC.  Each write will result in
  *    an operation which we'll see here plus a low-level vdev write from
  *    that zone.
@@ -927,17 +980,17 @@ zfs_zone_zio_init(zio_t *zp)
  *    writing out dirty pages to swap, or sync(2) calls, which will be handled
  *    by the global zone and which we count but don't generally worry about.
  *
- * Because of the above, we can see writes twice because this is called
- * at a high level by a zone thread, but we also will count the phys. writes
- * that are performed at a low level via zfs_zone_zio_start.
- *
- * Without this, it can look like a non-global zone never writes (case 1).
- * Depending on when the TXG is synced, the counts may be in the same sample
- * bucket or in a different one.
+ * Because of the above, we can see writes twice; first because this function
+ * is always called by a zone thread for logical writes, but then we also will
+ * count the physical writes that are performed at a low level via
+ * zfs_zone_zio_start. Without this, it can look like a non-global zone never
+ * writes (case 1). Depending on when the TXG is synced, the counts may be in
+ * the same sample bucket or in a different one.
  *
  * Tracking read operations is simpler due to their synchronous semantics.  The
  * zfs_read function -- called as a result of a read(2) syscall -- will always
- * retrieve the data to be read through dmu_read_uio.
+ * retrieve the data to be read through arc_read and we only come into this
+ * function when we have an arc miss.
  */
 void
 zfs_zone_io_throttle(zfs_zone_iop_type_t type)
@@ -949,7 +1002,7 @@ zfs_zone_io_throttle(zfs_zone_iop_type_t type)
 	unow = GET_USEC_TIME;
 
 	/*
-	 * Only bump the counters for logical operations here.  The counters for
+	 * Only bump the counter for logical writes here.  The counters for
 	 * tracking physical IO operations are handled in zfs_zone_zio_done.
 	 */
 	if (type == ZFS_ZONE_IOP_LOGICAL_WRITE) {
@@ -1104,6 +1157,9 @@ zfs_zone_zio_done(zio_t *zp)
 	if (zp->io_type == ZIO_TYPE_IOCTL)
 		return;
 
+	if (zp->io_dispatched == 0)
+		return;
+
 	if ((zonep = zone_find_by_id(zp->io_zoneid)) == NULL)
 		return;
 
@@ -1137,6 +1193,10 @@ zfs_zone_zio_done(zio_t *zp)
 	zfs_disk_rcnt--;
 	zfs_disk_rtime += (now - zfs_disk_rlastupdate);
 	zfs_disk_rlastupdate = now;
+
+	if (udelta > zfs_zone_laggard_threshold)
+		zfs_disk_last_laggard = unow;
+
 	mutex_exit(&zfs_disk_lock);
 
 	if (zfs_zone_delay_enable) {

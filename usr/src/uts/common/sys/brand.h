@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
  */
 
 #ifndef _SYS_BRAND_H
@@ -124,7 +125,12 @@ struct brand_ops {
 	    struct cred *cred, int brand_action);
 	void	(*b_sigset_native_to_brand)(sigset_t *);
 	void	(*b_sigset_brand_to_native)(sigset_t *);
+	void	(*b_psig_to_proc)(proc_t *, kthread_t *, int);
 	int	b_nsig;
+	void	(*b_exit_with_sig)(proc_t *, sigqueue_t *, void *);
+	boolean_t (*b_wait_filter)(proc_t *, proc_t *);
+	boolean_t (*b_native_exec)(uint8_t, const char **);
+	void (*b_ptrace_exectrap)(proc_t *);
 };
 
 /*
@@ -135,6 +141,7 @@ typedef struct brand {
 	char    		*b_name;
 	struct brand_ops	*b_ops;
 	struct brand_mach_ops	*b_machops;
+	size_t			b_data_size;
 } brand_t;
 
 extern brand_t native_brand;

@@ -19,7 +19,7 @@
  * CDDL HEADER END
  *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2012 Joyent, Inc. All rights reserved.
  */
 
@@ -32,6 +32,7 @@
  */
 
 #include <stdio.h>
+#include <stdio_ext.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <sys/types.h>
@@ -50,6 +51,7 @@
 #include <sys/systeminfo.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 #include <signal.h>
 #include <locale.h>
 #include <unistd.h>
@@ -81,6 +83,8 @@
 #include <sys/nvpair.h>
 #include <attr.h>
 #include "smfcfg.h"
+#include <pwd.h>
+#include <grp.h>
 
 extern int daemonize_init(void);
 extern void daemonize_fini(int fd);
@@ -103,9 +107,9 @@ static int getclientsflavors_old(share_t *, SVCXPRT *, struct netbuf **,
 static int getclientsflavors_new(share_t *, SVCXPRT *, struct netbuf **,
 	struct nd_hostservlist **, int *);
 static int check_client_old(share_t *, SVCXPRT *, struct netbuf **,
-	struct nd_hostservlist **, int);
+	struct nd_hostservlist **, int, uid_t, gid_t, uid_t *, gid_t *);
 static int check_client_new(share_t *, SVCXPRT *, struct netbuf **,
-	struct nd_hostservlist **, int);
+	struct nd_hostservlist **, int, uid_t, gid_t, uid_t *, gid_t *);
 static void mnt(struct svc_req *, SVCXPRT *);
 static void mnt_pathconf(struct svc_req *);
 static int mount(struct svc_req *r);
@@ -287,7 +291,6 @@ remove_head_of_queue(void)
 static void
 do_logging_queue(logging_data *lq)
 {
-	logging_data	*lq_clean = NULL;
 	int		cleared = 0;
 	char		*host;
 
@@ -310,20 +313,15 @@ do_logging_queue(logging_data *lq)
 		if (lq->ld_rpath)
 			mntlist_new(host, lq->ld_rpath);
 
-		lq->ld_next = lq_clean;
-		lq_clean = lq;
+		if (lq->ld_host != host)
+			netdir_free(clnames, ND_HOSTSERVLIST);
+
+		free_logging_data(lq);
+		cleared++;
 
 		(void) mutex_lock(&logging_queue_lock);
 		lq = remove_head_of_queue();
 		(void) mutex_unlock(&logging_queue_lock);
-	}
-
-	while (lq_clean) {
-		lq = lq_clean;
-		lq_clean = lq->ld_next;
-
-		free_logging_data(lq);
-		cleared++;
 	}
 
 	DTRACE_PROBE1(mountd, logging_cleared, cleared);
@@ -352,19 +350,39 @@ logging_svc(void *arg)
 	return (NULL);
 }
 
+static int
+convert_int(int *val, char *str)
+{
+	long lval;
+
+	if (str == NULL || !isdigit(*str))
+		return (-1);
+
+	lval = strtol(str, &str, 10);
+	if (*str != '\0' || lval > INT_MAX)
+		return (-2);
+
+	*val = (int)lval;
+	return (0);
+}
+
 int
 main(int argc, char *argv[])
 {
 	int	pid;
 	int	c;
+	int	rpc_svc_fdunlim = 1;
 	int	rpc_svc_mode = RPC_SVC_MT_AUTO;
-	int	maxthreads;
 	int	maxrecsz = RPC_MAXDATASIZE;
 	bool_t	exclbind = TRUE;
 	bool_t	can_do_mlp;
 	long	thr_flags = (THR_NEW_LWP|THR_DAEMON);
 	char defval[4];
 	int defvers, ret, bufsz;
+	struct rlimit rl;
+	int listen_backlog = 0;
+	int max_threads = 0;
+	int tmp;
 
 	int	pipe_fd = -1;
 
@@ -398,7 +416,22 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
-	maxthreads = 0;
+	if (getrlimit(RLIMIT_NOFILE, &rl) != 0) {
+		syslog(LOG_ERR, "getrlimit failed");
+	} else {
+		rl.rlim_cur = rl.rlim_max;
+		if (setrlimit(RLIMIT_NOFILE, &rl) != 0)
+			syslog(LOG_ERR, "setrlimit failed");
+	}
+
+	(void) enable_extended_FILE_stdio(-1, -1);
+
+	ret = nfs_smf_get_iprop("mountd_max_threads", &max_threads,
+	    DEFAULT_INSTANCE, SCF_TYPE_INTEGER, NFSD);
+	if (ret != SA_OK) {
+		syslog(LOG_ERR, "Reading of mountd_max_threads from SMF "
+		    "failed, using default value");
+	}
 
 	while ((c = getopt(argc, argv, "vrm:")) != EOF) {
 		switch (c) {
@@ -409,14 +442,17 @@ main(int argc, char *argv[])
 			rejecting = 1;
 			break;
 		case 'm':
-			maxthreads = atoi(optarg);
-			if (maxthreads < 1) {
-				(void) fprintf(stderr,
-	"%s: must specify positive maximum threads count, using default\n",
+			if (convert_int(&tmp, optarg) != 0 || tmp < 1) {
+				(void) fprintf(stderr, "%s: invalid "
+				    "max_threads option, using defaults\n",
 				    argv[0]);
-				maxthreads = 0;
+				break;
 			}
+			max_threads = tmp;
 			break;
+		default:
+			fprintf(stderr, "usage: mountd [-v] [-r]\n");
+			exit(1);
 		}
 	}
 
@@ -451,13 +487,20 @@ main(int argc, char *argv[])
 		}
 	}
 
+	ret = nfs_smf_get_iprop("mountd_listen_backlog", &listen_backlog,
+	    DEFAULT_INSTANCE, SCF_TYPE_INTEGER, NFSD);
+	if (ret != SA_OK) {
+		syslog(LOG_ERR, "Reading of mountd_listen_backlog from SMF "
+		    "failed, using default value");
+	}
+
 	/*
 	 * Sanity check versions,
 	 * even though we may get versions > MOUNTVERS3, we still need
 	 * to start nfsauth service, so continue on regardless of values.
 	 */
 	if (mount_vers_min > mount_vers_max) {
-		fprintf(stderr, "server_versmin > server_versmax");
+		fprintf(stderr, "server_versmin > server_versmax\n");
 		mount_vers_max = mount_vers_min;
 	}
 	(void) setlocale(LC_ALL, "");
@@ -482,7 +525,7 @@ main(int argc, char *argv[])
 	 * If we coredump it'll be in /core
 	 */
 	if (chdir("/") < 0)
-		fprintf(stderr, "chdir /: %s", strerror(errno));
+		fprintf(stderr, "chdir /: %s\n", strerror(errno));
 
 	openlog("mountd", LOG_PID, LOG_DAEMON);
 
@@ -496,7 +539,7 @@ main(int argc, char *argv[])
 	case 0:
 		break;
 	case -1:
-		fprintf(stderr, "error locking for %s: %s", MOUNTD,
+		fprintf(stderr, "error locking for %s: %s\n", MOUNTD,
 		    strerror(errno));
 		exit(2);
 	default:
@@ -507,11 +550,18 @@ main(int argc, char *argv[])
 	audit_mountd_setup();	/* BSM */
 
 	/*
+	 * Set number of file descriptors to unlimited
+	 */
+	if (!rpc_control(RPC_SVC_USE_POLLFD, &rpc_svc_fdunlim)) {
+		syslog(LOG_INFO, "unable to set number of FDs to unlimited");
+	}
+
+	/*
 	 * Tell RPC that we want automatic thread mode.
 	 * A new thread will be spawned for each request.
 	 */
 	if (!rpc_control(RPC_SVC_MTMODE_SET, &rpc_svc_mode)) {
-		fprintf(stderr, "unable to set automatic MT mode");
+		fprintf(stderr, "unable to set automatic MT mode\n");
 		exit(1);
 	}
 
@@ -520,7 +570,7 @@ main(int argc, char *argv[])
 	 * connection oriented transports.
 	 */
 	if (!rpc_control(RPC_SVC_CONNMAXREC_SET, &maxrecsz)) {
-		fprintf(stderr, "unable to set RPC max record size");
+		fprintf(stderr, "unable to set RPC max record size\n");
 	}
 
 	/*
@@ -528,15 +578,25 @@ main(int argc, char *argv[])
 	 * from being hijacked by a bind to a more specific addr.
 	 */
 	if (!rpc_control(__RPC_SVC_EXCLBIND_SET, &exclbind)) {
-		fprintf(stderr, "warning: unable to set udp/tcp EXCLBIND");
+		fprintf(stderr, "warning: unable to set udp/tcp EXCLBIND\n");
 	}
 
 	/*
-	 * If the -m argument was specified, then set the
+	 * Set the maximum number of outstanding connection
+	 * indications (listen backlog) to the value specified.
+	 */
+	if (listen_backlog > 0 && !rpc_control(__RPC_SVC_LSTNBKLOG_SET,
+	    &listen_backlog)) {
+		fprintf(stderr, "unable to set listen backlog\n");
+		exit(1);
+	}
+
+	/*
+	 * If max_threads was specified, then set the
 	 * maximum number of threads to the value specified.
 	 */
-	if (maxthreads > 0 && !rpc_control(RPC_SVC_THRMAX_SET, &maxthreads)) {
-		fprintf(stderr, "unable to set maxthreads");
+	if (max_threads > 0 && !rpc_control(RPC_SVC_THRMAX_SET, &max_threads)) {
+		fprintf(stderr, "unable to set max_threads\n");
 		exit(1);
 	}
 
@@ -555,7 +615,8 @@ main(int argc, char *argv[])
 	 * traffic) _and_ a doors server (for kernel upcalls).
 	 */
 	if (thr_create(NULL, 0, nfsauth_svc, 0, thr_flags, &nfsauth_thread)) {
-		fprintf(stderr, gettext("Failed to create NFSAUTH svc thread"));
+		fprintf(stderr,
+		    gettext("Failed to create NFSAUTH svc thread\n"));
 		exit(2);
 	}
 
@@ -588,12 +649,12 @@ main(int argc, char *argv[])
 	if (mount_vers_max >= MOUNTVERS) {
 		if (svc_create(mnt, MOUNTPROG, MOUNTVERS, "datagram_v") == 0) {
 			fprintf(stderr,
-			    "couldn't register datagram_v MOUNTVERS");
+			    "couldn't register datagram_v MOUNTVERS\n");
 			exit(1);
 		}
 		if (svc_create(mnt, MOUNTPROG, MOUNTVERS, "circuit_v") == 0) {
 			fprintf(stderr,
-			    "couldn't register circuit_v MOUNTVERS");
+			    "couldn't register circuit_v MOUNTVERS\n");
 			exit(1);
 		}
 	}
@@ -602,13 +663,13 @@ main(int argc, char *argv[])
 		if (svc_create(mnt, MOUNTPROG, MOUNTVERS_POSIX,
 		    "datagram_v") == 0) {
 			fprintf(stderr,
-			    "couldn't register datagram_v MOUNTVERS_POSIX");
+			    "couldn't register datagram_v MOUNTVERS_POSIX\n");
 			exit(1);
 		}
 		if (svc_create(mnt, MOUNTPROG, MOUNTVERS_POSIX,
 		    "circuit_v") == 0) {
 			fprintf(stderr,
-			    "couldn't register circuit_v MOUNTVERS_POSIX");
+			    "couldn't register circuit_v MOUNTVERS_POSIX\n");
 			exit(1);
 		}
 	}
@@ -616,12 +677,12 @@ main(int argc, char *argv[])
 	if (mount_vers_max >= MOUNTVERS3) {
 		if (svc_create(mnt, MOUNTPROG, MOUNTVERS3, "datagram_v") == 0) {
 			fprintf(stderr,
-			    "couldn't register datagram_v MOUNTVERS3");
+			    "couldn't register datagram_v MOUNTVERS3\n");
 			exit(1);
 		}
 		if (svc_create(mnt, MOUNTPROG, MOUNTVERS3, "circuit_v") == 0) {
 			fprintf(stderr,
-			    "couldn't register circuit_v MOUNTVERS3");
+			    "couldn't register circuit_v MOUNTVERS3\n");
 			exit(1);
 		}
 	}
@@ -1897,6 +1958,10 @@ static char *optlist[] = {
 	SHOPT_SEC,
 #define	OPT_NONE	9
 	SHOPT_NONE,
+#define	OPT_UIDMAP	10
+	SHOPT_UIDMAP,
+#define	OPT_GIDMAP	11
+	SHOPT_GIDMAP,
 	NULL
 };
 
@@ -2103,17 +2168,99 @@ getclientsflavors_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
  */
 int
 check_client(share_t *sh, struct netbuf *nb,
-    struct nd_hostservlist *clnames, int flavor)
+    struct nd_hostservlist *clnames, int flavor, uid_t clnt_uid, gid_t clnt_gid,
+    uid_t *srv_uid, gid_t *srv_gid)
 {
 	if (newopts(sh->sh_opts))
-		return (check_client_new(sh, NULL, &nb, &clnames, flavor));
+		return (check_client_new(sh, NULL, &nb, &clnames, flavor,
+		    clnt_uid, clnt_gid, srv_uid, srv_gid));
 	else
-		return (check_client_old(sh, NULL, &nb, &clnames, flavor));
+		return (check_client_old(sh, NULL, &nb, &clnames, flavor,
+		    clnt_uid, clnt_gid, srv_uid, srv_gid));
+}
+
+/*
+ * is_a_number(number)
+ *
+ * is the string a number in one of the forms we want to use?
+ */
+
+static int
+is_a_number(char *number)
+{
+	int ret = 1;
+	int hex = 0;
+
+	if (strncmp(number, "0x", 2) == 0) {
+		number += 2;
+		hex = 1;
+	} else if (*number == '-') {
+		number++; /* skip the minus */
+	}
+	while (ret == 1 && *number != '\0') {
+		if (hex) {
+			ret = isxdigit(*number++);
+		} else {
+			ret = isdigit(*number++);
+		}
+	}
+	return (ret);
+}
+
+static boolean_t
+get_uid(char *value, uid_t *uid)
+{
+	if (!is_a_number(value)) {
+		struct passwd *pw;
+		/*
+		 * in this case it would have to be a
+		 * user name
+		 */
+		pw = getpwnam(value);
+		if (pw == NULL)
+			return (B_FALSE);
+		*uid = pw->pw_uid;
+		endpwent();
+	} else {
+		uint64_t intval;
+		intval = strtoull(value, NULL, 0);
+		if (intval > UID_MAX && intval != -1)
+			return (B_FALSE);
+		*uid = (uid_t)intval;
+	}
+
+	return (B_TRUE);
+}
+
+static boolean_t
+get_gid(char *value, gid_t *gid)
+{
+	if (!is_a_number(value)) {
+		struct group *gr;
+		/*
+		 * in this case it would have to be a
+		 * group name
+		 */
+		gr = getgrnam(value);
+		if (gr == NULL)
+			return (B_FALSE);
+		*gid = gr->gr_gid;
+		endgrent();
+	} else {
+		uint64_t intval;
+		intval = strtoull(value, NULL, 0);
+		if (intval > UID_MAX && intval != -1)
+			return (B_FALSE);
+		*gid = (gid_t)intval;
+	}
+
+	return (B_TRUE);
 }
 
 static int
 check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
-    struct nd_hostservlist **clnames, int flavor)
+    struct nd_hostservlist **clnames, int flavor, uid_t clnt_uid,
+    gid_t clnt_gid, uid_t *srv_uid, gid_t *srv_gid)
 {
 	char *opts, *p, *val;
 	int match;	/* Set when a flavor is matched */
@@ -2121,7 +2268,8 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 	int list = 0;	/* Set when "ro", "rw" is found */
 	int ro_val = 0;	/* Set if ro option is 'ro=' */
 	int rw_val = 0;	/* Set if rw option is 'rw=' */
-	boolean_t reject = B_FALSE; /* if none= contains the host */
+
+	boolean_t map_deny = B_FALSE;
 
 	opts = strdup(sh->sh_opts);
 	if (opts == NULL) {
@@ -2141,14 +2289,16 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 
 		case OPT_RO:
 			list++;
-			if (val) ro_val++;
+			if (val != NULL)
+				ro_val++;
 			if (in_access_list(transp, nb, clnames, val))
 				perm |= NFSAUTH_RO;
 			break;
 
 		case OPT_RW:
 			list++;
-			if (val) rw_val++;
+			if (val != NULL)
+				rw_val++;
 			if (in_access_list(transp, nb, clnames, val))
 				perm |= NFSAUTH_RW;
 			break;
@@ -2165,8 +2315,14 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 			if (val == NULL || *val == '\0')
 				break;
 
-			if (in_access_list(transp, nb, clnames, val))
+			if (clnt_uid != 0)
+				break;
+
+			if (in_access_list(transp, nb, clnames, val)) {
 				perm |= NFSAUTH_ROOT;
+				perm |= NFSAUTH_UIDMAP | NFSAUTH_GIDMAP;
+				map_deny = B_FALSE;
+			}
 			break;
 
 		case OPT_NONE:
@@ -2176,14 +2332,160 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 			 * more like "root" than either "rw" or "ro".
 			 */
 			if (in_access_list(transp, nb, clnames, val))
-				reject = B_TRUE;
+				perm |= NFSAUTH_DENIED;
+			break;
+
+		case OPT_UIDMAP: {
+			char *c;
+			char *n;
+
+			/*
+			 * The uidmap is supported for AUTH_SYS only.
+			 */
+			if (flavor != AUTH_SYS)
+				break;
+
+			if (perm & NFSAUTH_UIDMAP || map_deny)
+				break;
+
+			for (c = val; c != NULL; c = n) {
+				char *s;
+				char *al;
+				uid_t srv;
+
+				n = strchr(c, '~');
+				if (n != NULL)
+					*n++ = '\0';
+
+				s = strchr(c, ':');
+				if (s != NULL) {
+					*s++ = '\0';
+					al = strchr(s, ':');
+					if (al != NULL)
+						*al++ = '\0';
+				}
+
+				if (s == NULL || al == NULL)
+					continue;
+
+				if (*c == '\0') {
+					if (clnt_uid != (uid_t)-1)
+						continue;
+				} else if (strcmp(c, "*") != 0) {
+					uid_t clnt;
+
+					if (!get_uid(c, &clnt))
+						continue;
+
+					if (clnt_uid != clnt)
+						continue;
+				}
+
+				if (*s == '\0')
+					srv = UID_NOBODY;
+				else if (!get_uid(s, &srv))
+					continue;
+				else if (srv == (uid_t)-1) {
+					map_deny = B_TRUE;
+					break;
+				}
+
+				if (in_access_list(transp, nb, clnames, al)) {
+					*srv_uid = srv;
+					perm |= NFSAUTH_UIDMAP;
+					break;
+				}
+			}
+
+			break;
+		}
+
+		case OPT_GIDMAP: {
+			char *c;
+			char *n;
+
+			/*
+			 * The gidmap is supported for AUTH_SYS only.
+			 */
+			if (flavor != AUTH_SYS)
+				break;
+
+			if (perm & NFSAUTH_GIDMAP || map_deny)
+				break;
+
+			for (c = val; c != NULL; c = n) {
+				char *s;
+				char *al;
+				gid_t srv;
+
+				n = strchr(c, '~');
+				if (n != NULL)
+					*n++ = '\0';
+
+				s = strchr(c, ':');
+				if (s != NULL) {
+					*s++ = '\0';
+					al = strchr(s, ':');
+					if (al != NULL)
+						*al++ = '\0';
+				}
+
+				if (s == NULL || al == NULL)
+					break;
+
+				if (*c == '\0') {
+					if (clnt_gid != (gid_t)-1)
+						continue;
+				} else if (strcmp(c, "*") != 0) {
+					gid_t clnt;
+
+					if (!get_gid(c, &clnt))
+						continue;
+
+					if (clnt_gid != clnt)
+						continue;
+				}
+
+				if (*s == '\0')
+					srv = UID_NOBODY;
+				else if (!get_gid(s, &srv))
+					continue;
+				else if (srv == (gid_t)-1) {
+					map_deny = B_TRUE;
+					break;
+				}
+
+				if (in_access_list(transp, nb, clnames, al)) {
+					*srv_gid = srv;
+					perm |= NFSAUTH_GIDMAP;
+					break;
+				}
+			}
+
+			break;
+		}
+
+		default:
 			break;
 		}
 	}
 
 	free(opts);
 
-	if (flavor != match || reject)
+	if (perm & NFSAUTH_ROOT) {
+		*srv_uid = 0;
+		*srv_gid = 0;
+	}
+
+	if (map_deny)
+		perm |= NFSAUTH_DENIED;
+
+	if (!(perm & NFSAUTH_UIDMAP))
+		*srv_uid = clnt_uid;
+	if (!(perm & NFSAUTH_GIDMAP))
+		*srv_gid = clnt_gid;
+
+	if (flavor != match || perm & NFSAUTH_DENIED)
 		return (NFSAUTH_DENIED);
 
 	if (list) {
@@ -2201,7 +2503,6 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 		 */
 		perm |= NFSAUTH_RW;
 	}
-
 
 	/*
 	 * The client may show up in both ro= and rw=
@@ -2278,7 +2579,8 @@ is_wrongsec(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 
 static int
 check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
-    struct nd_hostservlist **clnames, int flavor)
+    struct nd_hostservlist **clnames, int flavor, uid_t clnt_uid,
+    gid_t clnt_gid, uid_t *srv_uid, gid_t *srv_gid)
 {
 	char *opts, *p, *val;
 	char *lasts;
@@ -2288,7 +2590,8 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 	int list = 0;	/* Set when "ro", "rw" is found */
 	int ro_val = 0;	/* Set if ro option is 'ro=' */
 	int rw_val = 0;	/* Set if rw option is 'rw=' */
-	boolean_t reject;
+
+	boolean_t map_deny = B_FALSE;
 
 	opts = strdup(sh->sh_opts);
 	if (opts == NULL) {
@@ -2320,7 +2623,8 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 				break;
 
 			list++;
-			if (val) ro_val++;
+			if (val != NULL)
+				ro_val++;
 			if (in_access_list(transp, nb, clnames, val))
 				perm |= NFSAUTH_RO;
 			break;
@@ -2330,7 +2634,8 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 				break;
 
 			list++;
-			if (val) rw_val++;
+			if (val != NULL)
+				rw_val++;
 			if (in_access_list(transp, nb, clnames, val))
 				perm |= NFSAUTH_RW;
 			break;
@@ -2350,8 +2655,14 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 			if (val == NULL || *val == '\0')
 				break;
 
-			if (in_access_list(transp, nb, clnames, val))
+			if (clnt_uid != 0)
+				break;
+
+			if (in_access_list(transp, nb, clnames, val)) {
 				perm |= NFSAUTH_ROOT;
+				perm |= NFSAUTH_UIDMAP | NFSAUTH_GIDMAP;
+				map_deny = B_FALSE;
+			}
 			break;
 
 		case OPT_NONE:
@@ -2363,15 +2674,163 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 			if (in_access_list(transp, nb, clnames, val))
 				perm |= NFSAUTH_DENIED;
 			break;
+
+		case OPT_UIDMAP: {
+			char *c;
+			char *n;
+
+			/*
+			 * The uidmap is supported for AUTH_SYS only.
+			 */
+			if (flavor != AUTH_SYS)
+				break;
+
+			if (!match || perm & NFSAUTH_UIDMAP || map_deny)
+				break;
+
+			for (c = val; c != NULL; c = n) {
+				char *s;
+				char *al;
+				uid_t srv;
+
+				n = strchr(c, '~');
+				if (n != NULL)
+					*n++ = '\0';
+
+				s = strchr(c, ':');
+				if (s != NULL) {
+					*s++ = '\0';
+					al = strchr(s, ':');
+					if (al != NULL)
+						*al++ = '\0';
+				}
+
+				if (s == NULL || al == NULL)
+					continue;
+
+				if (*c == '\0') {
+					if (clnt_uid != (uid_t)-1)
+						continue;
+				} else if (strcmp(c, "*") != 0) {
+					uid_t clnt;
+
+					if (!get_uid(c, &clnt))
+						continue;
+
+					if (clnt_uid != clnt)
+						continue;
+				}
+
+				if (*s == '\0')
+					srv = UID_NOBODY;
+				else if (!get_uid(s, &srv))
+					continue;
+				else if (srv == (uid_t)-1) {
+					map_deny = B_TRUE;
+					break;
+				}
+
+				if (in_access_list(transp, nb, clnames, al)) {
+					*srv_uid = srv;
+					perm |= NFSAUTH_UIDMAP;
+					break;
+				}
+			}
+
+			break;
+		}
+
+		case OPT_GIDMAP: {
+			char *c;
+			char *n;
+
+			/*
+			 * The gidmap is supported for AUTH_SYS only.
+			 */
+			if (flavor != AUTH_SYS)
+				break;
+
+			if (!match || perm & NFSAUTH_GIDMAP || map_deny)
+				break;
+
+			for (c = val; c != NULL; c = n) {
+				char *s;
+				char *al;
+				gid_t srv;
+
+				n = strchr(c, '~');
+				if (n != NULL)
+					*n++ = '\0';
+
+				s = strchr(c, ':');
+				if (s != NULL) {
+					*s++ = '\0';
+					al = strchr(s, ':');
+					if (al != NULL)
+						*al++ = '\0';
+				}
+
+				if (s == NULL || al == NULL)
+					break;
+
+				if (*c == '\0') {
+					if (clnt_gid != (gid_t)-1)
+						continue;
+				} else if (strcmp(c, "*") != 0) {
+					gid_t clnt;
+
+					if (!get_gid(c, &clnt))
+						continue;
+
+					if (clnt_gid != clnt)
+						continue;
+				}
+
+				if (*s == '\0')
+					srv = UID_NOBODY;
+				else if (!get_gid(s, &srv))
+					continue;
+				else if (srv == (gid_t)-1) {
+					map_deny = B_TRUE;
+					break;
+				}
+
+				if (in_access_list(transp, nb, clnames, al)) {
+					*srv_gid = srv;
+					perm |= NFSAUTH_GIDMAP;
+					break;
+				}
+			}
+
+			break;
+		}
+
+		default:
+			break;
 		}
 	}
 
 done:
+	if (perm & NFSAUTH_ROOT) {
+		*srv_uid = 0;
+		*srv_gid = 0;
+	}
+
+	if (map_deny)
+		perm |= NFSAUTH_DENIED;
+
+	if (!(perm & NFSAUTH_UIDMAP))
+		*srv_uid = clnt_uid;
+	if (!(perm & NFSAUTH_GIDMAP))
+		*srv_gid = clnt_gid;
+
 	/*
 	 * If no match then set the perm accordingly
 	 */
-	if (!match || perm & NFSAUTH_DENIED)
+	if (!match || perm & NFSAUTH_DENIED) {
+		free(opts);
 		return (NFSAUTH_DENIED);
+	}
 
 	if (list) {
 		/*

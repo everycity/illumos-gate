@@ -47,8 +47,7 @@
 #
 #	For example: LINTDIRS="$SRC/uts n $SRC/stand y $SRC/psm y"
 #
-# OPTHOME and TEAMWARE may be set in the environment to override /opt
-# and /opt/teamware defaults.
+# OPTHOME  may be set in the environment to override /opt
 #
 
 #
@@ -98,10 +97,6 @@ function normal_build {
 		set_non_debug_build_flags
 		CODESIGN_USER="$crypto_signer" \
 		    build "non-DEBUG" "$suffix-nd" "-nd" "$MULTI_PROTO"
-		if [ "$build_ok" = "y" -a "$X_FLAG" = "y" -a \
-		    "$p_FLAG" = "y" ]; then
-			copy_ihv_pkgs non-DEBUG -nd
-		fi
 	else
 		echo "\n==== No non-DEBUG $open_only build ====\n" >> "$LOGFILE"
 	fi
@@ -114,10 +109,6 @@ function normal_build {
 		set_debug_build_flags
 		CODESIGN_USER="$crypto_signer" \
 		    build "DEBUG" "$suffix" "" "$MULTI_PROTO"
-		if [ "$build_ok" = "y" -a "$X_FLAG" = "y" -a \
-		    "$p_FLAG" = "y" ]; then
-			copy_ihv_pkgs DEBUG ""
-		fi
 	else
 		echo "\n==== No DEBUG $open_only build ====\n" >> "$LOGFILE"
 	fi
@@ -157,248 +148,6 @@ function run_hook {
 	fi
 }
 
-#
-# usage: filelist DESTDIR PATTERN
-#
-function filelist {
-	DEST=$1
-	PATTERN=$2
-	cd ${DEST}
-}
-
-# function to save off binaries after a full build for later
-# restoration
-function save_binaries {
-	# save off list of binaries
-	echo "\n==== Saving binaries from build at `date` ====\n" | \
-	    tee -a $mail_msg_file >> $LOGFILE
-	rm -f ${BINARCHIVE}
-	cd ${CODEMGR_WS}
-	filelist ${CODEMGR_WS} '^preserve:' >> $LOGFILE
-	filelist ${CODEMGR_WS} '^preserve:' | \
-	    cpio -ocB 2>/dev/null | compress \
-	    > ${BINARCHIVE}
-}
-
-# delete files
-# usage: hybridize_files DESTDIR MAKE_TARGET
-function hybridize_files {
-	DEST=$1
-	MAKETARG=$2
-
-	echo "\n==== Hybridizing files at `date` ====\n" | \
-	    tee -a $mail_msg_file >> $LOGFILE
-	for i in `filelist ${DEST} '^delete:'`
-	do
-		echo "removing ${i}." | tee -a $mail_msg_file >> $LOGFILE
-		rm -rf "${i}"
-	done
-	for i in `filelist ${DEST} '^hybridize:' `
-	do
-		echo "hybridizing ${i}." | tee -a $mail_msg_file >> $LOGFILE
-		rm -f ${i}+
-		sed -e "/^# HYBRID DELETE START/,/^# HYBRID DELETE END/d" \
-		    < ${i} > ${i}+
-		mv ${i}+ ${i}
-	done
-}
-
-# restore binaries into the proper source tree.
-# usage: restore_binaries DESTDIR MAKE_TARGET
-function restore_binaries {
-	DEST=$1
-	MAKETARG=$2
-
-	echo "\n==== Restoring binaries to ${MAKETARG} at `date` ====\n" | \
-	    tee -a $mail_msg_file >> $LOGFILE
-	cd ${DEST}
-	zcat ${BINARCHIVE} | \
-	    cpio -idmucvB 2>/dev/null | tee -a $mail_msg_file >> ${LOGFILE}
-}
-
-# rename files we save binaries of
-# usage: rename_files DESTDIR MAKE_TARGET
-function rename_files {
-	DEST=$1
-	MAKETARG=$2
-	echo "\n==== Renaming source files in ${MAKETARG} at `date` ====\n" | \
-	    tee -a $mail_msg_file >> $LOGFILE
-	for i in `filelist ${DEST} '^rename:'`
-	do
-		echo ${i} | tee -a $mail_msg_file >> ${LOGFILE}
-		rm -f ${i}.export
-		mv ${i} ${i}.export
-	done
-}
-
-#
-# Copy some or all of the source tree.
-#
-# Returns 0 for success, non-zero for failure.
-#
-# usage: copy_source CODEMGR_WS DESTDIR LABEL SRCROOT
-#
-function copy_source {
-	WS=$1
-	DEST=$2
-	label=$3
-	srcroot=$4
-
-	printf "\n==== Creating %s source from %s (%s) ====\n\n" \
-	    "$DEST" "$WS" "$label" | tee -a $mail_msg_file >> $LOGFILE
-
-	printf "cleaning out %s\n" "$DEST." >> $LOGFILE
-	rm -rf "$DEST" >> $LOGFILE 2>&1
-
-	printf "creating %s\n" "$DEST." >> $LOGFILE
-	mkdir -p "$DEST" 2>> $LOGFILE
-
-	if (( $? != 0 )) ; then
-		printf "failed to create %s\n" "$DEST" |
-		    tee -a $mail_msg_file >> $LOGFILE
-		build_ok=n
-		return 1
-	fi
-	cd "$WS"
-
-	printf "populating %s\n" "$DEST." >> $LOGFILE
-
-	case "$SCM_TYPE" in
-	teamware)
-		find $srcroot -name 's\.*' -a -type f -print | \
-		    sed -e 's,SCCS\/s.,,' | \
-		    grep -v '/\.del-*' | \
-		    cpio -pd $DEST >>$LOGFILE 2>&1
-		if (( $? != 0 )) ; then
-		    printf "cpio failed for %s\n" "$DEST" |
-			tee -a $mail_msg_file >> $LOGFILE
-		    build_ok=n
-		    return 1
-		fi
-		;;
-	mercurial)
-		copy_source_mercurial $DEST $srcroot
-		if (( $? != 0 )) ; then
-		    build_ok=n
-		    return 1
-		fi
-		;;
-	*)
-		build_ok=n
-		echo "Tree copy is not supported for workspace type" \
-		    "$SCM_TYPE" | tee -a $mail_msg_file >> $LOGFILE
-		return 1
-		;;
-	esac
-
-	return 0
-}
-
-#
-# Mercurial-specific copy code for copy_source().  Handles the
-# combined open and closed trees.
-#
-# Returns 0 for success, non-zero for failure.
-#
-# usage: copy_source_mercurial destdir srcroot
-#
-function copy_source_mercurial {
-	typeset dest=$1
-	typeset srcroot=$2
-	typeset open_top closed_top
-
-	case $srcroot in
-	usr)
-		open_top=usr
-		if [[ "$CLOSED_IS_PRESENT" = yes ]]; then
-			closed_top=usr/closed
-		fi
-		;;
-	usr/closed*)
-		if [[ "$CLOSED_IS_PRESENT" = no ]]; then
-			printf "can't copy %s: closed tree not present.\n" \
-			    "$srcroot" | tee -a $mail_msg_file >> $LOGFILE
-			return 1
-		fi
-		closed_top="$srcroot"
-		;;
-	*)
-		open_top="$srcroot"
-		;;
-	esac		
-
-	if [[ -n "$open_top" ]]; then
-		hg locate -I "$open_top" | cpio -pd "$dest" >>$LOGFILE 2>&1
-		if (( $? != 0 )) ; then
-		    printf "cpio failed for %s\n" "$dest" |
-			tee -a $mail_msg_file >> $LOGFILE
-		    return 1
-		fi
-	fi
-
-	if [[ -n "$closed_top" ]]; then
-		mkdir -p "$dest/usr/closed" || return 1
-		if [[ "$closed_top" = usr/closed ]]; then
-			(cd usr/closed; hg locate |
-			    cpio -pd "$dest/usr/closed") >>$LOGFILE 2>&1
-			if (( $? != 0 )) ; then
-			    printf "cpio failed for %s/usr/closed\n" \
-				"$dest" | tee -a $mail_msg_file >> $LOGFILE
-			    return 1
-			fi
-		else
-			# copy subtree of usr/closed
-			closed_top=${closed_top#usr/closed/}
-			(cd usr/closed; hg locate -I "$closed_top" |
-			    cpio -pd "$dest/usr/closed") >>$LOGFILE 2>&1
-			if (( $? != 0 )) ; then
-			    printf "cpio failed for %s/usr/closed/%s\n" \
-				"$dest" "$closed_top" |
-				tee -a $mail_msg_file >> $LOGFILE
-			    return 1
-			fi
-		fi
-	fi
-
-	return 0
-}
-
-#
-# function to create (but not build) the export/crypt source tree.
-# usage: set_up_source_build CODEMGR_WS DESTDIR MAKE_TARGET
-# Sets SRC to the modified source tree, for use by the caller when it
-# builds the tree.
-#
-function set_up_source_build {
-	WS=$1
-	DEST=$2
-	MAKETARG=$3
-
-	copy_source $WS $DEST $MAKETARG usr
-	if (( $? != 0 )); then
-	    echo "\nCould not copy source tree for source build." |
-		tee -a $mail_msg_file >> $LOGFILE
-	    build_ok=n
-	    return
-	fi
-
-	SRC=${DEST}/usr/src
-
-	cd $SRC
-	rm -f ${MAKETARG}.out
-	echo "making ${MAKETARG} in ${SRC}." >> $LOGFILE
-	/bin/time $MAKE -e ${MAKETARG} 2>&1 | \
-	    tee -a $SRC/${MAKETARG}.out >> $LOGFILE
-	echo "\n==== ${MAKETARG} build errors ====\n" >> $mail_msg_file
-	egrep ":" $SRC/${MAKETARG}.out | \
-		egrep -e "(^${MAKE}:|[ 	]error[: 	\n])" | \
-		egrep -v "Ignoring unknown host" | \
-		egrep -v "warning" >> $mail_msg_file
-
-	echo "clearing state files." >> $LOGFILE
-	find . -name '.make*' -exec rm -f {} \;
-}
-
 # Return library search directive as function of given root.
 function myldlibs {
 	echo "-L$1/lib -L$1/usr/lib"
@@ -431,11 +180,6 @@ function build {
 	ORIGROOT=$ROOT
 	[ $MULTIPROTO = no ] || export ROOT=$ROOT$SUFFIX
 
-	if [[ "$O_FLAG" = y ]]; then
-		echo "\nSetting CLOSEDROOT= ${ROOT}-closed\n" >> $LOGFILE
-		export CLOSEDROOT=${ROOT}-closed
-	fi
-
 	export ENVLDLIBS1=`myldlibs $ROOT`
 	export ENVCPPFLAGS1=`myheaders $ROOT`
 
@@ -451,19 +195,14 @@ function build {
 	/bin/time $MAKE -e install 2>&1 | \
 	    tee -a $SRC/${INSTALLOG}.out >> $LOGFILE
 
-	if [[ "$SCM_TYPE" = teamware ]]; then
-		echo "\n==== SCCS Noise ($LABEL) ====\n" >> $mail_msg_file
-		egrep 'sccs(check:| *get)' $SRC/${INSTALLOG}.out >> \
-			$mail_msg_file
-	fi
-
 	echo "\n==== Build errors ($LABEL) ====\n" >> $mail_msg_file
 	egrep ":" $SRC/${INSTALLOG}.out |
 		egrep -e "(^${MAKE}:|[ 	]error[: 	\n])" | \
 		egrep -v "Ignoring unknown host" | \
 		egrep -v "cc .* -o error " | \
-		egrep -v "warning" >> $mail_msg_file
-	if [ "$?" = "0" ]; then
+		egrep -v "warning" | tee $TMPDIR/build_errs${SUFFIX} \
+		>> $mail_msg_file
+	if [[ -s $TMPDIR/build_errs${SUFFIX} ]]; then
 		build_ok=n
 		this_build_ok=n
 	fi
@@ -474,15 +213,17 @@ function build {
 		this_build_ok=n
 	fi
 
-	if [ "$W_FLAG" = "n" ]; then
-		echo "\n==== Build warnings ($LABEL) ====\n" >>$mail_msg_file
-		egrep -i warning: $SRC/${INSTALLOG}.out \
-			| egrep -v '^tic:' \
-			| egrep -v "symbol (\`|')timezone' has differing types:" \
-		        | egrep -v "parameter <PSTAMP> set to" \
-			| egrep -v "Ignoring unknown host" \
-			| egrep -v "redefining segment flags attribute for" \
-			>> $mail_msg_file
+	echo "\n==== Build warnings ($LABEL) ====\n" >>$mail_msg_file
+	egrep -i warning: $SRC/${INSTALLOG}.out \
+		| egrep -v '^tic:' \
+		| egrep -v "symbol (\`|')timezone' has differing types:" \
+		| egrep -v "parameter <PSTAMP> set to" \
+		| egrep -v "Ignoring unknown host" \
+		| egrep -v "redefining segment flags attribute for" \
+		| tee $TMPDIR/build_warnings${SUFFIX} >> $mail_msg_file
+	if [[ -s $TMPDIR/build_warnings${SUFFIX} ]]; then
+		build_ok=n
+		this_build_ok=n
 	fi
 
 	echo "\n==== Ended OS-Net source build at `date` ($LABEL) ====\n" \
@@ -491,7 +232,7 @@ function build {
 	echo "\n==== Elapsed build time ($LABEL) ====\n" >>$mail_msg_file
 	tail -3  $SRC/${INSTALLOG}.out >>$mail_msg_file
 
-	if [ "$i_FLAG" = "n" -a "$W_FLAG" = "n" ]; then
+	if [ "$i_FLAG" = "n" ]; then
 		rm -f $SRC/${NOISE}.ref
 		if [ -f $SRC/${NOISE}.out ]; then
 			mv $SRC/${NOISE}.out $SRC/${NOISE}.ref
@@ -580,44 +321,34 @@ function build {
 	#	Building Packages
 	#
 	if [ "$p_FLAG" = "y" -a "$this_build_ok" = "y" ]; then
-		if [ -d $SRC/pkg -o -d $SRC/pkgdefs ]; then
+		if [ -d $SRC/pkg ]; then
 			echo "\n==== Creating $LABEL packages at `date` ====\n" \
 				>> $LOGFILE
 			echo "Clearing out $PKGARCHIVE ..." >> $LOGFILE
 			rm -rf $PKGARCHIVE >> "$LOGFILE" 2>&1
 			mkdir -p $PKGARCHIVE >> "$LOGFILE" 2>&1
 
-			/bin/time $MAKE -e stage-licenses 2>&1 | \
-				tee -a $SRC/$d/${INSTALLOG}.out >> $LOGFILE
-
-			for d in pkg pkgdefs; do
-				if [ ! -f "$SRC/$d/Makefile" ]; then
-					continue
-				fi
-				rm -f $SRC/$d/${INSTALLOG}.out
-				cd $SRC/$d
-				/bin/time $MAKE -e install 2>&1 | \
-					tee -a $SRC/$d/${INSTALLOG}.out >> $LOGFILE
-			done
+			rm -f $SRC/pkg/${INSTALLOG}.out
+			cd $SRC/pkg
+			/bin/time $MAKE -e install 2>&1 | \
+			    tee -a $SRC/pkg/${INSTALLOG}.out >> $LOGFILE
 
 			echo "\n==== package build errors ($LABEL) ====\n" \
 				>> $mail_msg_file
 
-			for d in pkg pkgdefs; do
-				if [ ! -f "$SRC/$d/Makefile" ]; then
-					continue
-				fi
-
-				egrep "${MAKE}|ERROR|WARNING" $SRC/$d/${INSTALLOG}.out | \
-					grep ':' | \
-					grep -v PSTAMP | \
-					egrep -v "Ignoring unknown host" \
-					>> $mail_msg_file
-			done
+			egrep "${MAKE}|ERROR|WARNING" $SRC/pkg/${INSTALLOG}.out | \
+				grep ':' | \
+				grep -v PSTAMP | \
+				egrep -v "Ignoring unknown host" | \
+				tee $TMPDIR/package >> $mail_msg_file
+			if [[ -s $TMPDIR/package ]]; then
+				build_extras_ok=n
+				this_build_ok=n
+			fi
 		else
 			#
-			# Handle it gracefully if -p was set but there are
-			# neither pkg nor pkgdefs directories.
+			# Handle it gracefully if -p was set but there so
+			# no pkg directory.
 			#
 			echo "\n==== No $LABEL packages to build ====\n" \
 				>> $LOGFILE
@@ -674,10 +405,15 @@ function dolint {
 
 	/bin/time $MAKE -ek lint 2>&1 | \
 	    tee -a $LINTOUT >> $LOGFILE
+
 	echo "\n==== '$MAKE lint' of $base ERRORS ====\n" >> $mail_msg_file
+
 	grep "$MAKE:" $LINTOUT |
-		egrep -v "Ignoring unknown host" \
-		>> $mail_msg_file
+		egrep -v "Ignoring unknown host" | \
+		tee $TMPDIR/lint_errs >> $mail_msg_file
+	if [[ -s $TMPDIR/lint_errs ]]; then
+		build_extras_ok=n
+	fi
 
 	echo "\n==== Ended '$MAKE lint' of $base at `date` ====\n" >> $LOGFILE
 
@@ -699,86 +435,21 @@ function dolint {
 	if [ ! -f ${LINTNOISE}.ref ]; then
 		cp ${LINTNOISE}.out ${LINTNOISE}.ref
 	fi
+
 	if [ "$dodiff" != "n" ]; then
 		echo "\n==== lint warnings $base ====\n" \
 			>>$mail_msg_file
 		# should be none, though there are a few that were filtered out
 		# above
 		egrep -i '(warning|lint):' ${LINTNOISE}.out \
-			| sort | uniq >> $mail_msg_file
+			| sort | uniq | tee $TMPDIR/lint_warns >> $mail_msg_file
+		if [[ -s $TMPDIR/lint_warns ]]; then
+			build_extras_ok=n
+		fi
 		echo "\n==== lint noise differences $base ====\n" \
 			>> $mail_msg_file
 		diff ${LINTNOISE}.ref ${LINTNOISE}.out \
 			>> $mail_msg_file
-	fi
-}
-
-# Install proto area from IHV build
-
-function copy_ihv_proto {
-
-	echo "\n==== Installing IHV proto area ====\n" \
-		>> $LOGFILE
-	if [ -d "$IA32_IHV_ROOT" ]; then
-		if [ ! -d "$ROOT" ]; then
-			echo "mkdir -p $ROOT" >> $LOGFILE
-			mkdir -p $ROOT
-		fi
-		echo "copying $IA32_IHV_ROOT to $ROOT\n" >> $LOGFILE
-		cd $IA32_IHV_ROOT
-		tar cf - . | (cd $ROOT; umask 0; tar xpf - ) 2>&1 >> $LOGFILE
-	else
-		echo "$IA32_IHV_ROOT: not found" >> $LOGFILE
-	fi
-
-	if [ "$MULTI_PROTO" = yes ]; then
-		if [ ! -d "$ROOT-nd" ]; then
-			echo "mkdir -p $ROOT-nd" >> $LOGFILE
-			mkdir -p $ROOT-nd
-		fi
-		# If there's a non-DEBUG version of the IHV proto area,
-		# copy it, but copy something if there's not.
-		if [ -d "$IA32_IHV_ROOT-nd" ]; then
-			echo "copying $IA32_IHV_ROOT-nd to $ROOT-nd\n" >> $LOGFILE
-			cd $IA32_IHV_ROOT-nd
-		elif [ -d "$IA32_IHV_ROOT" ]; then
-			echo "copying $IA32_IHV_ROOT to $ROOT-nd\n" >> $LOGFILE
-			cd $IA32_IHV_ROOT
-		else
-			echo "$IA32_IHV_ROOT{-nd,}: not found" >> $LOGFILE
-			return
-		fi
-		tar cf - . | (cd $ROOT-nd; umask 0; tar xpf - ) 2>&1 >> $LOGFILE
-	fi
-}
-
-# Install IHV packages in PKGARCHIVE
-# usage: copy_ihv_pkgs LABEL SUFFIX
-function copy_ihv_pkgs {
-	LABEL=$1
-	SUFFIX=$2
-	# always use non-DEBUG IHV packages
-	IA32_IHV_PKGS=${IA32_IHV_PKGS_ORIG}-nd
-	PKGARCHIVE=${PKGARCHIVE_ORIG}${SUFFIX}
-
-	echo "\n==== Installing IHV packages from $IA32_IHV_PKGS ($LABEL) ====\n" \
-		>> $LOGFILE
-	if [ -d "$IA32_IHV_PKGS" ]; then
-		cd $IA32_IHV_PKGS
-		tar cf - * | \
-		   (cd $PKGARCHIVE; umask 0; tar xpf - ) 2>&1 >> $LOGFILE
-	else
-		echo "$IA32_IHV_PKGS: not found" >> $LOGFILE
-	fi
-
-	echo "\n==== Installing IHV packages from $IA32_IHV_BINARY_PKGS ($LABEL) ====\n" \
-		>> $LOGFILE
-	if [ -d "$IA32_IHV_BINARY_PKGS" ]; then
-		cd $IA32_IHV_BINARY_PKGS
-		tar cf - * | \
-		    (cd $PKGARCHIVE; umask 0; tar xpf - ) 2>&1 >> $LOGFILE
-	else
-		echo "$IA32_IHV_BINARY_PKGS: not found" >> $LOGFILE
 	fi
 }
 
@@ -807,8 +478,12 @@ function build_tools {
 	egrep ":" ${TOOLS}/${INSTALLOG}.out |
 		egrep -e "(${MAKE}:|[ 	]error[: 	\n])" | \
 		egrep -v "Ignoring unknown host" | \
-		egrep -v warning >> $mail_msg_file
-	return $?
+		egrep -v warning | tee $TMPDIR/tools_errors >> $mail_msg_file
+
+	if [[ -s $TMPDIR/tools_errors ]]; then
+		return 1
+	fi
+	return 0
 }
 
 #
@@ -896,35 +571,14 @@ function staffer {
 }
 
 #
-# Verify that the closed tree is present if it needs to be.
-# Sets CLOSED_IS_PRESENT for future use.
+# Verify that the closed bins are present
 #
-function check_closed_tree {
-	if [ -z "$CLOSED_IS_PRESENT" ]; then
-		if [ -d $CODEMGR_WS/usr/closed ]; then
-			CLOSED_IS_PRESENT="yes"
-		else
-			CLOSED_IS_PRESENT="no"
-		fi
-		export CLOSED_IS_PRESENT
+function check_closed_bins {
+	if [[ ! -d "$ON_CLOSED_BINS" ]]; then
+		echo "ON_CLOSED_BINS must point to the closed binaries tree."
+		build_ok=n
+		exit 1
 	fi
-	if [[ "$CLOSED_IS_PRESENT" = no && ! -d "$ON_CLOSED_BINS" ]]; then
-		#
-		# If it's an old (pre-split) tree or an empty
-		# workspace, don't complain.
-		#
-		if grep -s CLOSED_BUILD $SRC/Makefile.master > /dev/null; then
-			echo "If the closed sources are not present," \
-			    "ON_CLOSED_BINS"
-			echo "must point to the closed binaries tree."
-			build_ok=n
-			exit 1
-		fi
-	fi
-}
-
-function obsolete_build {
-    	echo "WARNING: Obsolete $1 build requested; request will be ignored"
 }
 
 #
@@ -953,14 +607,12 @@ function do_wsdiff {
 #
 
 function set_non_debug_build_flags {
-	export INTERNAL_RELEASE_BUILD ; INTERNAL_RELEASE_BUILD=
 	export RELEASE_BUILD ; RELEASE_BUILD=
 	unset EXTRA_OPTIONS
 	unset EXTRA_CFLAGS
 }
 
 function set_debug_build_flags {
-	export INTERNAL_RELEASE_BUILD ; INTERNAL_RELEASE_BUILD=
 	unset RELEASE_BUILD
 	unset EXTRA_OPTIONS
 	unset EXTRA_CFLAGS
@@ -973,23 +625,14 @@ if [ "$OPTHOME" = "" ]; then
 	OPTHOME=/opt
 	export OPTHOME
 fi
-if [ "$TEAMWARE" = "" ]; then
-	TEAMWARE=$OPTHOME/teamware
-	export TEAMWARE
-fi
 
-USAGE='Usage: nightly [-in] [+t] [-V VERS ] [ -S E|D|H|O ] <env_file>
+USAGE='Usage: nightly [-in] [+t] [-V VERS ] <env_file>
 
 Where:
 	-i	Fast incremental options (no clobber, lint, check)
 	-n      Do not do a bringover
 	+t	Use the build tools in $ONBLD_TOOLS/bin
 	-V VERS set the build version string to VERS
-	-S	Build a variant of the source product
-		E - build exportable source
-		D - build domestic source (exportable + crypt)
-		H - build hybrid source (binaries + deleted source)
-		O - build (only) open source
 
 	<env_file>  file in Bourne shell syntax that sets and exports
 	variables that configure the operation of this script and many of
@@ -1007,17 +650,14 @@ NIGHTLY_OPTIONS variable in the <env_file> as follows:
 	-I	integration engineer default group of options (-ampu)
 	-M	do not run pmodes (safe file permission checker)
 	-N	do not run protocmp
-	-O	generate OpenSolaris deliverables
 	-R	default group of options for building a release (-mp)
 	-U	update proto area in the parent
 	-V VERS set the build version string to VERS
-	-X	copy x86 IHV proto area
 	-f	find unreferenced files
 	-i	do an incremental build (no "make clobber")
 	-l	do "make lint" in $LINTDIRS (default: $SRC y)
 	-m	send mail to $MAILTO at end of build
 	-n      do not do a bringover
-	-o	build using root privileges to set OWNER/GROUP (old style)
 	-p	create packages
 	-r	check ELF runtime attributes in the proto area
 	-t	build and use the tools in $SRC/tools (default setting)
@@ -1025,13 +665,6 @@ NIGHTLY_OPTIONS variable in the <env_file> as follows:
 	-u	update proto_list_$MACH and friends in the parent workspace;
 		when used with -f, also build an unrefmaster.out in the parent
 	-w	report on differences between previous and current proto areas
-	-z	compress cpio archives with gzip
-	-W	Do not report warnings (freeware gate ONLY)
-	-S	Build a variant of the source product
-		E - build exportable source
-		D - build domestic source (exportable + crypt)
-		H - build hybrid source (binaries + deleted source)
-		O - build (only) open source
 '
 #
 #	A log file will be generated under the name $LOGFILE
@@ -1051,77 +684,36 @@ M_FLAG=n
 m_FLAG=n
 N_FLAG=n
 n_FLAG=n
-O_FLAG=n
-o_FLAG=n
-P_FLAG=n
 p_FLAG=n
 r_FLAG=n
-T_FLAG=n
 t_FLAG=y
 U_FLAG=n
 u_FLAG=n
 V_FLAG=n
-W_FLAG=n
 w_FLAG=n
-X_FLAG=n
-SD_FLAG=n
-SE_FLAG=n
-SH_FLAG=n
-SO_FLAG=n
-#
-XMOD_OPT=
+W_FLAG=n
 #
 build_ok=y
-
-function is_source_build {
-	[ "$SE_FLAG" = "y" -o "$SD_FLAG" = "y" -o \
-	    "$SH_FLAG" = "y" -o "$SO_FLAG" = "y" ]
-	return $?
-}
+build_extras_ok=y
 
 #
 # examine arguments
 #
 
-#
-# single function for setting -S flag and doing error checking.
-# usage: set_S_flag <type>
-# where <type> is the source build type ("E", "D", ...).
-#
-function set_S_flag {
-	if is_source_build; then
-		echo "Can only build one source variant at a time."
-		exit 1
-	fi
-	if [ "$1" = "E" ]; then
-		SE_FLAG=y
-	elif [ "$1" = "D" ]; then
-		SD_FLAG=y
-	elif [ "$1" = "H" ]; then
-		SH_FLAG=y
-	elif [ "$1" = "O" ]; then
-		SO_FLAG=y
-	else
-		echo "$USAGE"
-		exit 1
-	fi
-}
-
 OPTIND=1
-while getopts +inS:tV: FLAG
+while getopts +intV:W FLAG
 do
 	case $FLAG in
 	  i )	i_FLAG=y; i_CMD_LINE_FLAG=y
 		;;
 	  n )	n_FLAG=y
 		;;
-	  S )
-		set_S_flag $OPTARG
-		;;
 	 +t )	t_FLAG=n
 		;;
 	  V )	V_FLAG=y
 		V_ARG="$OPTARG"
+		;;
+	  W )   W_FLAG=y
 		;;
 	 \? )	echo "$USAGE"
 		exit 1
@@ -1146,6 +738,8 @@ ISUSER=$?;	export ISUSER
 
 #
 # force locale to C
+LANG=C;		export LANG
+LC_ALL=C;	export LC_ALL
 LC_COLLATE=C;	export LC_COLLATE
 LC_CTYPE=C;	export LC_CTYPE
 LC_MESSAGES=C;	export LC_MESSAGES
@@ -1255,27 +849,13 @@ if [ "$BRINGOVER_WS" = "" ]; then
 fi
 
 #
-# If CLOSED_BRINGOVER_WS was not specified, let it default to CLOSED_CLONE_WS
-#
-if [ "$CLOSED_BRINGOVER_WS" = "" ]; then
-	CLOSED_BRINGOVER_WS=$CLOSED_CLONE_WS
-fi
-
-#
 # If BRINGOVER_FILES was not specified, default to usr
 #
 if [ "$BRINGOVER_FILES" = "" ]; then
 	BRINGOVER_FILES="usr"
 fi
 
-#
-# If the closed sources are not present, the closed binaries must be
-# present for the build to succeed.  If there's no pointer to the
-# closed binaries, flag that now, rather than forcing the user to wait
-# a couple hours (or more) to find out.
-#
-orig_closed_is_present="$CLOSED_IS_PRESENT"
-check_closed_tree
+check_closed_bins
 
 #
 # Note: changes to the option letters here should also be applied to the
@@ -1283,22 +863,10 @@ check_closed_tree
 #
 NIGHTLY_OPTIONS=-${NIGHTLY_OPTIONS#-}
 OPTIND=1
-while getopts +ABCDdFfGIilMmNnOoPpRrS:TtUuWwXxz FLAG $NIGHTLY_OPTIONS
+while getopts +ABCDdFfGIilMmNnpRrtUuwW FLAG $NIGHTLY_OPTIONS
 do
 	case $FLAG in
 	  A )	A_FLAG=y
-		#
-		# If ELF_DATA_BASELINE_DIR is not defined, and we are on SWAN
-		# (based on CLOSED_IS_PRESENT), then refuse to run. The value
-		# of ELF version checking is greatly enhanced by including
-		# the baseline gate comparison.
-		if [ "$CLOSED_IS_PRESENT" = 'yes' -a \
-		     "$ELF_DATA_BASELINE_DIR" = '' ]; then
-			echo "ELF_DATA_BASELINE_DIR must be set if the A" \
-			    "flag is present in\nNIGHTLY_OPTIONS and closed" \
-			    "sources are present. Update environment file."
-			exit 1;
-		fi
 		;;
 	  B )	D_FLAG=y
 		;; # old version of D
@@ -1328,12 +896,6 @@ do
 		;;
 	  n )	n_FLAG=y
 		;;
-	  O )	O_FLAG=y
-		;;
-	  o )	o_FLAG=y
-		;;
-	  P )	P_FLAG=y
-		;; # obsolete
 	  p )	p_FLAG=y
 		;;
 	  R )	m_FLAG=y
@@ -1341,11 +903,6 @@ do
 		;;
 	  r )	r_FLAG=y
 		;;
-	  S )
-		set_S_flag $OPTARG
-		;;
-	  T )	T_FLAG=y
-		;; # obsolete
 	 +t )	t_FLAG=n
 		;;
 	  U )   if [ -z "${PARENT_ROOT}" ]; then
@@ -1361,18 +918,9 @@ do
 		;;
 	  u )	u_FLAG=y
 		;;
-	  W )	W_FLAG=y
-		;;
-
 	  w )	w_FLAG=y
 		;;
-	  X )	# now that we no longer need realmode builds, just
-		# copy IHV packages.  only meaningful on x86.
-		if [ "$MACH" = "i386" ]; then
-			X_FLAG=y
-		fi
-		;;
-	  x )	XMOD_OPT="-x"
+	  W )   W_FLAG=y
 		;;
 	 \? )	echo "$USAGE"
 		exit 1
@@ -1381,11 +929,6 @@ do
 done
 
 if [ $ISUSER -ne 0 ]; then
-	if [ "$o_FLAG" = "y" ]; then
-		echo "Old-style build requires root permission."
-		exit 1
-	fi
-
 	# Set default value for STAFFER, if needed.
 	if [ -z "$STAFFER" -o "$STAFFER" = "nobody" ]; then
 		STAFFER=`/usr/xpg4/bin/id -un`
@@ -1399,31 +942,15 @@ if [ -z "$MAILTO" -o "$MAILTO" = "nobody" ]; then
 fi
 
 PATH="$OPTHOME/onbld/bin:$OPTHOME/onbld/bin/${MACH}:/usr/ccs/bin"
-PATH="$PATH:$OPTHOME/SUNWspro/bin:$TEAMWARE/bin:/usr/bin:/usr/sbin:/usr/ucb"
+PATH="$PATH:$OPTHOME/SUNWspro/bin:/usr/bin:/usr/sbin:/usr/ucb"
 PATH="$PATH:/usr/openwin/bin:/usr/sfw/bin:/opt/sfw/bin:."
 export PATH
 
 # roots of source trees, both relative to $SRC and absolute.
 relsrcdirs="."
-if [[ -d $CODEMGR_WS/usr/closed && "$CLOSED_IS_PRESENT" != no ]]; then
-	relsrcdirs="$relsrcdirs ../closed"
-fi
-abssrcdirs=""
-for d in $relsrcdirs; do
-	abssrcdirs="$abssrcdirs $SRC/$d"
-done
+abssrcdirs="$SRC"
 
-unset CH
-if [ "$o_FLAG" = "y" ]; then
-# root invoked old-style build -- make sure it works as it always has
-# by exporting 'CH'.  The current Makefile.master doesn't use this, but
-# the old ones still do.
-	PROTOCMPTERSE="protocmp.terse"
-	CH=
-	export CH
-else
-	PROTOCMPTERSE="protocmp.terse -gu"
-fi
+PROTOCMPTERSE="protocmp.terse -gu"
 POUND_SIGN="#"
 # have we set RELEASE_DATE in our env file?
 if [ -z "$RELEASE_DATE" ]; then
@@ -1434,13 +961,16 @@ BASEWSDIR=$(basename $CODEMGR_WS)
 DEV_CM="\"@(#)SunOS Internal Development: $LOGNAME $BUILD_DATE [$BASEWSDIR]\""
 
 # we export POUND_SIGN, RELEASE_DATE and DEV_CM to speed up the build process
-# by avoiding repeated shell invocations to evaluate Makefile.master definitions.
-# we export o_FLAG and X_FLAG for use by makebfu, and by usr/src/pkg/Makefile
-export o_FLAG X_FLAG POUND_SIGN RELEASE_DATE DEV_CM
+# by avoiding repeated shell invocations to evaluate Makefile.master
+# definitions.
+export POUND_SIGN RELEASE_DATE DEV_CM
 
 maketype="distributed"
-if [ -z "$MAKE" ]; then
+if [[ -z "$MAKE" ]]; then
 	MAKE=dmake
+elif [[ ! -x "$MAKE" ]]; then
+	echo "\$MAKE is set to garbage in the environment"
+	exit 1	
 fi
 # get the dmake version string alone
 DMAKE_VERSION=$( $MAKE -v )
@@ -1456,12 +986,6 @@ fi
 
 export PATH
 export MAKE
-
-if [[ "$O_FLAG" = y ]]; then
-	export TONICBUILD=""
-else
-	export TONICBUILD="#"
-fi
 
 if [ "${SUNWSPRO}" != "" ]; then
 	PATH="${SUNWSPRO}/bin:$PATH"
@@ -1503,45 +1027,6 @@ fi
 #
 if [ "$V_FLAG" = "y" ]; then
 	VERSION=$V_ARG
-fi
-
-#
-# Check for IHV root for copying ihv proto area
-#
-if [ "$X_FLAG" = "y" ]; then
-        if [ "$IA32_IHV_ROOT" = "" ]; then
-		echo "IA32_IHV_ROOT: must be set for copying ihv proto"
-		args_ok=n
-        fi
-        if [ ! -d "$IA32_IHV_ROOT" ]; then
-                echo "$IA32_IHV_ROOT: not found"
-                args_ok=n
-        fi
-        if [ "$IA32_IHV_WS" = "" ]; then
-		echo "IA32_IHV_WS: must be set for copying ihv proto"
-		args_ok=n
-        fi
-        if [ ! -d "$IA32_IHV_WS" ]; then
-                echo "$IA32_IHV_WS: not found"
-                args_ok=n
-        fi
-fi
-
-# Append source version
-if [ "$SE_FLAG" = "y" ]; then
-	VERSION="${VERSION}:EXPORT"
-fi
-
-if [ "$SD_FLAG" = "y" ]; then
-	VERSION="${VERSION}:DOMESTIC"
-fi
-
-if [ "$SH_FLAG" = "y" ]; then
-	VERSION="${VERSION}:MODIFIED_SOURCE_PRODUCT"
-fi
-
-if [ "$SO_FLAG" = "y" ]; then
-	VERSION="${VERSION}:OPEN_ONLY"
 fi
 
 TMPDIR="/tmp/nightly.tmpdir.$$"
@@ -1617,7 +1102,6 @@ export ENVLDLIBS3 ENVCPPFLAGS1 ENVCPPFLAGS2 ENVCPPFLAGS3 ENVCPPFLAGS4 \
 	ENVLDLIBS1 ENVLDLIBS2 PARENT_ROOT
 
 PKGARCHIVE_ORIG=$PKGARCHIVE
-IA32_IHV_PKGS_ORIG=$IA32_IHV_PKGS
 
 #
 # Juggle the logs and optionally send mail on completion.
@@ -1676,6 +1160,11 @@ function logshuffle {
 	    		state=Failed
 			;;
 	esac
+
+	if [[ $state != "Interrupted" && $build_extras_ok != "y" ]]; then
+		state=Failed
+	fi
+
 	NIGHTLY_STATUS=$state
 	export NIGHTLY_STATUS
 
@@ -1779,11 +1268,6 @@ function allprotos {
 		roots="$roots $ROOT-nd"
 	fi
 
-	if [[ $O_FLAG = y ]]; then
-		roots="$roots $ROOT-closed"
-		[ $MULTI_PROTO = yes ] && roots="$roots $ROOT-nd-closed"
-	fi
-
 	echo $roots
 }
 
@@ -1855,51 +1339,18 @@ env >> $LOGFILE
 
 echo "\n==== Nightly argument issues ====\n" | tee -a $mail_msg_file >> $LOGFILE
 
-if [ "$P_FLAG" = "y" ]; then
-	obsolete_build GPROF | tee -a $mail_msg_file >> $LOGFILE
-fi
-
-if [ "$T_FLAG" = "y" ]; then
-	obsolete_build TRACE | tee -a $mail_msg_file >> $LOGFILE
-fi
-
-if is_source_build; then
-	if [ "$i_FLAG" = "y" -o "$i_CMD_LINE_FLAG" = "y" ]; then
-		echo "WARNING: the -S flags do not support incremental" \
-		    "builds; forcing clobber\n" | tee -a $mail_msg_file >> $LOGFILE
-		i_FLAG=n
-		i_CMD_LINE_FLAG=n
-	fi
-	if [ "$N_FLAG" = "n" ]; then
-		echo "WARNING: the -S flags do not support protocmp;" \
-		    "protocmp disabled\n" | \
-		    tee -a $mail_msg_file >> $LOGFILE
-		N_FLAG=y
-	fi
-	if [ "$l_FLAG" = "y" ]; then
-		echo "WARNING: the -S flags do not support lint;" \
-		    "lint disabled\n" | tee -a $mail_msg_file >> $LOGFILE
-		l_FLAG=n
-	fi
-	if [ "$C_FLAG" = "y" ]; then
-		echo "WARNING: the -S flags do not support cstyle;" \
-		    "cstyle check disabled\n" | tee -a $mail_msg_file >> $LOGFILE
-		C_FLAG=n
-	fi
-else
-	if [ "$N_FLAG" = "y" ]; then
-		if [ "$p_FLAG" = "y" ]; then
-			cat <<EOF | tee -a $mail_msg_file >> $LOGFILE
+if [ "$N_FLAG" = "y" ]; then
+	if [ "$p_FLAG" = "y" ]; then
+		cat <<EOF | tee -a $mail_msg_file >> $LOGFILE
 WARNING: the p option (create packages) is set, but so is the N option (do
          not run protocmp); this is dangerous; you should unset the N option
 EOF
-		else
-			cat <<EOF | tee -a $mail_msg_file >> $LOGFILE
+	else
+		cat <<EOF | tee -a $mail_msg_file >> $LOGFILE
 Warning: the N option (do not run protocmp) is set; it probably shouldn't be
 EOF
-		fi
-		echo "" | tee -a $mail_msg_file >> $LOGFILE
 	fi
+	echo "" | tee -a $mail_msg_file >> $LOGFILE
 fi
 
 if [ "$D_FLAG" = "n" -a "$l_FLAG" = "y" ]; then
@@ -1955,8 +1406,6 @@ if [ "$t_FLAG" = "n" ]; then
 	fi
 fi
 
-[ "$O_FLAG" = y ] && MULTI_PROTO=yes
-
 case $MULTI_PROTO in
 yes|no)	;;
 *)
@@ -1998,20 +1447,12 @@ function parent_wstype {
 	    | read scm_type junk
 	if [[ -z "$scm_type" || "$scm_type" == unknown ]]; then
 		# Probe BRINGOVER_WS to determine its type
-		if [[ $BRINGOVER_WS == svn*://* ]]; then
-			scm_type="subversion"
-		elif [[ $BRINGOVER_WS == file://* ]] &&
-		    egrep -s "This is a Subversion repository" \
-		    ${BRINGOVER_WS#file://}/README.txt 2> /dev/null; then
-			scm_type="subversion"
-		elif [[ $BRINGOVER_WS == ssh://* ]]; then
+		if [[ $BRINGOVER_WS == ssh://* ]]; then
 			scm_type="mercurial"
 		elif [[ $BRINGOVER_WS == http://* ]] && \
 		    wget -q -O- --save-headers "$BRINGOVER_WS/?cmd=heads" | \
 		    egrep -s "application/mercurial" 2> /dev/null; then
 			scm_type="mercurial"
-		elif svn info $BRINGOVER_WS > /dev/null 2>&1; then
-			scm_type="subversion"
 		else
 			scm_type="none"
 		fi
@@ -2019,7 +1460,7 @@ function parent_wstype {
 
 	# fold both unsupported and unrecognized results into "none"
 	case "$scm_type" in
-	none|subversion|teamware|mercurial)
+	mercurial)
 		;;
 	*)	scm_type=none
 		;;
@@ -2038,7 +1479,7 @@ function child_wstype {
 	fi
 
 	case "$scm_type" in
-	none|subversion|git|teamware|mercurial)
+	none|git|mercurial)
 		;;
 	*)	scm_type=none
 		;;
@@ -2069,10 +1510,14 @@ if [ "$i_FLAG" = "n" -a -d "$SRC" ]; then
 	$MAKE -ek clobber 2>&1 | tee -a $SRC/clobber-${MACH}.out >> $LOGFILE
 	echo "\n==== Make clobber ERRORS ====\n" >> $mail_msg_file
 	grep "$MAKE:" $SRC/clobber-${MACH}.out |
-		egrep -v "Ignoring unknown host" \
-		>> $mail_msg_file
+		egrep -v "Ignoring unknown host" | \
+		tee $TMPDIR/clobber_errs >> $mail_msg_file
 
-	if [[ "$t_FLAG" = "y" || "$O_FLAG" = "y" ]]; then
+	if [[ -s $TMPDIR/clobber_errs ]]; then
+		build_extras_ok=n
+	fi
+
+	if [[ "$t_FLAG" = "y" ]]; then
 		echo "\n==== Make tools clobber at `date` ====\n" >> $LOGFILE
 		cd ${TOOLS}
 		rm -f ${TOOLS}/clobber-${MACH}.out
@@ -2082,6 +1527,9 @@ if [ "$i_FLAG" = "n" -a -d "$SRC" ]; then
 			>> $mail_msg_file
 		grep "$MAKE:" ${TOOLS}/clobber-${MACH}.out \
 			>> $mail_msg_file
+		if (( $? == 0 )); then
+			build_extras_ok=n
+		fi
 		rm -rf ${TOOLS_PROTO}
 		mkdir -p ${TOOLS_PROTO}
 	fi
@@ -2106,28 +1554,6 @@ else
 	echo "\n==== No clobber at `date` ====\n" >> $LOGFILE
 fi
 
-type bringover_teamware > /dev/null 2>&1 || function bringover_teamware {
-	# sleep on the parent workspace's lock
-	while egrep -s write $BRINGOVER_WS/Codemgr_wsdata/locks
-	do
-		sleep 120
-	done
-
-	if [[ -z $BRINGOVER ]]; then
-		BRINGOVER=$TEAMWARE/bin/bringover
-	fi
-
-	staffer $BRINGOVER -c "nightly update" -p $BRINGOVER_WS \
-	    -w $CODEMGR_WS $BRINGOVER_FILES < /dev/null 2>&1 ||
-		touch $TMPDIR/bringover_failed
-
-        staffer bringovercheck $CODEMGR_WS >$TMPDIR/bringovercheck.out 2>&1
-	if [ -s $TMPDIR/bringovercheck.out ]; then
-		echo "\n==== POST-BRINGOVER CLEANUP NOISE ====\n"
-		cat $TMPDIR/bringovercheck.out
-	fi
-}
-
 type bringover_mercurial > /dev/null 2>&1 || function bringover_mercurial {
 	typeset -x PATH=$PATH
 
@@ -2137,25 +1563,6 @@ type bringover_mercurial > /dev/null 2>&1 || function bringover_mercurial {
 		staffer echo "[paths]" > $CODEMGR_WS/.hg/hgrc
 		staffer echo "default=$BRINGOVER_WS" >> $CODEMGR_WS/.hg/hgrc
 		touch $TMPDIR/new_repository
-	fi
-
-	#
-	# If the user set CLOSED_BRINGOVER_WS and didn't set CLOSED_IS_PRESENT
-	# to "no," then we'll want to initialise the closed repository
-	#
-	# We use $orig_closed_is_present instead of $CLOSED_IS_PRESENT,
-	# because for newly-created source trees, the latter will be "no"
-	# until after the bringover completes.
-	#
-	if [[ "$orig_closed_is_present" != "no" && \
-	    -n "$CLOSED_BRINGOVER_WS" && \
-	    ! -d $CODEMGR_WS/usr/closed/.hg ]]; then
-		staffer mkdir -p $CODEMGR_WS/usr/closed
-		staffer hg init $CODEMGR_WS/usr/closed
-		staffer echo "[paths]" > $CODEMGR_WS/usr/closed/.hg/hgrc
-		staffer echo "default=$CLOSED_BRINGOVER_WS" >> $CODEMGR_WS/usr/closed/.hg/hgrc
-		touch $TMPDIR/new_closed
-		export CLOSED_IS_PRESENT=yes
 	fi
 
 	typeset -x HGMERGE="/bin/false"
@@ -2256,69 +1663,6 @@ type bringover_mercurial > /dev/null 2>&1 || function bringover_mercurial {
 	printf "\n"
 
 	#
-	# We only want to update usr/closed if it exists, and we haven't been
-	# told not to via $CLOSED_IS_PRESENT, and we actually know where to
-	# pull from ($CLOSED_BRINGOVER_WS).
-	#
-	if [[ $CLOSED_IS_PRESENT = yes && \
-	    -d $CODEMGR_WS/usr/closed/.hg && \
-	    -n $CLOSED_BRINGOVER_WS ]]; then
-
-		HG_SOURCE=$CLOSED_BRINGOVER_WS
-		if [ ! -f $TMPDIR/new_closed ]; then
-			HG_SOURCE=$TMPDIR/closed_bundle.hg
-			staffer hg --cwd $CODEMGR_WS/usr/closed incoming \
-			    --bundle $HG_SOURCE -v $CLOSED_BRINGOVER_WS \
-			    > $TMPDIR/incoming_closed.out
-
-			#
-			# If there are no incoming changesets, then incoming will
-			# fail, and there will be no bundle file.  Reset the source,
-			# to allow the remaining logic to complete with no false
-			# negatives.  (Unlike incoming, pull will return success
-			# for the no-change case.)
-			#
-			if (( $? != 0 )); then
-				HG_SOURCE=$CLOSED_BRINGOVER_WS
-			fi
-		fi
-
-		staffer hg --cwd $CODEMGR_WS/usr/closed pull -u \
-			$HG_SOURCE > $TMPDIR/pull_closed.out 2>&1
-		if (( $? != 0 )); then
-			printf "closed pull failed as follows:\n\n"
-			cat $TMPDIR/pull_closed.out
-			if grep "^merging.*failed" $TMPDIR/pull_closed.out \
-			    > /dev/null 2>&1; then
-				printf "$mergefailmsg"
-			fi
-			touch $TMPDIR/bringover_failed
-			return
-		fi
-
-		if grep "not updating" $TMPDIR/pull_closed.out > /dev/null 2>&1; then
-			staffer hg --cwd $CODEMGR_WS/usr/closed merge \
-			    >> $TMPDIR/pull_closed.out 2>&1
-			if (( $? != 0 )); then
-				printf "closed merge failed as follows:\n\n"
-				cat $TMPDIR/pull_closed.out
-				if grep "^merging.*failed" $TMPDIR/pull_closed.out > /dev/null 2>&1; then
-					printf "$mergefailmsg"
-				fi
-				touch $TMPDIR/bringover_failed
-				return
-			fi
-		fi
-
-		printf "updated %s with the following results:\n" \
-		    "$CODEMGR_WS/usr/closed"
-		cat $TMPDIR/pull_closed.out
-		if grep "^merging" $TMPDIR/pull_closed.out > /dev/null 2>&1; then
-			printf "$mergepassmsg"
-		fi
-	fi
-
-	#
 	# Per-changeset output is neither useful nor manageable for a
 	# newly-created repository.
 	#
@@ -2328,49 +1672,6 @@ type bringover_mercurial > /dev/null 2>&1 || function bringover_mercurial {
 
 	printf "\nadded the following changesets to open repository:\n"
 	cat $TMPDIR/incoming_open.out
-
-	#
-	# The closed repository could have been newly created, even though
-	# the open one previously existed...
-	#
-	if [ -f $TMPDIR/new_closed ]; then
-		return
-	fi
-
-	if [ -f $TMPDIR/incoming_closed.out ]; then
-		printf "\nadded the following changesets to closed repository:\n"
-		cat $TMPDIR/incoming_closed.out
-	fi
-}
-
-type bringover_subversion > /dev/null 2>&1 || function bringover_subversion {
-	typeset -x PATH=$PATH
-
-	if [[ ! -d $CODEMGR_WS/.svn ]]; then
-		staffer svn checkout $BRINGOVER_WS $CODEMGR_WS ||
-			touch $TMPDIR/bringover_failed
-	else
-		typeset root
-		root=$(staffer svn info $CODEMGR_WS |
-			nawk '/^Repository Root:/ {print $NF}')
-		if [[ $root != $BRINGOVER_WS ]]; then
-			# We fail here because there's no way to update
-			# from a named repo.
-			cat <<-EOF
-			\$BRINGOVER_WS doesn't match repository root:
-			  \$BRINGOVER_WS:  $BRINGOVER_WS
-			  Repository root: $root
-			EOF
-			touch $TMPDIR/bringover_failed
-		else
-			# If a conflict happens, svn still exits 0.
-			staffer svn update $CODEMGR_WS | tee $TMPDIR/pull.out ||
-				touch $TMPDIR/bringover_failed
-			if grep "^C" $TMPDIR/pull.out > /dev/null 2>&1; then
-				touch $TMPDIR/bringover_failed
-			fi
-		fi
-	fi
 }
 
 type bringover_none > /dev/null 2>&1 || function bringover_none {
@@ -2415,22 +1716,10 @@ if [ "$n_FLAG" = "n" ]; then
 
 	run_hook POST_BRINGOVER
 
-	#
-	# Possible transition from pre-split workspace to split
-	# workspace.  See if the bringover changed anything.
-	#
-	CLOSED_IS_PRESENT="$orig_closed_is_present"
-	check_closed_tree
+	check_closed_bins
 
 else
 	echo "\n==== No bringover to $CODEMGR_WS ====\n" >> $LOGFILE
-fi
-
-if [[ "$O_FLAG" = y && "$CLOSED_IS_PRESENT" != "yes" ]]; then
-	build_ok=n
-	echo "OpenSolaris binary deliverables need usr/closed." \
-	    | tee -a "$mail_msg_file" >> $LOGFILE
-	exit 1
 fi
 
 # Safeguards
@@ -2507,128 +1796,25 @@ fi
 #
 # Build and use the workspace's tools if requested
 #
-if [[ "$t_FLAG" = "y" || "$O_FLAG" = y ]]; then
+if [[ "$t_FLAG" = "y" ]]; then
 	set_non_debug_build_flags
 
 	build_tools ${TOOLS_PROTO}
-	if [[ $? != 0  && "$t_FLAG" = y ]]; then
+	if (( $? != 0 )); then
+		build_ok=n
+	else
 		use_tools $TOOLS_PROTO
 	fi
 fi
 
-#
-# copy ihv proto area in addition to the build itself
-#
-if [ "$X_FLAG" = "y" ]; then
-	copy_ihv_proto
-fi
+# timestamp the start of the normal build; the findunref tool uses it.
+touch $SRC/.build.tstamp
 
-if [ "$i_FLAG" = "y" -a "$SH_FLAG" = "y" ]; then
-	echo "\n==== NOT Building base OS-Net source ====\n" | \
-	    tee -a $LOGFILE >> $mail_msg_file
-else
-	# timestamp the start of the normal build; the findunref tool uses it.
-	touch $SRC/.build.tstamp
-
-	normal_build
-fi
-
-#
-# Generate the THIRDPARTYLICENSE files if needed.  This is done after
-# the build, so that dynamically-created license files are there.
-# It's done before findunref to help identify license files that need
-# to be added to tools/opensolaris/license-list.
-#
-if [ "$O_FLAG" = y -a "$build_ok" = y ]; then
-	echo "\n==== Generating THIRDPARTYLICENSE files ====\n" |
-	    tee -a "$mail_msg_file" >> "$LOGFILE"
-
-	if [ -d $ROOT/licenses/usr ]; then
-		( cd $ROOT/licenses ; \
-		    mktpl $SRC/pkg/license-list ) >> "$LOGFILE" 2>&1
-		if (( $? != 0 )) ; then
-			echo "Couldn't create THIRDPARTYLICENSE files" |
-			    tee -a "$mail_msg_file" >> "$LOGFILE"
-		fi
-	else
-		echo "No licenses found under $ROOT/licenses" |
-		    tee -a "$mail_msg_file" >> "$LOGFILE"
-	fi
-fi
+normal_build
 
 ORIG_SRC=$SRC
 BINARCHIVE=${CODEMGR_WS}/bin-${MACH}.cpio.Z
 
-if [ "$SE_FLAG" = "y" -o "$SD_FLAG" = "y" -o "$SH_FLAG" = "y" ]; then
-	save_binaries
-fi
-
-
-# EXPORT_SRC comes after CRYPT_SRC since a domestic build will need
-# $SRC pointing to the export_source usr/src.
-
-if [ "$SE_FLAG" = "y" -o "$SD_FLAG" = "y" -o "$SH_FLAG" = "y" ]; then
-	if [ "$SD_FLAG" = "y" -a $build_ok = y ]; then
-	    set_up_source_build ${CODEMGR_WS} ${CRYPT_SRC} CRYPT_SRC
-	fi
-
-	if [ $build_ok = y ]; then
-	    set_up_source_build ${CODEMGR_WS} ${EXPORT_SRC} EXPORT_SRC
-	fi
-fi
-
-if [ "$SD_FLAG" = "y" -a $build_ok = y ]; then
-	# drop the crypt files in place.
-	cd ${EXPORT_SRC}
-	echo "\nextracting crypt_files.cpio.Z onto export_source.\n" \
-	    >> ${LOGFILE}
-	zcat ${CODEMGR_WS}/crypt_files.cpio.Z | \
-	    cpio -idmucvB 2>/dev/null >> ${LOGFILE}
-	if [ "$?" = "0" ]; then
-		echo "\n==== DOMESTIC extraction succeeded ====\n" \
-		    >> $mail_msg_file
-	else
-		echo "\n==== DOMESTIC extraction failed ====\n" \
-		    >> $mail_msg_file
-	fi
-
-fi
-
-if [ "$SO_FLAG" = "y" -a "$build_ok" = y ]; then
-	#
-	# Copy the open sources into their own tree.
-	# If copy_source fails, it will have already generated an
-	# error message and set build_ok=n, so we don't need to worry
-	# about that here.
-	#
-	copy_source $CODEMGR_WS $OPEN_SRCDIR OPEN_SOURCE usr/src
-fi
-
-if [ "$SO_FLAG" = "y" -a "$build_ok" = y ]; then
-	SRC=$OPEN_SRCDIR/usr/src
-	export CLOSED_IS_PRESENT=no
-fi
-
-if is_source_build && [ $build_ok = y ] ; then
-	# remove proto area(s) here, since we don't clobber
-	rm -rf `allprotos`
-	if [ "$t_FLAG" = "y" ]; then
-		set_non_debug_build_flags
-		ORIG_TOOLS=$TOOLS
-		#
-		# SRC was set earlier to point to the source build
-		# source tree (e.g., $EXPORT_SRC).
-		#
-		TOOLS=${SRC}/tools
-		TOOLS_PROTO=${TOOLS}/${TOOLS_PROTO_REL}; export TOOLS_PROTO
-		build_tools ${TOOLS_PROTO}
-		if [[ $? != 0 ]]; then
-			use_tools ${TOOLS_PROTO}
-		fi
-	fi
-
-	normal_build
-fi
 
 #
 # There are several checks that need to look at the proto area, but
@@ -2652,13 +1838,6 @@ if [ "$build_ok" = "y" ]; then
 
 		E1=
 		f1=
-		if [ -d "$SRC/pkgdefs" ]; then
-			f1="$SRC/pkgdefs/etc/exception_list_$MACH"
-			if [ "$X_FLAG" = "y" ]; then
-				f1="$f1 $IA32_IHV_WS/usr/src/pkgdefs/etc/exception_list_$MACH"
-			fi
-		fi
-
 		for f in $f1; do
 			if [ -f "$f" ]; then
 				E1="$E1 -e $f"
@@ -2676,76 +1855,16 @@ if [ "$build_ok" = "y" ]; then
 				E2="$E2 -e $f"
 			fi
 		done
-
-		if [ -f "$REF_PROTO_LIST" ]; then
-			#
-			# For builds that copy the IHV proto area (-X), add the
-			# IHV proto list to the reference list if the reference
-			# was built without -X.
-			#
-			# For builds that don't copy the IHV proto area, add the
-			# IHV proto list to the build's proto list if the
-			# reference was built with -X.
-			#
-			# Use the presence of the first file entry of the cached
-			# IHV proto list in the reference list to determine
-			# whether it was built with -X or not.
-			#
-			IHV_REF_PROTO_LIST=$SRC/pkg/proto_list_ihv_$MACH
-			grepfor=$(nawk '$1 == "f" { print $2; exit }' \
-				$IHV_REF_PROTO_LIST 2> /dev/null)
-			if [ $? = 0 -a -n "$grepfor" ]; then
-				if [ "$X_FLAG" = "y" ]; then
-					grep -w "$grepfor" \
-						$REF_PROTO_LIST > /dev/null
-					if [ ! "$?" = "0" ]; then
-						REF_IHV_PROTO="-d $IHV_REF_PROTO_LIST"
-					fi
-				else
-					grep -w "$grepfor" \
-						$REF_PROTO_LIST > /dev/null
-					if [ "$?" = "0" ]; then
-						IHV_PROTO_LIST="$IHV_REF_PROTO_LIST"
-					fi
-				fi
-			fi
-		fi
-	fi
-
-	if [ "$N_FLAG" != "y" -a -f $SRC/pkgdefs/Makefile ]; then
-		echo "\n==== Impact on SVr4 packages ====\n" >> $mail_msg_file
-		#
-		# Compare the build's proto list with current package
-		# definitions to audit the quality of package
-		# definitions and makefile install targets. Use the
-		# current exception list.
-		#
-		PKGDEFS_LIST=""
-		for d in $abssrcdirs; do
-			if [ -d $d/pkgdefs ]; then
-				PKGDEFS_LIST="$PKGDEFS_LIST -d $d/pkgdefs"
-			fi
-		done
-		if [ "$X_FLAG" = "y" -a \
-		    -d $IA32_IHV_WS/usr/src/pkgdefs ]; then
-			PKGDEFS_LIST="$PKGDEFS_LIST -d $IA32_IHV_WS/usr/src/pkgdefs"
-		fi
-		$PROTOCMPTERSE \
-		    "Files missing from the proto area:" \
-		    "Files missing from packages:" \
-		    "Inconsistencies between pkgdefs and proto area:" \
-		    ${E1} \
-		    ${PKGDEFS_LIST} \
-		    $ATLOG/proto_list_${MACH} \
-		    >> $mail_msg_file
 	fi
 
 	if [ "$N_FLAG" != "y" -a -d $SRC/pkg ]; then
 		echo "\n==== Validating manifests against proto area ====\n" \
 		    >> $mail_msg_file
-		( cd $SRC/pkg ; $MAKE -e protocmp ROOT="$checkroot" ) \
-		    >> $mail_msg_file
-
+		( cd $SRC/pkg ; $MAKE -e protocmp ROOT="$checkroot" ) | \
+		    tee $TMPDIR/protocmp_noise >> $mail_msg_file
+		if [[ -s $TMPDIR/protocmp_noise ]]; then
+			build_extras_ok=n
+		fi
 	fi
 
 	if [ "$N_FLAG" != "y" -a -f "$REF_PROTO_LIST" ]; then
@@ -2761,14 +1880,13 @@ if [ "$build_ok" = "y" ]; then
 			"Files that changed between yesterday and today:" \
 			${ELIST} \
 			-d $REF_PROTO_LIST \
-			$REF_IHV_PROTO \
 			$ATLOG/proto_list_${MACH} \
-			$IHV_PROTO_LIST \
 			>> $mail_msg_file
 	fi
 fi
 
-if [ "$u_FLAG" = "y"  -a "$build_ok" = "y" ]; then
+if [[ "$u_FLAG" == "y" && "$build_ok" == "y" && \
+    "$build_extras_ok" == "y" ]]; then
 	staffer cp $ATLOG/proto_list_${MACH} \
 		$PARENT_WS/usr/src/proto_list_${MACH}
 fi
@@ -2813,7 +1931,7 @@ fi
 #
 # ELF verification: ABI (-A) and runtime (-r) checks
 #
-if [[ ($build_ok = y) && ( ($A_FLAG = y) || ($r_FLAG = y) ) ]]; then
+if [[ ($build_ok = y) && (($A_FLAG = y) || ($r_FLAG = y)) ]]; then
 	# Directory ELF-data.$MACH holds the files produced by these tests.
 	elf_ddir=$SRC/ELF-data.$MACH
 
@@ -2840,7 +1958,8 @@ if [[ ($build_ok = y) && ( ($A_FLAG = y) || ($r_FLAG = y) ) ]]; then
 			-i interface -E interface.err
 		if [[ -s $elf_ddir/interface.err ]]; then
 			tee -a $LOGFILE < $elf_ddir/interface.err \
-				>> $mail_msg_file
+			    >> $mail_msg_file
+			build_extras_ok=n
 		fi
 
 		# If ELF_DATA_BASELINE_DIR is defined, compare the new interface
@@ -2862,6 +1981,7 @@ if [[ ($build_ok = y) && ( ($A_FLAG = y) || ($r_FLAG = y) ) ]]; then
 					tee -a $LOGFILE < \
 					    $elf_ddir/interface.cmp \
 					    >> $mail_msg_file
+					build_extras_ok=n
 				fi
 			else
 			       	echo "baseline not available. comparison" \
@@ -2886,6 +2006,9 @@ if [[ ($build_ok = y) && ( ($A_FLAG = y) || ($r_FLAG = y) ) ]]; then
 		check_rtime -i -m -v $rtime_sflag -o -w $elf_ddir \
 			-D object_list  -f object_list -E runtime.err \
 			-I runtime.attr.raw
+		if (( $? != 0 )); then
+			build_extras_ok=n
+		fi
 
 		# check_rtime -I output needs to be sorted in order to 
 		# compare it to that from previous builds.
@@ -2896,6 +2019,7 @@ if [[ ($build_ok = y) && ( ($A_FLAG = y) || ($r_FLAG = y) ) ]]; then
 		if [[ -s $elf_ddir/runtime.err ]]; then
 			tee -a $LOGFILE < $elf_ddir/runtime.err \
 				>> $mail_msg_file
+			build_extras_ok=n
 		fi
 
 		# If there is an ELF-data directory from a previous build,
@@ -2969,7 +2093,11 @@ if [ "$i_CMD_LINE_FLAG" = "n" -a "$C_FLAG" = "y" ]; then
 
 	grep ":" $SRC/check-${MACH}.out |
 		egrep -v "Ignoring unknown host" | \
-		sort | uniq >> $mail_msg_file
+		sort | uniq | tee $TMPDIR/check_errors >> $mail_msg_file
+
+	if [[ -s $TMPDIR/check_errors ]]; then
+		build_extras_ok=n
+	fi
 else
 	echo "\n==== No '$MAKE check' ====\n" >> $LOGFILE
 fi
@@ -2999,58 +2127,6 @@ if [ "$f_FLAG" = "y" -a "$build_ok" = "y" ]; then
 	diff $SRC/unref-${MACH}.ref $SRC/unref-${MACH}.out >>$mail_msg_file
 fi
 
-#
-# Generate the OpenSolaris deliverables if requested.  Some of these
-# steps need to come after findunref and are commented below.
-#
-
-# If we are doing an OpenSolaris _source_ build (-S O) then we do
-# not have usr/closed available to us to generate closedbins from,
-# so skip this part.
-if [ "$SO_FLAG" = n -a "$O_FLAG" = y -a "$build_ok" = y ]; then
-	echo "\n==== Generating OpenSolaris tarballs ====\n" | \
-	    tee -a $mail_msg_file >> $LOGFILE
-
-	cd $CODEMGR_WS
-
-	#
-	# This step grovels through the package manifests, so it
-	# must come after findunref.
-	#
-	# We assume no DEBUG vs non-DEBUG package content variation
-	# here; if that changes, then the "make all" in $SRC/pkg will
-	# need to be moved into the conditionals and repeated for each
-	# different build.
-	#
-	echo "Generating closed binaries tarball(s)..." >> $LOGFILE
-	closed_basename=on-closed-bins
-	if [ "$D_FLAG" = y ]; then
-		bindrop "$closed_basename" >>"$LOGFILE" 2>&1
-		if (( $? != 0 )) ; then
-			echo "Couldn't create DEBUG closed binaries." |
-			    tee -a $mail_msg_file >> $LOGFILE
-			build_ok=n
-		fi
-	fi
-	if [ "$F_FLAG" = n ]; then
-		bindrop -n "$closed_basename-nd" >>"$LOGFILE" 2>&1
-		if (( $? != 0 )) ; then
-			echo "Couldn't create non-DEBUG closed binaries." |
-			    tee -a $mail_msg_file >> $LOGFILE
-			build_ok=n
-		fi
-	fi
-
-	echo "Generating README.opensolaris..." >> $LOGFILE
-	cat $SRC/tools/opensolaris/README.opensolaris.tmpl | \
-	    mkreadme_osol $CODEMGR_WS/README.opensolaris >> $LOGFILE 2>&1
-	if (( $? != 0 )) ; then
-		echo "Couldn't create README.opensolaris." |
-		    tee -a $mail_msg_file >> $LOGFILE
-		build_ok=n
-	fi
-fi
-
 # Verify that the usual lists of files, such as exception lists,
 # contain only valid references to files.  If the build has failed,
 # then don't check the proto area.
@@ -3060,30 +2136,23 @@ if [ "$CHECK_PATHS" = y -a "$N_FLAG" != y ]; then
 		>>$mail_msg_file
 	arg=-b
 	[ "$build_ok" = y ] && arg=
-	checkpaths $arg $checkroot 2>&1 | tee -a $LOGFILE >>$mail_msg_file
+	checkpaths $arg $checkroot > $SRC/checkpaths.out 2>&1
+	if [[ -s $SRC/checkpaths.out ]]; then
+		tee -a $LOGFILE < $SRC/checkpaths.out >> $mail_msg_file
+		build_extras_ok=n
+	fi
 fi
 
 if [ "$M_FLAG" != "y" -a "$build_ok" = y ]; then
 	echo "\n==== Impact on file permissions ====\n" \
 		>> $mail_msg_file
 
-	abspkgdefs=
 	abspkg=
 	for d in $abssrcdirs; do
-		if [ -d "$d/pkgdefs" ]; then
-			abspkgdefs="$abspkgdefs $d"
-		fi
 		if [ -d "$d/pkg" ]; then
 			abspkg="$abspkg $d"
 		fi
 	done
-
-	if [ -n "$abspkgdefs" ]; then
-		pmodes -qvdP \
-		    `find $abspkgdefs -name pkginfo.tmpl -print -o \
-		    -name .del\* -prune | sed -e 's:/pkginfo.tmpl$::' | \
-		    sort -u` >> $mail_msg_file
-	fi
 
 	if [ -n "$abspkg" ]; then
 		for d in "$abspkg"; do
@@ -3154,7 +2223,10 @@ fi
 # (whichever exit we hit here will trigger the "cleanup" trap which
 # optionally sends mail on completion).
 #
-if [ "$build_ok" = "y" ]; then
-	exit 0
+if [[ "$build_ok" == "y" ]]; then
+	if [[ "$W_FLAG" == "y" || "$build_extras_ok" == "y" ]]; then
+		exit 0
+	fi
 fi
+
 exit 1

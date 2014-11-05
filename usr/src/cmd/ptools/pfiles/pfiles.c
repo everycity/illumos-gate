@@ -24,7 +24,7 @@
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
  */
 /*
- * Copyright (c) 2013 Joyent, Inc.  All Rights reserved.
+ * Copyright (c) 2014 Joyent, Inc.  All Rights reserved.
  */
 
 #include <stdio.h>
@@ -271,15 +271,14 @@ show_file(void *data, prfdinfo_t *info)
 		    (mode & S_IFMT) == S_IFDOOR);
 
 		if (Pstate(Pr) != PS_DEAD) {
-			char *dev;
+			char *dev = NULL;
 
 			if ((mode & S_IFMT) == S_IFSOCK)
 				dosocket(Pr, info->pr_fd);
 			else if ((mode & S_IFMT) == S_IFIFO)
 				dofifo(Pr, info->pr_fd);
 
-			if ((mode & S_IFMT) == S_IFCHR &&
-			    (dev = strrchr(info->pr_path, ':')) != NULL) {
+			if ((mode & S_IFMT) == S_IFCHR) {
 				/*
 				 * There's no elegant way to determine
 				 * if a character device supports TLI,
@@ -291,11 +290,20 @@ show_file(void *data, prfdinfo_t *info)
 				    "tcp", "tcp6", "udp", "udp6", NULL
 				};
 
-				dev++; /* skip past the `:' */
-				for (i = 0; tlidevs[i] != NULL; i++) {
-					if (strcmp(dev, tlidevs[i]) == 0) {
-						dotli(Pr, info->pr_fd);
-						break;
+				/* global zone: /devices paths */
+				dev = strrchr(info->pr_path, ':');
+				/* also check the /dev path for zones */
+				if (dev == NULL)
+					dev = strrchr(info->pr_path, '/');
+				if (dev != NULL) {
+					dev++; /* skip past the `:' */
+
+					for (i = 0; tlidevs[i] != NULL; i++) {
+						if (strcmp(dev, tlidevs[i]) ==
+						    0) {
+							dotli(Pr, info->pr_fd);
+							break;
+						}
 					}
 				}
 			}
@@ -549,6 +557,7 @@ show_sockaddr(const char *str, struct sockaddr *sa, socklen_t len)
 	case AF_IPX:		p = "AF_IPX";		break;
 	case AF_ROUTE:		p = "AF_ROUTE";		break;
 	case AF_LINK:		p = "AF_LINK";		break;
+	case AF_LX_NETLINK:	p = "AF_LX_NETLINK";	break;
 	}
 
 	(void) printf("\t%s: %s\n", str, p);
@@ -796,9 +805,11 @@ dotli(struct ps_prochandle *Pr, int fd)
 
 	strcmd.sc_cmd = TI_GETMYNAME;
 	if (pr_ioctl(Pr, fd, _I_CMD, &strcmd, sizeof (strcmd)) == 0)
-		show_sockaddr("sockname", (void *)&strcmd.sc_buf, 0);
+		show_sockaddr("sockname", (void *)&strcmd.sc_buf, 
+		    (size_t)strcmd.sc_len);
 
 	strcmd.sc_cmd = TI_GETPEERNAME;
 	if (pr_ioctl(Pr, fd, _I_CMD, &strcmd, sizeof (strcmd)) == 0)
-		show_sockaddr("peername", (void *)&strcmd.sc_buf, 0);
+		show_sockaddr("peername", (void *)&strcmd.sc_buf,
+		    (size_t)strcmd.sc_len);
 }

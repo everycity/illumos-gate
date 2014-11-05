@@ -26,8 +26,8 @@
  */
 
 /*
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -1608,7 +1608,7 @@ out:
 /*
  * Find or create an NLM host for the given name and address.
  *
- * The remote host is determined by all of: name, netidd, address.
+ * The remote host is determined by all of: name, netid, address.
  * Note that the netid is whatever nlm_svc_add_ep() gave to
  * svc_tli_kcreate() for the service binding.  If any of these
  * are different, allocate a new host (new sysid).
@@ -1658,7 +1658,7 @@ nlm_host_findcreate(struct nlm_globals *g, char *name,
 		avl_insert(&g->nlm_hosts_tree, host, where);
 
 		/*
-		 * Insert host ot the hosts hash table that is
+		 * Insert host to the hosts hash table that is
 		 * used to lookup host by sysid.
 		 */
 		VERIFY(mod_hash_insert(g->nlm_hosts_hash,
@@ -1669,8 +1669,15 @@ nlm_host_findcreate(struct nlm_globals *g, char *name,
 	mutex_exit(&g->lock);
 
 out:
-	if (newhost != NULL)
+	if (newhost != NULL) {
+		/*
+		 * We do not need the preallocated nlm_host
+		 * so decrement the reference counter
+		 * and destroy it.
+		 */
+		newhost->nh_refs--;
 		nlm_host_destroy(newhost);
+	}
 
 	return (host);
 }
@@ -1922,13 +1929,13 @@ nlm_slock_wait(struct nlm_globals *g,
 
 	/*
 	 * If the granted message arrived before we got here,
-	 * nw->nw_state will be GRANTED - in that case, don't sleep.
+	 * nslp->nsl_state will be NLM_SL_GRANTED - in that case don't sleep.
 	 */
 	cv_res = 1;
 	timeo_ticks = ddi_get_lbolt() + SEC_TO_TICK(timeo_secs);
 
 	mutex_enter(&g->lock);
-	if (nslp->nsl_state == NLM_SL_BLOCKED) {
+	while (nslp->nsl_state == NLM_SL_BLOCKED && cv_res > 0) {
 		cv_res = cv_timedwait_sig(&nslp->nsl_cond,
 		    &g->lock, timeo_ticks);
 	}
@@ -1944,7 +1951,7 @@ nlm_slock_wait(struct nlm_globals *g,
 	}
 
 	if (cv_res <= 0) {
-		/* We was woken up either by timeout or interrupt */
+		/* We were woken up either by timeout or by interrupt */
 		error = (cv_res < 0) ? ETIMEDOUT : EINTR;
 
 		/*
@@ -1954,7 +1961,7 @@ nlm_slock_wait(struct nlm_globals *g,
 		 */
 		if (nslp->nsl_state == NLM_SL_GRANTED)
 			error = 0;
-	} else { /* awaken via cv_signal or didn't block */
+	} else { /* Awaken via cv_signal()/cv_broadcast() or didn't block */
 		error = 0;
 		VERIFY(nslp->nsl_state == NLM_SL_GRANTED);
 	}

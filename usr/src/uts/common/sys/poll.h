@@ -24,14 +24,18 @@
 
 
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ *
  * Copyright (c) 1995, 1998 by Sun Microsystems, Inc.
  * All rights reserved.
  */
 
+/*
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ */
+
 #ifndef _SYS_POLL_H
 #define	_SYS_POLL_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 11.9 */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -59,6 +63,7 @@ typedef unsigned long	nfds_t;
 #define	POLLWRNORM	POLLOUT
 #define	POLLRDBAND	0x0080		/* out-of-band data is readable */
 #define	POLLWRBAND	0x0100		/* out-of-band data is writeable */
+#define	POLLRDHUP	0x4000		/* read-side hangup */
 
 #define	POLLNORM	POLLRDNORM
 
@@ -70,7 +75,13 @@ typedef unsigned long	nfds_t;
 #define	POLLHUP		0x0010		/* fd has been hung up on */
 #define	POLLNVAL	0x0020		/* invalid pollfd entry */
 
-#define	POLLREMOVE	0x0800	/* remove a cached poll fd from /dev/poll */
+/*
+ * These events will never be specified in revents, but may be specified in
+ * events to control /dev/poll behavior.
+ */
+#define	POLLREMOVE	0x0800		/* remove cached /dev/poll fd */
+#define	POLLONESHOT	0x1000		/* /dev/poll should one-shot this fd */
+#define	POLLET		0x2000		/* edge-triggered /dev/poll fd */
 
 #ifdef _KERNEL
 
@@ -138,11 +149,7 @@ extern void pollhead_clean(pollhead_t *);
 #endif /* defined(_KERNEL) || defined(_KMEMUSER) */
 
 #if !defined(_KERNEL)
-#if defined(__STDC__)
 int poll(struct pollfd *, nfds_t, int);
-#else
-int poll();
-#endif /* __STDC__ */
 #endif /* !_KERNEL */
 
 #ifdef	__cplusplus

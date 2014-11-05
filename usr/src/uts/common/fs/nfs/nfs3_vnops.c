@@ -29,7 +29,7 @@
  */
 
 /*
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/param.h>
@@ -3352,10 +3352,9 @@ nfs3rename(vnode_t *odvp, char *onm, vnode_t *ndvp, char *nnm, cred_t *cr,
 		if (nvp)
 			vnevent_rename_dest(nvp, ndvp, nnm, ct);
 
-		if (odvp != ndvp)
-			vnevent_rename_dest_dir(ndvp, ct);
 		ASSERT(ovp != NULL);
 		vnevent_rename_src(ovp, odvp, onm, ct);
+		vnevent_rename_dest_dir(ndvp, ovp, nnm, ct);
 	}
 
 	if (nvp) {
@@ -5276,11 +5275,11 @@ nfs3_map(vnode_t *vp, offset_t off, struct as *as, caddr_t *addrp,
 
 	if (nfs_rw_enter_sig(&rp->r_rwlock, RW_WRITER, INTR(vp)))
 		return (EINTR);
-	atomic_add_int(&rp->r_inmap, 1);
+	atomic_inc_uint(&rp->r_inmap);
 	nfs_rw_exit(&rp->r_rwlock);
 
 	if (nfs_rw_enter_sig(&rp->r_lkserlock, RW_READER, INTR(vp))) {
-		atomic_add_int(&rp->r_inmap, -1);
+		atomic_dec_uint(&rp->r_inmap);
 		return (EINTR);
 	}
 
@@ -5322,7 +5321,7 @@ nfs3_map(vnode_t *vp, offset_t off, struct as *as, caddr_t *addrp,
 
 done:
 	nfs_rw_exit(&rp->r_lkserlock);
-	atomic_add_int(&rp->r_inmap, -1);
+	atomic_dec_uint(&rp->r_inmap);
 	return (error);
 }
 

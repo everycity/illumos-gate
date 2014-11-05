@@ -1,6 +1,13 @@
-<<<<<<< HEAD
-*.o
+# .gitignore for illumos checkouts.
+# Note: this does not try to ignore all files in a fully built workspace.
+# Rather, you are expected to "make clobber" before running "git status".
+cscope.files
+cscope.out
+ncscope.out
+cscope.in.out
+cscope.po.out
 .make.state*
+*.o
 *.po
 *.so
 *.so.1
@@ -88,6 +95,8 @@ usr/src/cmd/allocate/sr0
 usr/src/cmd/allocate/st0
 obj32
 obj64
+debug32
+debug64
 usr/src/cmd/allocate/st1
 usr/src/cmd/allocate/st_clean
 usr/src/cmd/amt/amd64/amt

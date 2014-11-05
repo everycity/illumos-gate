@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -1250,9 +1250,9 @@ vn_open_upgrade(
 	ASSERT(vp->v_type == VREG);
 
 	if (filemode & FREAD)
-		atomic_add_32(&(vp->v_rdcnt), 1);
+		atomic_inc_32(&vp->v_rdcnt);
 	if (filemode & FWRITE)
-		atomic_add_32(&(vp->v_wrcnt), 1);
+		atomic_inc_32(&vp->v_wrcnt);
 
 }
 
@@ -1265,11 +1265,11 @@ vn_open_downgrade(
 
 	if (filemode & FREAD) {
 		ASSERT(vp->v_rdcnt > 0);
-		atomic_add_32(&(vp->v_rdcnt), -1);
+		atomic_dec_32(&vp->v_rdcnt);
 	}
 	if (filemode & FWRITE) {
 		ASSERT(vp->v_wrcnt > 0);
-		atomic_add_32(&(vp->v_wrcnt), -1);
+		atomic_dec_32(&vp->v_wrcnt);
 	}
 
 }
@@ -2522,6 +2522,7 @@ vnevent_rename_src(vnode_t *vp, vnode_t *dvp, char *name, caller_context_t *ct)
 	if (vp == NULL || vp->v_femhead == NULL) {
 		return;
 	}
+	(void) VOP_VNEVENT(dvp, VE_RENAME_SRC_DIR, vp, name, ct);
 	(void) VOP_VNEVENT(vp, VE_RENAME_SRC, dvp, name, ct);
 }
 
@@ -2536,12 +2537,13 @@ vnevent_rename_dest(vnode_t *vp, vnode_t *dvp, char *name,
 }
 
 void
-vnevent_rename_dest_dir(vnode_t *vp, caller_context_t *ct)
+vnevent_rename_dest_dir(vnode_t *vp, vnode_t *nvp, char *name,
+    caller_context_t *ct)
 {
 	if (vp == NULL || vp->v_femhead == NULL) {
 		return;
 	}
-	(void) VOP_VNEVENT(vp, VE_RENAME_DEST_DIR, NULL, NULL, ct);
+	(void) VOP_VNEVENT(vp, VE_RENAME_DEST_DIR, nvp, name, ct);
 }
 
 void
@@ -2843,11 +2845,12 @@ vn_setops(vnode_t *vp, vnodeops_t *vnodeops)
 	op = vp->v_op;
 	membar_consumer();
 	/*
-	 * If vp->v_femhead == NULL, then we'll call casptr() to do the
-	 * compare-and-swap on vp->v_op.  If either fails, then FEM is
+	 * If vp->v_femhead == NULL, then we'll call atomic_cas_ptr() to do
+	 * the compare-and-swap on vp->v_op.  If either fails, then FEM is
 	 * in effect on the vnode and we need to have FEM deal with it.
 	 */
-	if (vp->v_femhead != NULL || casptr(&vp->v_op, op, vnodeops) != op) {
+	if (vp->v_femhead != NULL || atomic_cas_ptr(&vp->v_op, op, vnodeops) !=
+	    op) {
 		fem_setvnops(vp, vnodeops);
 	}
 }
@@ -2923,7 +2926,7 @@ fs_new_caller_id()
 {
 	static uint64_t next_caller_id = 0LL; /* First call returns 1 */
 
-	return ((u_longlong_t)atomic_add_64_nv(&next_caller_id, 1));
+	return ((u_longlong_t)atomic_inc_64_nv(&next_caller_id));
 }
 
 /*
@@ -3151,9 +3154,9 @@ fop_open(
 	 */
 	if ((*vpp)->v_type == VREG) {
 		if (mode & FREAD)
-			atomic_add_32(&((*vpp)->v_rdcnt), 1);
+			atomic_inc_32(&(*vpp)->v_rdcnt);
 		if (mode & FWRITE)
-			atomic_add_32(&((*vpp)->v_wrcnt), 1);
+			atomic_inc_32(&(*vpp)->v_wrcnt);
 	}
 
 	VOPXID_MAP_CR(vp, cr);
@@ -3167,9 +3170,9 @@ fop_open(
 		 */
 		VOPSTATS_UPDATE(vp, open);
 		if ((vp->v_type == VREG) && (mode & FREAD))
-			atomic_add_32(&(vp->v_rdcnt), -1);
+			atomic_dec_32(&vp->v_rdcnt);
 		if ((vp->v_type == VREG) && (mode & FWRITE))
-			atomic_add_32(&(vp->v_wrcnt), -1);
+			atomic_dec_32(&vp->v_wrcnt);
 	} else {
 		/*
 		 * Some filesystems will return a different vnode,
@@ -3183,13 +3186,13 @@ fop_open(
 		if (*vpp != vp && *vpp != NULL) {
 			vn_copypath(vp, *vpp);
 			if (((*vpp)->v_type == VREG) && (mode & FREAD))
-				atomic_add_32(&((*vpp)->v_rdcnt), 1);
+				atomic_inc_32(&(*vpp)->v_rdcnt);
 			if ((vp->v_type == VREG) && (mode & FREAD))
-				atomic_add_32(&(vp->v_rdcnt), -1);
+				atomic_dec_32(&vp->v_rdcnt);
 			if (((*vpp)->v_type == VREG) && (mode & FWRITE))
-				atomic_add_32(&((*vpp)->v_wrcnt), 1);
+				atomic_inc_32(&(*vpp)->v_wrcnt);
 			if ((vp->v_type == VREG) && (mode & FWRITE))
-				atomic_add_32(&(vp->v_wrcnt), -1);
+				atomic_dec_32(&vp->v_wrcnt);
 		}
 	}
 	VN_RELE(vp);
@@ -3218,11 +3221,11 @@ fop_close(
 	if ((vp->v_type == VREG) && (count == 1))  {
 		if (flag & FREAD) {
 			ASSERT(vp->v_rdcnt > 0);
-			atomic_add_32(&(vp->v_rdcnt), -1);
+			atomic_dec_32(&vp->v_rdcnt);
 		}
 		if (flag & FWRITE) {
 			ASSERT(vp->v_wrcnt > 0);
-			atomic_add_32(&(vp->v_wrcnt), -1);
+			atomic_dec_32(&vp->v_wrcnt);
 		}
 	}
 	return (err);

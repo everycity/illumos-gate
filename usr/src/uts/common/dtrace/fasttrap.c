@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright (c) 2011, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/atomic.h>
@@ -1182,7 +1182,7 @@ fasttrap_proc_lookup(pid_t pid)
 			mutex_enter(&fprc->ftpc_mtx);
 			mutex_exit(&bucket->ftb_mtx);
 			fprc->ftpc_rcount++;
-			atomic_add_64(&fprc->ftpc_acount, 1);
+			atomic_inc_64(&fprc->ftpc_acount);
 			ASSERT(fprc->ftpc_acount <= fprc->ftpc_rcount);
 			mutex_exit(&fprc->ftpc_mtx);
 
@@ -1212,7 +1212,7 @@ fasttrap_proc_lookup(pid_t pid)
 			mutex_enter(&fprc->ftpc_mtx);
 			mutex_exit(&bucket->ftb_mtx);
 			fprc->ftpc_rcount++;
-			atomic_add_64(&fprc->ftpc_acount, 1);
+			atomic_inc_64(&fprc->ftpc_acount);
 			ASSERT(fprc->ftpc_acount <= fprc->ftpc_rcount);
 			mutex_exit(&fprc->ftpc_mtx);
 
@@ -1424,7 +1424,7 @@ fasttrap_provider_free(fasttrap_provider_t *provider)
 	 * count of active providers on the associated process structure.
 	 */
 	if (!provider->ftp_retired) {
-		atomic_add_64(&provider->ftp_proc->ftpc_acount, -1);
+		atomic_dec_64(&provider->ftp_proc->ftpc_acount);
 		ASSERT(provider->ftp_proc->ftpc_acount <
 		    provider->ftp_proc->ftpc_rcount);
 	}
@@ -1499,7 +1499,7 @@ fasttrap_provider_retire(pid_t pid, const char *name, int mprov)
 	 * bucket lock therefore protects the integrity of the provider hash
 	 * table.
 	 */
-	atomic_add_64(&fp->ftp_proc->ftpc_acount, -1);
+	atomic_dec_64(&fp->ftp_proc->ftpc_acount);
 	ASSERT(fp->ftp_proc->ftpc_acount < fp->ftp_proc->ftpc_rcount);
 
 	fp->ftp_retired = 1;
@@ -1595,10 +1595,10 @@ fasttrap_add_probe(fasttrap_probe_spec_t *pdata)
 			    pdata->ftps_mod, pdata->ftps_func, name_str) != 0)
 				continue;
 
-			atomic_add_32(&fasttrap_total, 1);
+			atomic_inc_32(&fasttrap_total);
 
 			if (fasttrap_total > fasttrap_max) {
-				atomic_add_32(&fasttrap_total, -1);
+				atomic_dec_32(&fasttrap_total);
 				goto no_mem;
 			}
 
@@ -1936,8 +1936,7 @@ fasttrap_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		fasttrap_probe_spec_t *probe;
 		uint64_t noffs;
 		size_t size;
-		int ret;
-		char *c;
+		int ret, err;
 
 		if (copyin(&uprobe->ftps_noffs, &noffs,
 		    sizeof (uprobe->ftps_noffs)))
@@ -1967,18 +1966,16 @@ fasttrap_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		 * Verify that the function and module strings contain no
 		 * funny characters.
 		 */
-		for (c = &probe->ftps_func[0]; *c != '\0'; c++) {
-			if (*c < 0x20 || 0x7f <= *c) {
-				ret = EINVAL;
-				goto err;
-			}
+		if (u8_validate(probe->ftps_func, strlen(probe->ftps_func),
+		    NULL, U8_VALIDATE_ENTIRE, &err) < 0) {
+			ret = EINVAL;
+			goto err;
 		}
 
-		for (c = &probe->ftps_mod[0]; *c != '\0'; c++) {
-			if (*c < 0x20 || 0x7f <= *c) {
-				ret = EINVAL;
-				goto err;
-			}
+		if (u8_validate(probe->ftps_mod, strlen(probe->ftps_mod),
+		    NULL, U8_VALIDATE_ENTIRE, &err) < 0) {
+			ret = EINVAL;
+			goto err;
 		}
 
 		if (!PRIV_POLICY_CHOICE(cr, PRIV_ALL, B_FALSE)) {

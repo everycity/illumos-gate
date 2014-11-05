@@ -22,6 +22,7 @@
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011 by Delphix. All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Josef "Jeff" Sipek <jeffpc@josefsipek.net>
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -31,7 +32,7 @@
  * Portions Copyright 2009 Advanced Micro Devices, Inc.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 /*
  * Various routines to handle identification
@@ -120,7 +121,6 @@ uint_t x86_type = X86_TYPE_OTHER;
 uint_t x86_clflush_size = 0;
 
 uint_t pentiumpro_bug4046376;
-uint_t pentiumpro_bug4064495;
 
 uchar_t x86_featureset[BT_SIZEOFMAP(NUM_X86_FEATURES)];
 
@@ -164,7 +164,8 @@ static char *x86_feature_names[NUM_X86_FEATURES] = {
 	"svm",
 	"topoext",
 	"f16c",
-	"rdrand"
+	"rdrand",
+	"x2apic",
 };
 
 boolean_t
@@ -213,8 +214,6 @@ print_x86_featureset(void *featureset)
 		}
 	}
 }
-
-uint_t enable486;
 
 static size_t xsave_state_size = 0;
 uint64_t xsave_bv_all = (XFEATURE_LEGACY_FP | XFEATURE_SSE);
@@ -1033,7 +1032,6 @@ cpuid_pass1(cpu_t *cpu, uchar_t *featureset)
 		else if (IS_LEGACY_P6(cpi)) {
 			x86_type = X86_TYPE_P6;
 			pentiumpro_bug4046376 = 1;
-			pentiumpro_bug4064495 = 1;
 			/*
 			 * Clear the SEP bit when it was set erroneously
 			 */
@@ -1314,6 +1312,9 @@ cpuid_pass1(cpu_t *cpu, uchar_t *featureset)
 					    X86FSET_F16C);
 			}
 		}
+	}
+	if (cp->cp_ecx & CPUID_INTC_ECX_X2APIC) {
+		add_x86_feature(featureset, X86FSET_X2APIC);
 	}
 	if (cp->cp_edx & CPUID_INTC_EDX_DE) {
 		add_x86_feature(featureset, X86FSET_DE);
@@ -1945,16 +1946,28 @@ cpuid_pass2(cpu_t *cpu)
 				    "continue.", cpu->cpu_id);
 			} else {
 				/*
-				 * Must be from boot CPU, OK to disable XSAVE.
+				 * If we reached here on the boot CPU, it's also
+				 * almost certain that we'll reach here on the
+				 * non-boot CPUs. When we're here on a boot CPU
+				 * we should disable the feature, on a non-boot
+				 * CPU we need to confirm that we have.
 				 */
-				ASSERT(cpu->cpu_id == 0);
-				remove_x86_feature(x86_featureset,
-				    X86FSET_XSAVE);
-				remove_x86_feature(x86_featureset, X86FSET_AVX);
-				CPI_FEATURES_ECX(cpi) &= ~CPUID_INTC_ECX_XSAVE;
-				CPI_FEATURES_ECX(cpi) &= ~CPUID_INTC_ECX_AVX;
-				CPI_FEATURES_ECX(cpi) &= ~CPUID_INTC_ECX_F16C;
-				xsave_force_disable = B_TRUE;
+				if (cpu->cpu_id == 0) {
+					remove_x86_feature(x86_featureset,
+					    X86FSET_XSAVE);
+					remove_x86_feature(x86_featureset,
+					    X86FSET_AVX);
+					CPI_FEATURES_ECX(cpi) &=
+					    ~CPUID_INTC_ECX_XSAVE;
+					CPI_FEATURES_ECX(cpi) &=
+					    ~CPUID_INTC_ECX_AVX;
+					CPI_FEATURES_ECX(cpi) &=
+					    ~CPUID_INTC_ECX_F16C;
+					xsave_force_disable = B_TRUE;
+				} else {
+					VERIFY(is_x86_feature(x86_featureset,
+					    X86FSET_XSAVE) == B_FALSE);
+				}
 			}
 		}
 	}

@@ -22,12 +22,13 @@
 .\"
 .\" Copyright (c) 2009 Sun Microsystems, Inc. All Rights Reserved.
 .\" Copyright 2011 Joshua M. Clulow <josh@sysmgr.org>
-.\" Copyright (c) 2012 by Delphix. All rights reserved.
+.\" Copyright (c) 2014 by Delphix. All rights reserved.
 .\" Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
 .\" Copyright 2013 Nexenta Systems, Inc.  All Rights Reserved.
-.\" Copyright (c) 2013, Joyent, Inc. All rights reserved.
+.\" Copyright (c) 2014, Joyent, Inc. All rights reserved.
+.\" Copyright (c) 2014 by Adam Stevko. All rights reserved.
 .\"
-.TH ZFS 1M "Jan 26, 2013"
+.TH ZFS 1M "March 6, 2014"
 .SH NAME
 zfs \- configures ZFS file systems
 .SH SYNOPSIS
@@ -54,6 +55,11 @@ zfs \- configures ZFS file systems
 .LP
 .nf
 \fBzfs\fR \fBdestroy\fR [\fB-dnpRrv\fR] \fIfilesystem\fR|\fIvolume\fR@\fIsnap\fR[%\fIsnap\fR][,\fIsnap\fR[%\fIsnap\fR]]...
+.fi
+
+.LP
+.nf
+\fBzfs\fR \fBdestroy\fR \fIfilesystem\fR|\fIvolume\fR#\fIbookmark\fR
 .fi
 
 .LP
@@ -165,7 +171,17 @@ zfs \- configures ZFS file systems
 
 .LP
 .nf
-\fBzfs\fR \fBsend\fR [\fB-DnPpRrv\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
+\fBzfs\fR \fBbookmark\fR \fIsnapshot\fR \fIbookmark\fR
+.fi
+
+.LP
+.nf
+\fBzfs\fR \fBsend\fR [\fB-DnPpRve\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
+.fi
+
+.LP
+.nf
+\fBzfs\fR \fBsend\fR [\fB-e\fR] [\fB-i \fIsnapshot\fR|\fIbookmark\fR]\fR \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
 .fi
 
 .LP
@@ -248,7 +264,6 @@ zfs \- configures ZFS file systems
 \fBzfs\fR \fBdiff\fR [\fB-FHt\fR] \fIsnapshot\fR \fIsnapshot|filesystem\fR
 
 .SH DESCRIPTION
-.sp
 .LP
 The \fBzfs\fR command configures \fBZFS\fR datasets within a \fBZFS\fR storage
 pool, as described in \fBzpool\fR(1M). A dataset is identified by a unique path
@@ -306,7 +321,6 @@ specified as \fIfilesystem@name\fR or \fIvolume@name\fR.
 .RE
 
 .SS "ZFS File System Hierarchy"
-.sp
 .LP
 A \fBZFS\fR storage pool is a logical collection of devices that provide space
 for datasets. A storage pool is also the root of the \fBZFS\fR file system
@@ -320,7 +334,6 @@ characteristics, however, are managed by the \fBzpool\fR(1M) command.
 .LP
 See \fBzpool\fR(1M) for more information on creating and administering pools.
 .SS "Snapshots"
-.sp
 .LP
 A snapshot is a read-only copy of a file system or volume. Snapshots can be
 created extremely quickly, and initially consume no additional space within the
@@ -337,7 +350,6 @@ in the root of the file system. Snapshots are automatically mounted on demand
 and may be unmounted at regular intervals. The visibility of the \fB\&.zfs\fR
 directory can be controlled by the \fBsnapdir\fR property.
 .SS "Clones"
-.sp
 .LP
 A clone is a writable volume or file system whose initial contents are the same
 as another dataset. As with snapshots, creating a clone is nearly
@@ -357,7 +369,6 @@ The clone parent-child dependency relationship can be reversed by using the
 clone of the specified file system, which makes it possible to destroy the file
 system that the clone was created from.
 .SS "Mount Points"
-.sp
 .LP
 Creating a \fBZFS\fR file system is a simple operation, so the number of file
 systems per system is likely to be numerous. To cope with this, \fBZFS\fR
@@ -390,7 +401,6 @@ is set to \fBlegacy\fR, \fBZFS\fR makes no attempt to manage the file system,
 and the administrator is responsible for mounting and unmounting the file
 system.
 .SS "Zones"
-.sp
 .LP
 A \fBZFS\fR file system can be added to a non-global zone by using the
 \fBzonecfg\fR \fBadd fs\fR subcommand. A \fBZFS\fR file system that is added to
@@ -406,8 +416,9 @@ mounted.
 A dataset can also be delegated to a non-global zone by using the \fBzonecfg\fR
 \fBadd dataset\fR subcommand. You cannot delegate a dataset to one zone and the
 children of the same dataset to another zone. The zone administrator can change
-properties of the dataset or any of its children. However, the \fBquota\fR
-property is controlled by the global administrator.
+properties of the dataset or any of its children. However, the \fBquota\fR,
+\fBfilesystem_limit\fR and \fBsnapshot_limit\fR properties of the delegated
+dataset can be modified only by the global administrator.
 .sp
 .LP
 A \fBZFS\fR volume can be added as a device to a non-global zone by using the
@@ -428,7 +439,6 @@ The global administrator can forcibly clear the \fBzoned\fR property, though
 this should be done with extreme care. The global administrator should verify
 that all the mount points are acceptable before clearing the property.
 .SS "Native Properties"
-.sp
 .LP
 Properties are divided into two types, native properties and user-defined (or
 "user") properties. Native properties either export internal statistics or
@@ -535,6 +545,18 @@ by using the \fBzfs destroy\fR \fB-d\fR command. Otherwise, the property is
 .sp
 .ne 2
 .na
+\fB\fBfilesystem_count\fR
+.ad
+.sp .6
+.RS 4n
+The total number of filesystems and volumes that exist under this location in the
+dataset tree.  This value is only available when a \fBfilesystem_limit\fR has
+been set somewhere in the tree under which the dataset resides.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBlogicalreferenced\fR\fR
 .ad
 .sp .6
@@ -614,6 +636,18 @@ This property can also be referred to by its shortened column name,
 The compression ratio achieved for the \fBreferenced\fR space of this
 dataset, expressed as a multiplier.  See also the \fBcompressratio\fR
 property.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBsnapshot_count\fR
+.ad
+.sp .6
+.RS 4n
+The total number of snapshots that exist under this location in the dataset tree.
+This value is only available when a \fBsnapshot_limit\fR has been set somewhere
+in the tree under which the dataset resides.
 .RE
 
 .sp
@@ -1023,6 +1057,21 @@ default value is \fBon\fR.
 .sp
 .ne 2
 .na
+\fB\fBfilesystem_limit\fR=\fIcount\fR | \fBnone\fR\fR
+.ad
+.sp .6
+.RS 4n
+Limits the number of filesystems and volumes that can exist under this point in
+the dataset tree.  The limit is not enforced if the user is allowed to change
+the limit. Setting a filesystem_limit on a descendent of a filesystem that
+already has a filesystem_limit does not override the ancestor's filesystem_limit,
+but rather imposes an additional limit. This feature must be enabled to be used
+(see \fBzpool-features\fR(5)).
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBmountpoint\fR=\fIpath\fR | \fBnone\fR | \fBlegacy\fR\fR
 .ad
 .sp .6
@@ -1081,6 +1130,22 @@ the ancestor's quota, but rather imposes an additional limit.
 .sp
 Quotas cannot be set on volumes, as the \fBvolsize\fR property acts as an
 implicit quota.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBsnapshot_limit\fR=\fIcount\fR | \fBnone\fR\fR
+.ad
+.sp .6
+.RS 4n
+Limits the number of snapshots that can be created on a dataset and its
+descendents. Setting a snapshot_limit on a descendent of a dataset that already
+has a snapshot_limit does not override the ancestor's snapshot_limit, but
+rather imposes an additional limit. The limit is not enforced if the user is
+allowed to change the limit. For example, this means that recursive snapshots
+taken from the global zone are counted against each delegated dataset within
+a zone. This feature must be enabled to be used (see \fBzpool-features\fR(5)).
 .RE
 
 .sp
@@ -1186,6 +1251,37 @@ afterward; existing files are unaffected.
 .sp
 This property can also be referred to by its shortened column name,
 \fBrecsize\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBredundant_metadata\fR=\fBall\fR | \fBmost\fR\fR
+.ad
+.sp .6
+.RS 4n
+Controls what types of metadata are stored redundantly.  ZFS stores an
+extra copy of metadata, so that if a single block is corrupted, the
+amount of user data lost is limited.  This extra copy is in addition to
+any redundancy provided at the pool level (e.g. by mirroring or RAID-Z),
+and is in addition to an extra copy specified by the \fBcopies\fR
+property (up to a total of 3 copies).  For example if the pool is
+mirrored, \fBcopies\fR=2, and \fBredundant_metadata\fR=most, then ZFS
+stores 6 copies of most metadata, and 4 copies of data and some
+metadata.
+.sp
+When set to \fBall\fR, ZFS stores an extra copy of all metadata.  If a
+single on-disk block is corrupt, at worst a single block of user data
+(which is \fBrecordsize\fR bytes long) can be lost.
+.sp
+When set to \fBmost\fR, ZFS stores an extra copy of most types of
+metadata.  This can improve performance of random writes, because less
+metadata must be written.  In practice, at worst about 100 blocks (of
+\fBrecordsize\fR bytes each) of user data can be lost if a single
+on-disk block is corrupt.  The exact behavior of which metadata blocks
+are stored redundantly may change in future releases.
+.sp
+The default value is \fBall\fR.
 .RE
 
 .sp
@@ -1373,12 +1469,12 @@ the file system as discussed in the "Snapshots" section. The default value is
 .sp
 .ne 2
 .na
-\fB\fBsync\fR=\fBdefault\fR | \fBalways\fR | \fBdisabled\fR\fR
+\fB\fBsync\fR=\fBstandard\fR | \fBalways\fR | \fBdisabled\fR\fR
 .ad
 .sp .6
 .RS 4n
 Controls the behavior of synchronous requests (e.g. fsync, O_DSYNC).
-\fBdefault\fR is the POSIX specified behavior of ensuring all synchronous
+\fBstandard\fR is the POSIX specified behavior of ensuring all synchronous
 requests are written to stable storage and all devices are flushed to ensure
 data is not cached by device controllers (this is the default). \fBalways\fR
 causes every file system transaction to be written and flushed before its
@@ -1536,7 +1632,6 @@ The \fBcasesensitivity\fR, \fBnormalization\fR, and \fButf8only\fR properties
 are also new permissions that can be assigned to non-privileged users by using
 the \fBZFS\fR delegated administration feature.
 .SS "Temporary Mount Point Properties"
-.sp
 .LP
 When a file system is mounted, either through \fBmount\fR(1M) for legacy mounts
 or the \fBzfs mount\fR command for normal file systems, its mount options are
@@ -1565,7 +1660,6 @@ are reported as "temporary" by the \fBzfs get\fR command. If the properties are
 changed while the dataset is mounted, the new setting overrides any temporary
 settings.
 .SS "User Properties"
-.sp
 .LP
 In addition to the standard native properties, \fBZFS\fR supports arbitrary
 user properties. User properties have no effect on \fBZFS\fR behavior, but
@@ -1598,7 +1692,6 @@ to clear a user property . If the property is not defined in any parent
 dataset, it is removed entirely. Property values are limited to 1024
 characters.
 .SS "ZFS Volumes as Swap or Dump Devices"
-.sp
 .LP
 During an initial installation a swap device and dump device are created on
 \fBZFS\fR volumes in the \fBZFS\fR root pool. By default, the swap area size is
@@ -1614,7 +1707,6 @@ installed or upgraded, use the \fBswap\fR(1M) and \fBdumpadm\fR(1M) commands.
 If you need to change the size of your swap area or dump device, see the
 \fISolaris ZFS Administration Guide\fR.
 .SH SUBCOMMANDS
-.sp
 .LP
 All subcommands that modify state are logged persistently to the pool in their
 original form.
@@ -1917,6 +2009,17 @@ behavior for mounted file systems in use.
 .sp
 .ne 2
 .na
+\fBzfs destroy\fR \fIfilesystem\fR|\fIvolume\fR#\fIbookmark\fR
+.ad
+.sp .6
+.RS 4n
+The given bookmark is destroyed.
+
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBzfs snapshot\fR [\fB-r\fR] [\fB-o\fR \fIproperty\fR=\fIvalue\fR]...
 \fIfilesystem@snapname\fR|\fIvolume@snapname\fR\fR...
 .ad
@@ -1959,13 +2062,13 @@ Roll back the given dataset to a previous snapshot. When a dataset is rolled
 back, all data that has changed since the snapshot is discarded, and the
 dataset reverts to the state at the time of the snapshot. By default, the
 command refuses to roll back to a snapshot other than the most recent one. In
-order to do so, all intermediate snapshots must be destroyed by specifying the
-\fB-r\fR option.
+order to do so, all intermediate snapshots and bookmarks must be destroyed
+by specifying the \fB-r\fR option.
 .sp
 The \fB-rR\fR options do not recursively destroy the child snapshots of a
-recursive snapshot. Only the top-level recursive snapshot is destroyed by
-either of these options. To completely roll back a recursive snapshot, you must
-rollback the individual child snapshots.
+recursive snapshot. Only direct snapshots of the specified filesystem
+are destroyed by either of these options. To completely roll back a
+recursive snapshot, you must rollback the individual child snapshots.
 .sp
 .ne 2
 .na
@@ -1973,7 +2076,7 @@ rollback the individual child snapshots.
 .ad
 .sp .6
 .RS 4n
-Recursively destroy any snapshots more recent than the one specified.
+Destroy any snapshots and bookmarks more recent than the one specified.
 .RE
 
 .sp
@@ -1983,7 +2086,7 @@ Recursively destroy any snapshots more recent than the one specified.
 .ad
 .sp .6
 .RS 4n
-Recursively destroy any more recent snapshots, as well as any clones of those
+Destroy any more recent snapshots and bookmarks, as well as any clones of those
 snapshots.
 .RE
 
@@ -2144,6 +2247,16 @@ tab instead of arbitrary white space.
 .sp
 .ne 2
 .na
+\fB\fB-p\fR\fR
+.ad
+.sp .6
+.RS 4n
+Display numbers in parsable (exact) values.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fB-r\fR\fR
 .ad
 .sp .6
@@ -2261,13 +2374,12 @@ Same as the \fB-s\fR option, but sorts by property in descending order.
 .sp .6
 .RS 4n
 A comma-separated list of types to display, where \fItype\fR is one of
-\fBfilesystem\fR, \fBsnapshot\fR , \fBvolume\fR, or \fBall\fR. For example,
-specifying \fB-t snapshot\fR displays only snapshots.
+\fBfilesystem\fR, \fBsnapshot\fR , \fBvolume\fR, \fBbookmark\fR, or \fBall\fR.
+For example, specifying \fB-t snapshot\fR displays only snapshots.
 .RE
 
 .sp
 .ne 2
-.mk
 .na
 \fB\fB-p\fR\fR
 .ad
@@ -2325,7 +2437,7 @@ the \fB-o\fR option. This command takes a comma-separated list of properties as
 described in the "Native Properties" and "User Properties" sections.
 .sp
 The special value \fBall\fR can be used to display all properties that apply to
-the given dataset's type (filesystem, volume, or snapshot).
+the given dataset's type (filesystem, volume, snapshot, or bookmark).
 .sp
 .ne 2
 .na
@@ -2391,7 +2503,7 @@ is all sources.
 .ad
 .sp .6
 .RS 4n
-Display numbers in parseable (exact) values.
+Display numbers in parsable (exact) values.
 .RE
 
 .sp
@@ -2817,7 +2929,24 @@ Unshare the specified filesystem. The command can also be given a path to a
 .sp
 .ne 2
 .na
-\fBzfs send\fR [\fB-DnPpRrv\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
+\fB\fBzfs bookmark\fR \fIsnapshot\fR \fIbookmark\fR\fR
+.ad
+.sp .6
+.RS 4n
+Creates a bookmark of the given snapshot.  Bookmarks mark the point in time
+when the snapshot was created, and can be used as the incremental source for
+a \fBzfs send\fR command.
+.sp
+This feature must be enabled to be used.
+See \fBzpool-features\fR(5) for details on ZFS feature flags and the
+\fBbookmarks\fR feature.
+.RE
+
+
+.sp
+.ne 2
+.na
+\fBzfs send\fR [\fB-DnPpRrve\fR] [\fB-\fR[\fBiI\fR] \fIsnapshot\fR] \fIsnapshot\fR
 .ad
 .sp .6
 .RS 4n
@@ -2832,11 +2961,11 @@ generated.
 .ad
 .sp .6
 .RS 4n
-Generate an incremental stream from the first \fIsnapshot\fR to the second
-\fIsnapshot\fR. The incremental source (the first \fIsnapshot\fR) can be
-specified as the last component of the snapshot name (for example, the part
-after the \fB@\fR), and it is assumed to be from the same file system as the
-second \fIsnapshot\fR.
+Generate an incremental stream from the first \fIsnapshot\fR
+(the incremental source) to the second \fIsnapshot\fR (the incremental target).
+The incremental source can be specified as the last component of the
+snapshot name (the \fB@\fR character and following) and
+it is assumed to be from the same file system as the incremental target.
 .sp
 If the destination is a clone, the source may be the origin snapshot, which
 must be fully specified (for example, \fBpool/fs@origin\fR, not just
@@ -2851,9 +2980,9 @@ must be fully specified (for example, \fBpool/fs@origin\fR, not just
 .sp .6
 .RS 4n
 Generate a stream package that sends all intermediary snapshots from the first
-snapshot to the second snapshot. For example, \fB-I @a fs@d\fR is similar to
-\fB-i @a fs@b; -i @b fs@c; -i @c fs@d\fR. The incremental source snapshot may
-be specified as with the \fB-i\fR option.
+snapshot to the second snapshot. For example, \fB-I @a fs@d\fR is
+similar to \fB-i @a fs@b; -i @b fs@c; -i @c fs@d\fR. The incremental
+source may be specified as with the \fB-i\fR option.
 .RE
 
 .sp
@@ -2905,6 +3034,23 @@ property information is only included if the \fB-p\fR flag is specified.
 .sp
 .ne 2
 .na
+\fB\fB-e\fR\fR
+.ad
+.sp .6
+.RS 4n
+Generate a more compact stream by using WRITE_EMBEDDED records for blocks
+which are stored more compactly on disk by the \fBembedded_data\fR pool
+feature.  This flag has no effect if the \fBembedded_data\fR feature is
+disabled.  The receiving system must have the \fBembedded_data\fR feature
+enabled.  If the \fBlz4_compress\fR feature is active on the sending system,
+then the receiving system must have that feature enabled as well. See
+\fBzpool-features\fR(5) for details on ZFS feature flags and the
+\fBembedded_data\fR feature.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fB-p\fR\fR
 .ad
 .sp .6
@@ -2948,6 +3094,55 @@ includes a per-second report of how much data has been sent.
 
 The format of the stream is committed. You will be able to receive your streams
 on future versions of \fBZFS\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs send\fR [\fB-e\fR] [\fB-i\fR \fIsnapshot\fR|\fIbookmark\fR] \fIfilesystem\fR|\fIvolume\fR|\fIsnapshot\fR
+.ad
+.sp .6
+.RS 4n
+Generate a send stream, which may be of a filesystem, and may be
+incremental from a bookmark.  If the destination is a filesystem or volume,
+the pool must be read-only, or the filesystem must not be mounted.  When the
+stream generated from a filesystem or volume is received, the default snapshot
+name will be "--head--".
+
+.sp
+.ne 2
+.na
+\fB-i\fR \fIsnapshot\fR|\fIbookmark\fR
+.ad
+.sp .6
+.RS 4n
+Generate an incremental send stream.  The incremental source must be an earlier
+snapshot in the destination's history. It will commonly be an earlier
+snapshot in the destination's filesystem, in which case it can be
+specified as the last component of the name (the \fB#\fR or \fB@\fR character
+and following).
+.sp
+If the incremental target is a clone, the incremental source can
+be the origin snapshot, or an earlier snapshot in the origin's filesystem,
+or the origin's origin, etc.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-e\fR\fR
+.ad
+.sp .6
+.RS 4n
+Generate a more compact stream by using WRITE_EMBEDDED records for blocks
+which are stored more compactly on disk by the \fBembedded_data\fR pool
+feature.  This flag has no effect if the \fBembedded_data\fR feature is
+disabled.  The receiving system must have the \fBembedded_data\fR feature
+enabled.  If the \fBlz4_compress\fR feature is active on the sending system,
+then the receiving system must have that feature enabled as well. See
+\fBzpool-features\fR(5) for details on ZFS feature flags and the
+\fBembedded_data\fR feature.
+.RE
 .RE
 
 .sp
@@ -3194,6 +3389,7 @@ compression      property
 copies           property
 devices          property
 exec             property
+filesystem_limit property
 mountpoint       property
 nbmand           property
 normalization    property
@@ -3210,6 +3406,7 @@ shareiscsi       property
 sharenfs         property
 sharesmb         property
 snapdir          property
+snapshot_limit   property
 utf8only         property
 version          property
 volblocksize     property
@@ -3428,7 +3625,7 @@ F       Regular file
 .ad
 .sp .6
 .RS 4n
-Give more parseable tab-separated output, without header lines and without arrows.
+Give more parsable tab-separated output, without header lines and without arrows.
 .RE
 .sp
 .ne 2
@@ -3989,7 +4186,6 @@ M       F       /tank/test/modified
 .sp
 
 .SH EXIT STATUS
-.sp
 .LP
 The following exit values are returned:
 .sp
@@ -4023,7 +4219,6 @@ Invalid command line options were specified.
 .RE
 
 .SH ATTRIBUTES
-.sp
 .LP
 See \fBattributes\fR(5) for descriptions of the following attributes:
 .sp
@@ -4039,7 +4234,6 @@ Interface Stability	Committed
 .TE
 
 .SH SEE ALSO
-.sp
 .LP
 \fBssh\fR(1), \fBiscsitadm\fR(1M), \fBmount\fR(1M), \fBshare\fR(1M),
 \fBsharemgr\fR(1M), \fBunshare\fR(1M), \fBzonecfg\fR(1M), \fBzpool\fR(1M),

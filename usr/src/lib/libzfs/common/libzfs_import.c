@@ -20,8 +20,8 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  */
 
 /*
@@ -1377,21 +1377,15 @@ zpool_find_import_cached(libzfs_handle_t *hdl, const char *cachefile,
 
 	elem = NULL;
 	while ((elem = nvlist_next_nvpair(raw, elem)) != NULL) {
-		verify(nvpair_value_nvlist(elem, &src) == 0);
+		src = fnvpair_value_nvlist(elem);
 
-		verify(nvlist_lookup_string(src, ZPOOL_CONFIG_POOL_NAME,
-		    &name) == 0);
+		name = fnvlist_lookup_string(src, ZPOOL_CONFIG_POOL_NAME);
 		if (poolname != NULL && strcmp(poolname, name) != 0)
 			continue;
 
-		verify(nvlist_lookup_uint64(src, ZPOOL_CONFIG_POOL_GUID,
-		    &this_guid) == 0);
-		if (guid != 0) {
-			verify(nvlist_lookup_uint64(src, ZPOOL_CONFIG_POOL_GUID,
-			    &this_guid) == 0);
-			if (guid != this_guid)
-				continue;
-		}
+		this_guid = fnvlist_lookup_uint64(src, ZPOOL_CONFIG_POOL_GUID);
+		if (guid != 0 && guid != this_guid)
+			continue;
 
 		if (pool_active(hdl, name, this_guid, &active) != 0) {
 			nvlist_free(raw);
@@ -1568,9 +1562,16 @@ zpool_in_use(libzfs_handle_t *hdl, int fd, pool_state_t *state, char **namestr,
 		 * its state to active.
 		 */
 		if (pool_active(hdl, name, guid, &isactive) == 0 && isactive &&
-		    (zhp = zpool_open_canfail(hdl, name)) != NULL &&
-		    zpool_get_prop_int(zhp, ZPOOL_PROP_READONLY, NULL))
-			stateval = POOL_STATE_ACTIVE;
+		    (zhp = zpool_open_canfail(hdl, name)) != NULL) {
+			if (zpool_get_prop_int(zhp, ZPOOL_PROP_READONLY, NULL))
+				stateval = POOL_STATE_ACTIVE;
+
+			/*
+			 * All we needed the zpool handle for is the
+			 * readonly prop check.
+			 */
+			zpool_close(zhp);
+		}
 
 		ret = B_TRUE;
 		break;

@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Gary Mills
  * Copyright 2013, Joyent Inc. All rights reserved.
  */
 
@@ -126,7 +128,7 @@ extern int lex_lineno;
 #define	SHELP_REMOVE	"remove [-F] <resource-type> " \
 	"[ <property-name>=<property-value> ]*\n" \
 	"\t(global scope)\n" \
-	"remove <property-name> <property-value>\n" \
+	"remove [-F] <property-name> <property-value>\n" \
 	"\t(resource scope)"
 #define	SHELP_REVERT	"revert [-F]"
 #define	SHELP_SELECT	"select <resource-type> { <property-name>=" \
@@ -934,6 +936,105 @@ long_help(int cmd_num)
 }
 
 /*
+ * Return the input filename appended to each component of the path
+ * or the filename itself if it is absolute.
+ * Parameters: path string, file name, output string.
+ */
+/* Copied almost verbatim from libtnfctl/prb_findexec.c */
+static const char *
+exec_cat(const char *s1, const char *s2, char *si)
+{
+	char		   *s;
+	/* Number of remaining characters in s */
+	int			 cnt = PATH_MAX + 1;
+
+	s = si;
+	while (*s1 && *s1 != ':') { /* Copy first component of path to si */
+		if (cnt > 0) {
+			*s++ = *s1++;
+			cnt--;
+		} else {
+			s1++;
+		}
+	}
+	if (si != s && cnt > 0) { /* Add slash if s2 is not absolute */
+		*s++ = '/';
+		cnt--;
+	}
+	while (*s2 && cnt > 0) { /* Copy s2 to si */
+		*s++ = *s2++;
+		cnt--;
+	}
+	*s = '\0';  /* Terminate the output string */
+	return (*s1 ? ++s1 : NULL);  /* Return next path component or NULL */
+}
+
+/* Determine that a name exists in PATH */
+/* Copied with changes from libtnfctl/prb_findexec.c */
+static int
+path_find(const char *name)
+{
+	const char	 *pathstr;
+	char		fname[PATH_MAX + 2];
+	const char	 *cp;
+	struct stat	 stat_buf;
+
+	if ((pathstr = getenv("PATH")) == NULL) {
+		if (geteuid() == 0 || getuid() == 0)
+			pathstr = "/usr/sbin:/usr/bin";
+		else
+			pathstr = "/usr/bin:";
+	}
+	cp = strchr(name, '/') ? (const char *) "" : pathstr;
+
+	do {
+		cp = exec_cat(cp, name, fname);
+		if (stat(fname, &stat_buf) != -1) {
+			/* successful find of the file */
+			return (0);
+		}
+	} while (cp != NULL);
+
+	return (-1);
+}
+
+static FILE *
+pager_open(void) {
+	FILE *newfp;
+	char *pager, *space;
+
+	pager = getenv("PAGER");
+	if (pager == NULL || *pager == '\0')
+		pager = PAGER;
+
+	space = strchr(pager, ' ');
+	if (space)
+		*space = '\0';
+	if (path_find(pager) == 0) {
+		if (space)
+			*space = ' ';
+		if ((newfp = popen(pager, "w")) == NULL)
+			zerr(gettext("PAGER open failed (%s)."),
+			    strerror(errno));
+		return (newfp);
+	} else {
+		zerr(gettext("PAGER %s does not exist (%s)."),
+		    pager, strerror(errno));
+	}
+	return (NULL);
+}
+
+static void
+pager_close(FILE *fp) {
+	int status;
+
+	status = pclose(fp);
+	if (status == -1)
+		zerr(gettext("PAGER close failed (%s)."),
+		    strerror(errno));
+}
+
+/*
  * Called with verbose TRUE when help is explicitly requested, FALSE for
  * unexpected errors.
  */
@@ -944,28 +1045,13 @@ usage(boolean_t verbose, uint_t flags)
 	FILE *fp = verbose ? stdout : stderr;
 	FILE *newfp;
 	boolean_t need_to_close = B_FALSE;
-	char *pager, *space;
 	int i;
-	struct stat statbuf;
 
 	/* don't page error output */
 	if (verbose && interactive_mode) {
-		if ((pager = getenv("PAGER")) == NULL)
-			pager = PAGER;
-
-		space = strchr(pager, ' ');
-		if (space)
-			*space = '\0';
-		if (stat(pager, &statbuf) == 0) {
-			if (space)
-				*space = ' ';
-			if ((newfp = popen(pager, "w")) != NULL) {
-				need_to_close = B_TRUE;
-				fp = newfp;
-			}
-		} else {
-			zerr(gettext("PAGER %s does not exist (%s)."),
-			    pager, strerror(errno));
+		if ((newfp = pager_open()) != NULL) {
+			need_to_close = B_TRUE;
+			fp = newfp;
 		}
 	}
 
@@ -1322,7 +1408,7 @@ usage(boolean_t verbose, uint_t flags)
 		    pt_to_str(PT_USER), pt_to_str(PT_AUTHS));
 	}
 	if (need_to_close)
-		(void) pclose(fp);
+		(void) pager_close(fp);
 }
 
 static void
@@ -3602,6 +3688,25 @@ remove_property(cmd_t *cmd)
 	struct zone_rctlvaltab *rctlvaltab;
 	struct zone_res_attrtab *np;
 	complex_property_ptr_t cx;
+	int arg;
+	boolean_t force = B_FALSE;
+	boolean_t arg_err = B_FALSE;
+
+	optind = 0;
+	while ((arg = getopt(cmd->cmd_argc, cmd->cmd_argv, "F")) != EOF) {
+		switch (arg) {
+		case 'F':
+			force = B_TRUE;
+			break;
+		default:
+			arg_err = B_TRUE;
+			break;
+		}
+	}
+	if (arg_err) {
+		saw_error = B_TRUE;
+		return;
+	}
 
 	res_type = resource_scope;
 	prop_type = cmd->cmd_prop_name[0];
@@ -3643,7 +3748,7 @@ remove_property(cmd_t *cmd)
 			prop_id = pp->pv_simple;
 			err = zonecfg_remove_fs_option(&in_progress_fstab,
 			    prop_id);
-			if (err != Z_OK)
+			if (err != Z_OK && !force)
 				zone_perror(pt_to_str(prop_type), err, B_TRUE);
 		} else {
 			list_property_ptr_t list;
@@ -3655,7 +3760,7 @@ remove_property(cmd_t *cmd)
 					break;
 				err = zonecfg_remove_fs_option(
 				    &in_progress_fstab, prop_id);
-				if (err != Z_OK)
+				if (err != Z_OK && !force)
 					zone_perror(pt_to_str(prop_type), err,
 					    B_TRUE);
 			}
@@ -3708,7 +3813,7 @@ remove_property(cmd_t *cmd)
 			err = zonecfg_remove_res_attr(
 			    &(in_progress_devtab.zone_dev_attrp), np);
 		}
-		if (err != Z_OK)
+		if (err != Z_OK && !force)
 			zone_perror(pt_to_str(prop_type), err, B_TRUE);
 		return;
 	case RT_RCTL:
@@ -3759,7 +3864,7 @@ remove_property(cmd_t *cmd)
 		rctlvaltab->zone_rctlval_next = NULL;
 		err = zonecfg_remove_rctl_value(&in_progress_rctltab,
 		    rctlvaltab);
-		if (err != Z_OK)
+		if (err != Z_OK && !force)
 			zone_perror(pt_to_str(prop_type), err, B_TRUE);
 		zonecfg_free_rctl_value_list(rctlvaltab);
 		return;
@@ -5795,7 +5900,6 @@ info_func(cmd_t *cmd)
 {
 	FILE *fp = stdout;
 	boolean_t need_to_close = B_FALSE;
-	char *pager, *space;
 	int type;
 	int res1, res2, res3;
 	uint64_t swap_limit;
@@ -5810,22 +5914,10 @@ info_func(cmd_t *cmd)
 
 	/* don't page error output */
 	if (interactive_mode) {
-		if ((pager = getenv("PAGER")) == NULL)
-			pager = PAGER;
-		space = strchr(pager, ' ');
-		if (space)
-			*space = '\0';
-		if (stat(pager, &statbuf) == 0) {
-			if (space)
-				*space = ' ';
-			if ((fp = popen(pager, "w")) != NULL)
-				need_to_close = B_TRUE;
-			else
-				fp = stdout;
-		} else {
-			zerr(gettext("PAGER %s does not exist (%s)."),
-			    pager, strerror(errno));
-		}
+		if ((fp = pager_open()) != NULL)
+			need_to_close = B_TRUE;
+		else
+			fp = stdout;
 
 		setbuf(fp, NULL);
 	}
@@ -6025,7 +6117,7 @@ info_func(cmd_t *cmd)
 
 cleanup:
 	if (need_to_close)
-		(void) pclose(fp);
+		(void) pager_close(fp);
 }
 
 /*
@@ -6193,6 +6285,8 @@ verify_func(cmd_t *cmd)
 	char brand[MAXNAMELEN];
 	char hostidp[HW_HOSTID_LEN];
 	char fsallowedp[ZONE_FS_ALLOWED_MAX];
+	priv_set_t *privs;
+	char *privname = NULL;
 	int err, ret_val = Z_OK, arg;
 	int pset_res;
 	boolean_t save = B_FALSE;
@@ -6259,6 +6353,18 @@ verify_func(cmd_t *cmd)
 		ret_val = Z_REQD_RESOURCE_MISSING;
 		saw_error = B_TRUE;
 	}
+
+	if ((privs = priv_allocset()) == NULL) {
+		zerr(gettext("%s: priv_allocset failed"), zone);
+		return;
+	}
+	if (zonecfg_get_privset(handle, privs, &privname) != Z_OK) {
+		zerr(gettext("%s: invalid privilege: %s"), zone, privname);
+		priv_freeset(privs);
+		free(privname);
+		return;
+	}
+	priv_freeset(privs);
 
 	if (zonecfg_get_hostid(handle, hostidp,
 	    sizeof (hostidp)) == Z_INVALID_PROPERTY) {
