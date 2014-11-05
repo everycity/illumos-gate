@@ -893,6 +893,13 @@ ixgbe_register_mac(ixgbe_t *ixgbe)
 }
 
 /*
+ * Do we allow unsupported SFP modules on our card?
+ * Set for now with /etc/system.
+ * For NS4.x/Illumos, perhaps a dladm(1M) property would be more appropriate.
+ */
+boolean_t ixgbe_allow_unsupported_sfp = B_FALSE;
+
+/*
  * ixgbe_identify_hardware - Identify the type of the chipset.
  */
 static int
@@ -900,6 +907,9 @@ ixgbe_identify_hardware(ixgbe_t *ixgbe)
 {
 	struct ixgbe_hw *hw = &ixgbe->hw;
 	struct ixgbe_osdep *osdep = &ixgbe->osdep;
+
+	/* This is as good a place as any to allow/disallow unsupported SFPs. */
+	hw->allow_unsupported_sfp = ixgbe_allow_unsupported_sfp;
 
 	/*
 	 * Get the device id
