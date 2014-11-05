@@ -153,9 +153,6 @@ main(int argc, char **argv)
 	/* remove home directory */
 	if( rflag ) {
 		/* Check Permissions */
-		/* nudge autofs */
-		(void) access(pstruct->pw_dir, R_OK);
-
 		if( stat( pstruct->pw_dir, &statbuf ) ) {
 			errmsg(M_OOPS, "find status about home directory", 
 			    strerror(errno));

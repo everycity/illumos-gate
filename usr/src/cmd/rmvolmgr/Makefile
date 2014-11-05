@@ -41,7 +41,6 @@ LDLIBS +=	-ldbus-1 -ldbus-glib-1 -lglib-2.0 -lhal -lhal-storage -lcontract -lscf
 CPPFLAGS +=	$(HAL_DBUS_CPPFLAGS) $(HAL_GLIB_CPPFLAGS)
 CPPFLAGS +=	-I$(ROOT)/usr/include/hal
 C99MODE =	$(C99_ENABLE)
-CFLAGS += -erroff=E_INTEGER_OVERFLOW_DETECTED
 
 CERRWARN += 	-_gcc=-Wno-switch
 CERRWARN += 	-_gcc=-Wno-uninitialized

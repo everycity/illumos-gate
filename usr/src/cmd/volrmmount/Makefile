@@ -40,7 +40,6 @@ CPPFLAGS +=	$(HAL_DBUS_CPPFLAGS) $(HAL_GLIB_CPPFLAGS)
 CPPFLAGS +=	-I$(ROOT)/usr/include/hal
 CPPFLAGS +=	-I$(SRC)/cmd/rmvolmgr
 C99MODE =	$(C99_ENABLE)
-CFLAGS += -erroff=E_INTEGER_OVERFLOW_DETECTED
 
 CERRWARN +=	-_gcc=-Wno-switch
 CERRWARN +=	-_gcc=-Wno-unused-variable

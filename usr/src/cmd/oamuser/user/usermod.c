@@ -482,9 +482,6 @@ char **argv;
 	}
 
 	if (mflag) {
-		/* nudge autofs */
-		(void) access(dir, R_OK);
-
 		if (stat(dir, &statbuf) == 0) {
 			/* Home directory exists */
 			if (check_perm(statbuf, pstruct->pw_uid,
@@ -493,7 +490,7 @@ char **argv;
 				exit(EX_NO_PERM);
 			}
 
-		} else ret = create_home(dir, NULL, uid, gid, mflag < 2);
+		} else ret = create_home(dir, NULL, uid, gid);
 
 		if (ret == EX_SUCCESS)
 			ret = move_dir(pstruct->pw_dir, dir, logname);

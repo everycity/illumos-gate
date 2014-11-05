@@ -701,7 +701,7 @@ main(int argc, char *argv[])
 		    un.sysname, un.release, un.version, bits);
 		console(B_FALSE, "Copyright (c) 2010-2012, "
 		    "Joyent Inc. All rights reserved.\r\n");
-		console(B_FALSE, "Copyright (c) 2011-2012, "
+		console(B_FALSE, "Copyright (c) 2011-2014, "
 		    "EveryCity Ltd. All rights reserved.\r\n");
 	}
 

@@ -60,14 +60,6 @@
 		<service_fmri value='svc:/system/smartdc/metadata' />
 	</dependency>
 
-	<dependency
-		name='ntp'
-		type='service'
-		grouping='require_all'
-		restart_on='none'>
-		<service_fmri value='svc:/network/ntp' />
-	</dependency>
-
 	<exec_method
 		type='method'
 		name='start'
