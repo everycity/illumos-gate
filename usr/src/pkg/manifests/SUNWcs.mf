@@ -733,6 +733,7 @@ file path=usr/bin/devattr mode=0555
 file path=usr/bin/devfree mode=0555
 file path=usr/bin/devreserv mode=0555
 file path=usr/bin/dirname mode=0555
+file path=usr/bin/diskfltinj mode=0555 variant.opensolaris.zone=global
 $(i386_ONLY)file path=usr/bin/diskscan mode=0555
 file path=usr/bin/domainname mode=0555
 file path=usr/bin/du mode=0555
