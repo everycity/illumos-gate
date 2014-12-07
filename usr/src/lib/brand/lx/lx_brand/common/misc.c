@@ -56,6 +56,40 @@
 
 extern int sethostname(char *, int);
 
+struct lx_sysinfo {
+	int64_t si_uptime;	/* Seconds since boot */
+	uint64_t si_loads[3];	/* 1, 5, and 15 minute avg runq length */
+	uint64_t si_totalram;	/* Total memory size */
+	uint64_t si_freeram;	/* Available memory */
+	uint64_t si_sharedram;	/* Shared memory */
+	uint64_t si_bufferram;	/* Buffer memory */
+	uint64_t si_totalswap;	/* Total swap space */
+	uint64_t si_freeswap;	/* Avail swap space */
+	uint16_t si_procs;	/* Process count */
+	uint16_t si_pad;	/* Padding */
+	uint64_t si_totalhigh;	/* High memory size */
+	uint64_t si_freehigh;	/* Avail high memory */
+	uint32_t si_mem_unit;	/* Unit size of memory fields */
+};
+
+struct lx_sysinfo32 {
+	int32_t si_uptime;	/* Seconds since boot */
+	uint32_t si_loads[3];	/* 1, 5, and 15 minute avg runq length */
+	uint32_t si_totalram;	/* Total memory size */
+	uint32_t si_freeram;	/* Available memory */
+	uint32_t si_sharedram;	/* Shared memory */
+	uint32_t si_bufferram;	/* Buffer memory */
+	uint32_t si_totalswap;	/* Total swap space */
+	uint32_t si_freeswap;	/* Avail swap space */
+	uint16_t si_procs;	/* Process count */
+	uint16_t si_pad;	/* Padding */
+	uint32_t si_totalhigh;	/* High memory size */
+	uint32_t si_freehigh;	/* Avail high memory */
+	uint32_t si_mem_unit;	/* Unit size of memory fields */
+};
+
+extern long lx_sysinfo(struct lx_sysinfo *sip);
+
 /* ARGUSED */
 long
 lx_rename(uintptr_t p1, uintptr_t p2)
@@ -655,6 +689,45 @@ lx_syslog(int type, char *bufp, int len)
 	return (0);
 }
 
+long
+lx_sysinfo32(uintptr_t arg)
+{
+	struct lx_sysinfo32 *sip = (struct lx_sysinfo32 *)arg;
+	struct lx_sysinfo32 si;
+	struct lx_sysinfo sil;
+	int i;
+
+	if (syscall(SYS_brand, B_IKE_SYSCALL + LX_EMUL_sysinfo, &sil) != 0)
+		return (-errno);
+
+	si.si_uptime = sil.si_uptime;
+
+	for (i = 0; i < 3; i++) {
+		if ((sil.si_loads[i]) > 0x7fffffff)
+			si.si_loads[i] = 0x7fffffff;
+		else
+			si.si_loads[i] = sil.si_loads[i];
+	}
+
+	si.si_procs = sil.si_procs;
+	si.si_totalram = sil.si_totalram;
+	si.si_freeram = sil.si_freeram;
+	si.si_totalswap = sil.si_totalswap;
+	si.si_freeswap = sil.si_freeswap;
+	si.si_mem_unit = sil.si_mem_unit;
+
+	si.si_bufferram = sil.si_bufferram;
+	si.si_sharedram = sil.si_sharedram;
+
+	si.si_totalhigh = sil.si_totalhigh;
+	si.si_freehigh = sil.si_freehigh;
+
+	if (uucopy(&si, sip, sizeof (si)) != 0)
+		return (-errno);
+
+	return (0);
+}
+
 /*
  * The following are pass-through functions but we need to return the correct
  * long so that the errno propagates back to the Linux code correctly.
@@ -767,6 +840,28 @@ lx_fchmod(int fildes, mode_t mode)
 
 	r = fchmod(fildes, mode);
 	return ((r == -1) ? -errno : r);
+}
+
+/*
+ * We support neither the second argument (NUMA node), nor the third (obsolete
+ * pre-2.6.24 caching functionality which was ultimately broken).
+ */
+long
+lx_getcpu(unsigned int *cpu, uintptr_t p2, uintptr_t p3)
+{
+	psinfo_t psinfo;
+	int procfd;
+	unsigned int curcpu;
+
+	if ((procfd = open("/native/proc/self/psinfo", O_RDONLY)) == -1)
+		return (-errno);
+
+	if (read(procfd, &psinfo, sizeof (psinfo_t)) == -1)
+		return (-errno);
+
+	curcpu = psinfo.pr_lwp.pr_onpro;
+
+	return ((uucopy(&curcpu, cpu, sizeof (curcpu)) != 0) ? -errno : 0);
 }
 
 long
@@ -999,5 +1094,16 @@ lx_yield(void)
 {
 
 	yield();
+	return (0);
+}
+
+long
+lx_vhangup(void)
+{
+	if (geteuid() != 0)
+		return (-EPERM);
+
+	vhangup();
+
 	return (0);
 }

@@ -107,7 +107,7 @@ struct brand_ops {
 	void	(*b_init_brand_data)(zone_t *);
 	void	(*b_free_brand_data)(zone_t *);
 	int	(*b_brandsys)(int, int64_t *, uintptr_t, uintptr_t, uintptr_t,
-		uintptr_t, uintptr_t, uintptr_t);
+		uintptr_t, uintptr_t);
 	void	(*b_setbrand)(struct proc *);
 	int	(*b_getattr)(zone_t *, int, void *, size_t *);
 	int	(*b_setattr)(zone_t *, int, void *, size_t);
@@ -131,6 +131,7 @@ struct brand_ops {
 	boolean_t (*b_wait_filter)(proc_t *, proc_t *);
 	boolean_t (*b_native_exec)(uint8_t, const char **);
 	void (*b_ptrace_exectrap)(proc_t *);
+	uint32_t (*b_map32limit)(proc_t *);
 };
 
 /*

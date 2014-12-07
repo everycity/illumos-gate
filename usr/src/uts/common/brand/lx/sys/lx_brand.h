@@ -69,7 +69,7 @@ extern "C" {
 #define	LX_NSYSCALLS		352
 
 /* The number of In-Kernel Emulation functions */
-#define	LX_N_IKE_FUNCS		27
+#define	LX_N_IKE_FUNCS		29
 
 /*
  * brand(2) subcommands
@@ -90,6 +90,7 @@ extern "C" {
 #define	B_CLR_NTV_SYSC_FLAG	138
 #define	B_SIGNAL_RETURN		139
 #define	B_UNWIND_NTV_SYSC_FLAG	140
+#define	B_EXIT_AS_SIG		141
 
 #define	B_IKE_SYSCALL		192
 

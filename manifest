@@ -2389,6 +2389,7 @@ d usr/ccs/bin 0755 root bin
 d usr/ccs/bin/amd64 0755 root bin
 s usr/ccs/bin/amd64/ld=../../../bin/amd64/ld
 s usr/ccs/bin/ar=../../bin/ar
+s usr/ccs/bin/dump=../../bin/dump
 s usr/ccs/bin/ld=../../bin/ld
 s usr/ccs/bin/m4=../../bin/m4
 s usr/ccs/bin/regcmp=../../bin/regcmp
@@ -5050,6 +5051,7 @@ f usr/lib/brand/lx/ld/64/ld.config 0755 root root
 f usr/lib/brand/lx/etc_default_nfs 0444 root root
 f usr/lib/brand/lx/etc_netconfig 0444 root root
 f usr/lib/brand/lx/ifconfig 0755 root root
+f usr/lib/brand/lx/ltp_skiplist 0444 root root
 f usr/lib/brand/lx/lx_boot 0755 root root
 f usr/lib/brand/lx/lx_boot_zone_ubuntu 0755 root root
 f usr/lib/brand/lx/lx_isaexec_wrapper 0755 root root
@@ -12417,8 +12419,11 @@ f usr/share/man/man2/yield.2 0444 root bin
 d usr/share/man/man3 0755 root bin
 f usr/share/man/man3/Intro.3 0444 root bin
 f usr/share/man/man3/hosts_access.3 0444 root bin
+s usr/share/man/man3/hosts_ctl.3=hosts_access.3
 s usr/share/man/man3/intro.3=Intro.3
 s usr/share/man/man3/libwrap.3=hosts_access.3
+s usr/share/man/man3/request_init.3=hosts_access.3
+s usr/share/man/man3/request_set.3=hosts_access.3
 d usr/share/man/man3bsm 0755 root bin
 s usr/share/man/man3bsm/au_close.3bsm=au_open.3bsm
 f usr/share/man/man3bsm/au_open.3bsm 0444 root bin
@@ -13617,22 +13622,23 @@ s usr/share/man/man3c/uconv_u32tou16.3c=uconv_u16tou32.3c
 s usr/share/man/man3c/uconv_u32tou8.3c=uconv_u16tou32.3c
 s usr/share/man/man3c/uconv_u8tou16.3c=uconv_u16tou32.3c
 s usr/share/man/man3c/uconv_u8tou32.3c=uconv_u16tou32.3c
-s usr/share/man/man3c/ucred_free.3c=ucred_get.3c
-f usr/share/man/man3c/ucred_get.3c 0444 root bin
-s usr/share/man/man3c/ucred_getegid.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_geteuid.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getgroups.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getlabel.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getpflags.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getpid.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getprivset.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getprojid.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getrgid.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getruid.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getsgid.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getsuid.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_getzoneid.3c=ucred_get.3c
-s usr/share/man/man3c/ucred_size.3c=ucred_get.3c
+f usr/share/man/man3c/ucred.3c 0444 root bin
+s usr/share/man/man3c/ucred_free.3c=ucred.3c
+s usr/share/man/man3c/ucred_get.3c=ucred.3c
+s usr/share/man/man3c/ucred_getegid.3c=ucred.3c
+s usr/share/man/man3c/ucred_geteuid.3c=ucred.3c
+s usr/share/man/man3c/ucred_getgroups.3c=ucred.3c
+s usr/share/man/man3c/ucred_getlabel.3c=ucred.3c
+s usr/share/man/man3c/ucred_getpflags.3c=ucred.3c
+s usr/share/man/man3c/ucred_getpid.3c=ucred.3c
+s usr/share/man/man3c/ucred_getprivset.3c=ucred.3c
+s usr/share/man/man3c/ucred_getprojid.3c=ucred.3c
+s usr/share/man/man3c/ucred_getrgid.3c=ucred.3c
+s usr/share/man/man3c/ucred_getruid.3c=ucred.3c
+s usr/share/man/man3c/ucred_getsgid.3c=ucred.3c
+s usr/share/man/man3c/ucred_getsuid.3c=ucred.3c
+s usr/share/man/man3c/ucred_getzoneid.3c=ucred.3c
+s usr/share/man/man3c/ucred_size.3c=ucred.3c
 s usr/share/man/man3c/ulckpwdf.3c=lckpwdf.3c
 s usr/share/man/man3c/ulltostr.3c=strtol.3c
 f usr/share/man/man3c/ungetc.3c 0444 root bin
@@ -17232,6 +17238,13 @@ s usr/share/man/man3socket/setservent.3socket=getservbyname.3socket
 s usr/share/man/man3socket/setsockopt.3socket=getsockopt.3socket
 s usr/share/man/man3socket/setsourcefilter.3socket=getsourcefilter.3socket
 f usr/share/man/man3socket/shutdown.3socket 0444 root bin
+f usr/share/man/man3socket/sockaddr.3socket 0444 root bin
+s usr/share/man/man3socket/sockaddr_dl.3socket=sockaddr.3socket
+s usr/share/man/man3socket/sockaddr_in.3socket=sockaddr.3socket
+s usr/share/man/man3socket/sockaddr_in6.3socket=sockaddr.3socket
+s usr/share/man/man3socket/sockaddr_ll.3socket=sockaddr.3socket
+s usr/share/man/man3socket/sockaddr_storage.3socket=sockaddr.3socket
+s usr/share/man/man3socket/sockaddr_un.3socket=sockaddr.3socket
 f usr/share/man/man3socket/socket.3socket 0444 root bin
 f usr/share/man/man3socket/socketpair.3socket 0444 root bin
 f usr/share/man/man3socket/spray.3socket 0444 root bin

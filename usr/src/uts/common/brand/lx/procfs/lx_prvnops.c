@@ -132,6 +132,7 @@ static void lxpr_read_meminfo(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_mounts(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_partitions(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_stat(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_swaps(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_uptime(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_version(lxpr_node_t *, lxpr_uiobuf_t *);
 
@@ -226,6 +227,7 @@ static lxpr_dirent_t lx_procdir[] = {
 	{ LXPR_PARTITIONS,	"partitions" },
 	{ LXPR_SELF,		"self" },
 	{ LXPR_STAT,		"stat" },
+	{ LXPR_SWAPS,		"swaps" },
 	{ LXPR_SYSDIR,		"sys" },
 	{ LXPR_UPTIME,		"uptime" },
 	{ LXPR_VERSION,		"version" }
@@ -490,6 +492,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_partitions,		/* /proc/partitions	*/
 	lxpr_read_invalid,		/* /proc/self		*/
 	lxpr_read_stat,			/* /proc/stat		*/
+	lxpr_read_swaps,		/* /proc/swaps		*/
 	lxpr_read_invalid,		/* /proc/sys		*/
 	lxpr_read_invalid,		/* /proc/sys/fs		*/
 	lxpr_read_invalid,		/* /proc/sys/fs/inotify	*/
@@ -563,6 +566,7 @@ static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/partitions	*/
 	lxpr_lookup_not_a_dir,		/* /proc/self		*/
 	lxpr_lookup_not_a_dir,		/* /proc/stat		*/
+	lxpr_lookup_not_a_dir,		/* /proc/swaps		*/
 	lxpr_lookup_sysdir,		/* /proc/sys		*/
 	lxpr_lookup_sys_fsdir,		/* /proc/sys/fs		*/
 	lxpr_lookup_sys_fs_inotifydir,	/* /proc/sys/fs/inotify	*/
@@ -636,6 +640,7 @@ static int (*lxpr_readdir_function[LXPR_NFILES])() = {
 	lxpr_readdir_not_a_dir,		/* /proc/partitions	*/
 	lxpr_readdir_not_a_dir,		/* /proc/self		*/
 	lxpr_readdir_not_a_dir,		/* /proc/stat		*/
+	lxpr_readdir_not_a_dir,		/* /proc/swaps		*/
 	lxpr_readdir_sysdir,		/* /proc/sys		*/
 	lxpr_readdir_sys_fsdir,		/* /proc/sys/fs		*/
 	lxpr_readdir_sys_fs_inotifydir,	/* /proc/sys/fs/inotify	*/
@@ -855,11 +860,11 @@ lxpr_read_pid_maps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	char *buf;
 	int buflen = MAXPATHLEN;
 	struct print_data {
-		caddr_t saddr;
-		caddr_t eaddr;
+		uintptr_t saddr;
+		uintptr_t eaddr;
 		int type;
 		char prot[5];
-		uint32_t offset;
+		uintptr_t offset;
 		vnode_t *vp;
 		struct print_data *next;
 	} *print_head = NULL;
@@ -891,8 +896,8 @@ lxpr_read_pid_maps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 		pbuf = kmem_alloc(sizeof (*pbuf), KM_SLEEP);
 
-		pbuf->saddr = seg->s_base;
-		pbuf->eaddr = seg->s_base+seg->s_size;
+		pbuf->saddr = (uintptr_t)seg->s_base;
+		pbuf->eaddr = pbuf->saddr + seg->s_size;
 		pbuf->type = SEGOP_GETTYPE(seg, seg->s_base);
 
 		/*
@@ -917,7 +922,7 @@ lxpr_read_pid_maps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 			pbuf->vp = NULL;
 		}
 
-		pbuf->offset = (uint32_t)SEGOP_GETOFFSET(seg, pbuf->saddr);
+		pbuf->offset = SEGOP_GETOFFSET(seg, (caddr_t)pbuf->saddr);
 
 		pbuf->next = NULL;
 		*print_tail = pbuf;
@@ -952,16 +957,17 @@ lxpr_read_pid_maps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 			VN_RELE(pbuf->vp);
 		}
 
-		if (*buf != '\0') {
+		if (p->p_model == DATAMODEL_LP64) {
 			lxpr_uiobuf_printf(uiobuf,
-			    "%08x-%08x %s %08x %02d:%03d %lld %s\n",
+			    "%016llx-%16llx %s %016llx %02d:%03d %lld%s%s\n",
 			    pbuf->saddr, pbuf->eaddr, pbuf->prot, pbuf->offset,
-			    maj, min, inode, buf);
+			    maj, min, inode, *buf != '\0' ? " " : "", buf);
 		} else {
 			lxpr_uiobuf_printf(uiobuf,
-			    "%08x-%08x %s %08x %02d:%03d %lld\n",
-			    pbuf->saddr, pbuf->eaddr, pbuf->prot, pbuf->offset,
-			    maj, min, inode);
+			    "%08x-%08x %s %08x %02d:%03d %lld%s%s\n",
+			    (uint32_t)pbuf->saddr, (uint32_t)pbuf->eaddr,
+			    pbuf->prot, (uint32_t)pbuf->offset, maj, min,
+			    inode, *buf != '\0' ? " " : "", buf);
 		}
 
 		pbuf_next = pbuf->next;
@@ -1801,9 +1807,6 @@ lxpr_read_meminfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	}
 
 	lxpr_uiobuf_printf(uiobuf,
-	    "        total:     used:    free:  shared: buffers:  cached:\n"
-	    "Mem:  %8lu %8lu %8lu %8u %8u %8u\n"
-	    "Swap: %8lu %8lu %8lu\n"
 	    "MemTotal:  %8lu kB\n"
 	    "MemFree:   %8lu kB\n"
 	    "MemShared: %8u kB\n"
@@ -1818,8 +1821,6 @@ lxpr_read_meminfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	    "LowFree:   %8u kB\n"
 	    "SwapTotal: %8lu kB\n"
 	    "SwapFree:  %8lu kB\n",
-	    total_mem, total_mem - free_mem, free_mem, 0, 0, 0,
-	    total_swap, used_swap, total_swap - used_swap,
 	    btok(total_mem),				/* MemTotal */
 	    btok(free_mem),				/* MemFree */
 	    0,						/* MemShared */
@@ -2195,6 +2196,21 @@ lxpr_read_stat(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		    boot_time,
 		    forks_cum);
 	}
+}
+
+/*
+ * lxpr_read_swaps():
+ *
+ * We don't support swap files or partitions, so just provide a dummy file with
+ * the necessary header.
+ */
+/* ARGSUSED */
+static void
+lxpr_read_swaps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	lxpr_uiobuf_printf(uiobuf,
+	    "Filename                                "
+	    "Type            Size    Used    Priority\n");
 }
 
 /*

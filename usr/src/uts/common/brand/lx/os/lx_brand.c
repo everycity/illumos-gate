@@ -45,6 +45,7 @@
 #include <sys/lx_pid.h>
 #include <sys/lx_futex.h>
 #include <sys/lx_brand.h>
+#include <sys/param.h>
 #include <sys/termios.h>
 #include <sys/sunddi.h>
 #include <sys/ddi.h>
@@ -70,7 +71,7 @@ void	lx_setbrand(proc_t *);
 int	lx_getattr(zone_t *, int, void *, size_t *);
 int	lx_setattr(zone_t *, int, void *, size_t);
 int	lx_brandsys(int, int64_t *, uintptr_t, uintptr_t, uintptr_t,
-		uintptr_t, uintptr_t, uintptr_t);
+		uintptr_t, uintptr_t);
 void	lx_set_kern_version(zone_t *, char *);
 void	lx_copy_procdata(proc_t *, proc_t *);
 
@@ -89,6 +90,9 @@ extern boolean_t lx_wait_filter(proc_t *, proc_t *);
 extern greg_t lx_fixsegreg(greg_t, model_t);
 extern int lx_sched_affinity(int, uintptr_t, int, uintptr_t, int64_t *);
 
+extern void lx_ioctl_init();
+extern void lx_ioctl_fini();
+
 int lx_systrace_brand_enabled;
 
 lx_systrace_f *lx_systrace_entry_ptr;
@@ -102,6 +106,7 @@ static int lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 
 static boolean_t lx_native_exec(uint8_t, const char **);
 static void lx_ptrace_exectrap(proc_t *);
+static uint32_t lx_map32limit(proc_t *);
 
 /* lx brand */
 struct brand_ops lx_brops = {
@@ -127,7 +132,8 @@ struct brand_ops lx_brops = {
 	lx_exit_with_sig,
 	lx_wait_filter,
 	lx_native_exec,
-	lx_ptrace_exectrap
+	lx_ptrace_exectrap,
+	lx_map32limit
 };
 
 struct brand_mach_ops lx_mops = {
@@ -185,6 +191,15 @@ lx_proc_exit(proc_t *p, klwp_t *lwp)
 	 */
 	if (lwp != NULL)
 		lx_exitlwp(lwp);
+
+	/*
+	 * The call path here is:
+	 *    proc_exit -> brand_clearbrand -> b_proc_exit
+	 * and then brand_clearbrand will set p_brand to be the native brand.
+	 * We are done with our brand data but we don't free it here since
+	 * that is done for us by proc_exit due to the fact that we have a
+	 * b_exit_with_sig handler setup.
+	 */
 	p->p_exit_data = sig;
 }
 
@@ -481,6 +496,23 @@ lx_ptrace_exectrap(proc_t *p)
 	}
 }
 
+uint32_t
+lx_map32limit(proc_t *p)
+{
+	/*
+	 * To be bug-for-bug compatible with Linux, we have MAP_32BIT only
+	 * allow mappings in the first 31 bits.  This was a nuance in the
+	 * original Linux implementation circa 2002, and applications have
+	 * come to depend on its behavior.
+	 *
+	 * This is only relevant for 64-bit processes.
+	 */
+	if (p->p_model == DATAMODEL_LP64)
+		return (1 << 31);
+
+	return ((uint32_t)USERLIMIT32);
+}
+
 void
 lx_brand_systrace_enable(void)
 {
@@ -544,39 +576,33 @@ lx_psig_to_proc(proc_t *p, kthread_t *t, int sig)
 #ifdef DEBUG
 	/*
 	 * Debug check to see if we have the correct fsbase.
+	 *
+	 * Note that it is not guaranteed that our %fsbase is loaded (i.e.
+	 * rdmsr(MSR_AMD_FSBASE) won't necessarily return our expected fsbase)
+	 * when this function runs. While it is usually loaded, it's possible
+	 * to be in this function via the following sequence:
+	 *    we go off-cpu in the kernel
+	 *    another process runs in user-land and its fsbase gets loaded
+	 *    we go on-cpu to run and post a signal, but since we haven't run
+	 *	in user-land yet, our fsbase has not yet been loaded by
+	 *	update_sregs.
 	 */
-	ulong_t curr_base = rdmsr(MSR_AMD_FSBASE);
-
-	if (curr_base != 0) {
-		if (lwpd->br_ntv_syscall == 0 && lwpd->br_lx_fsbase != 0) {
-			/* should have Linux fsbase */
-			if (lwpd->br_lx_fsbase != curr_base) {
-				DTRACE_PROBE2(brand__lx__psig__lx__fsb,
-				    uintptr_t, lwpd->br_lx_fsbase,
-				    uintptr_t, curr_base);
-			}
-
-			if (lwpd->br_lx_fsbase != pcb->pcb_fsbase) {
-				DTRACE_PROBE2(brand__lx__psig__lx__pcb,
-				    uintptr_t, lwpd->br_lx_fsbase,
-				    uintptr_t, pcb->pcb_fsbase);
-			}
-
+	if (lwpd->br_ntv_syscall == 0 && lwpd->br_lx_fsbase != 0) {
+		/* should have Linux fsbase */
+		if (lwpd->br_lx_fsbase != pcb->pcb_fsbase) {
+			DTRACE_PROBE2(brand__lx__psig__lx__pcb,
+			    uintptr_t, lwpd->br_lx_fsbase,
+			    uintptr_t, pcb->pcb_fsbase);
 		}
 
-		if (lwpd->br_ntv_syscall == 1 && lwpd->br_ntv_fsbase != 0) {
-			/* should have Illumos fsbase */
-			if (lwpd->br_ntv_fsbase != curr_base) {
-				DTRACE_PROBE2(brand__lx__psig__ntv__fsb,
-				    uintptr_t, lwpd->br_ntv_fsbase,
-				    uintptr_t, curr_base);
-			}
+	}
 
-			if (lwpd->br_ntv_fsbase != pcb->pcb_fsbase) {
-				DTRACE_PROBE2(brand__lx__psig__ntv__pcb,
-				    uintptr_t, lwpd->br_ntv_fsbase,
-				    uintptr_t, pcb->pcb_fsbase);
-			}
+	if (lwpd->br_ntv_syscall == 1 && lwpd->br_ntv_fsbase != 0) {
+		/* should have Illumos fsbase */
+		if (lwpd->br_ntv_fsbase != pcb->pcb_fsbase) {
+			DTRACE_PROBE2(brand__lx__psig__ntv__pcb,
+			    uintptr_t, lwpd->br_ntv_fsbase,
+			    uintptr_t, pcb->pcb_fsbase);
 		}
 	}
 #endif
@@ -602,7 +628,6 @@ lx_psig_to_proc(proc_t *p, kthread_t *t, int sig)
 		 * code in lx_brandsys().
 		 */
 		pcb->pcb_fsbase = lwpd->br_ntv_fsbase;
-		wrmsr(MSR_AMD_FSBASE, lwpd->br_ntv_fsbase);
 
 		/* Ensure that we go out via update_sregs */
 		pcb->pcb_rupdate = 1;
@@ -650,7 +675,7 @@ lx_unsupported(char *dmsg)
  */
 int
 lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
-    uintptr_t arg3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6)
+    uintptr_t arg3, uintptr_t arg4, uintptr_t arg5)
 {
 	kthread_t *t = curthread;
 	proc_t *p = ttoproc(t);
@@ -661,9 +686,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 	int error;
 	lx_brand_registration_t reg;
 	lx_lwp_data_t *lwpd;
-#if defined(__amd64) && defined(DEBUG)
-	ulong_t curr_base;
-#endif
 
 	/*
 	 * There is one operation that is suppored for non-branded
@@ -806,17 +828,10 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 	/*
 	 * The B_TRUSS_POINT subcommand is used so that we can make a no-op
 	 * syscall for debugging purposes (dtracing) from within the user-level
-	 * emulation. Enhanced in the lx brand to allow probing of fsbase.
+	 * emulation.
 	 */
 	case B_TRUSS_POINT:
-		DTRACE_PROBE1(brand__lx__rd__fsbase,
-		    uintptr_t, rdmsr(MSR_AMD_FSBASE));
-#if defined(__amd64)
-		lwpd = ttolxlwp(curthread);
-		*rval = lwpd->br_ntv_fsbase;
-#else
 		*rval = 0;
-#endif
 		return (0);
 
 	case B_LPID_TO_SPAIR:
@@ -1000,36 +1015,28 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		lwpd = ttolxlwp(curthread);
 		lwpd->br_ntv_syscall = 0;
 
-#ifdef DEBUG
-		/*
-		 * Debug check to see if we have the native fsbase. We should
-		 * since this syscall came from native code.
-		 */
-		curr_base = rdmsr(MSR_AMD_FSBASE);
-
-		if (curr_base != 0 && lwpd->br_ntv_fsbase != 0 &&
-		    lwpd->br_ntv_fsbase != curr_base) {
-			DTRACE_PROBE2(brand__lx__clr__ntv__fsb,
-			    uintptr_t, lwpd->br_ntv_fsbase,
-			    uintptr_t, curr_base);
-		}
-#endif
-
 		/*
 		 * If Linux fsbase has been set, restore it. The user-level
 		 * code only ever calls this in the 64-bit library.
 		 *
-		 * When we use wrmsr to set the correct fsbase here, and in
-		 * B_SIGNAL_RETURN, we also make sure we save the correct fsbase
-		 * in the pcb so that if we service an interrupt we will restore
-		 * the correct fsbase in update_sregs().
+		 * Note that it is not guaranteed that our %fsbase is loaded
+		 * (i.e. rdmsr(MSR_AMD_FSBASE) won't necessarily return our
+		 * expected fsbase) when this block runs. While it is usually
+		 * loaded, it's possible to be in this function via the
+		 * following sequence:
+		 *    we make the brandsys syscall and go off-cpu on entering
+		 *	the kernel
+		 *    another process runs in user-land and its fsbase gets
+		 *	loaded
+		 *    we go on-cpu to finish the syscall but since we haven't
+		 *	run again in user-land yet, our fsbase has not yet been
+		 *	reloaded by update_sregs
 		 */
 		if (lwpd->br_lx_fsbase != 0) {
 			klwp_t *lwp = ttolwp(t);
 			pcb_t *pcb = &lwp->lwp_pcb;
 
 			pcb->pcb_fsbase = lwpd->br_lx_fsbase;
-			wrmsr(MSR_AMD_FSBASE, lwpd->br_lx_fsbase);
 
 			/* Ensure that we go out via update_sregs */
 			pcb->pcb_rupdate = 1;
@@ -1053,30 +1060,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		lwpd->br_ntv_syscall = lwpd->br_scms & 0x1;
 		/* "pop" this value from the "stack" */
 		lwpd->br_scms >>= 1;
-
-#ifdef DEBUG
-		/*
-		 * Debug check to see if we have the native fsbase. We should
-		 * since this syscall came from native code.
-		 */
-		curr_base = rdmsr(MSR_AMD_FSBASE);
-
-		if (curr_base != 0 && lwpd->br_ntv_fsbase != 0) {
-			klwp_t *lwp = ttolwp(t);
-			pcb_t *pcb = &lwp->lwp_pcb;
-
-			if (lwpd->br_ntv_fsbase != curr_base) {
-				DTRACE_PROBE2(brand__lx__sigret__ntv__fsb,
-				    uintptr_t, lwpd->br_ntv_fsbase,
-				    uintptr_t, curr_base);
-			}
-			if (lwpd->br_ntv_fsbase != pcb->pcb_fsbase) {
-				DTRACE_PROBE2(brand__lx__sigret__ntv__pcb,
-				    uintptr_t, lwpd->br_ntv_fsbase,
-				    uintptr_t, pcb->pcb_fsbase);
-			}
-		}
-#endif
 
 		/*
 		 * If setting the mode to lx, make sure we fix up the context
@@ -1130,11 +1113,43 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 #endif
 		return (0);
 
+	case B_EXIT_AS_SIG:
+		exit(CLD_KILLED, (int)arg1);
+		/* NOTREACHED */
+		break;
+
+	case B_IKE_SYSCALL:
+		if (arg1 > LX_N_IKE_FUNCS)
+			return (EINVAL);
+
+		if (get_udatamodel() == DATAMODEL_NATIVE) {
+			uintptr_t a[6];
+
+			if (copyin((void *)arg2, a, sizeof (a)) != 0)
+				return (EFAULT);
+
+			*rval = lx_emulate_syscall(arg1, a[0], a[1],
+			    a[2], a[3], a[4], a[5]);
+#if defined(_LP64)
+		} else {
+			/* 32-bit userland on 64-bit kernel */
+			uint32_t a[6];
+
+			if (copyin((void *)arg2, a, sizeof (a)) != 0)
+				return (EFAULT);
+
+			*rval = lx_emulate_syscall(arg1, a[0], a[1],
+			    a[2], a[3], a[4], a[5]);
+#endif
+		}
+
+		return (0);
+
 	default:
 		ike_call = cmd - B_IKE_SYSCALL;
 		if (ike_call > 0 && ike_call <= LX_N_IKE_FUNCS) {
 			*rval = lx_emulate_syscall(ike_call, arg1, arg2,
-			    arg3, arg4, arg5, arg6);
+			    arg3, arg4, arg5, 0xbadbeef);
 			return (0);
 		}
 	}
@@ -1576,8 +1591,12 @@ _init(void)
 	/* pid/tid conversion hash tables */
 	lx_pid_init();
 
+	/* for lx_ioctl() */
+	lx_ioctl_init();
+
 	/* for lx_futex() */
 	lx_futex_init();
+
 
 	err = mod_install(&modlinkage);
 	if (err != 0) {
@@ -1591,6 +1610,7 @@ _init(void)
 		 * thus no way for these data structures to be modified.
 		 */
 		lx_pid_fini();
+		lx_ioctl_fini();
 		if (lx_futex_fini())
 			panic("lx brand module cannot be loaded or unloaded.");
 	}
@@ -1617,6 +1637,7 @@ _fini(void)
 		return (EBUSY);
 
 	lx_pid_fini();
+	lx_ioctl_fini();
 
 	if ((err = lx_futex_fini()) != 0)
 		goto done;
