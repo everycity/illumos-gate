@@ -1005,6 +1005,8 @@ DEVPOLL_OBJS += devpoll.o
 
 DEVPOOL_OBJS += devpool.o
 
+EVENTFD_OBJS +=	eventfd.o
+
 I8042_OBJS +=	i8042.o
 
 INOTIFY_OBJS +=	inotify.o
@@ -1080,6 +1082,8 @@ QLC_FW_8100_OBJS += ql_fw_8100.o
 QLGE_OBJS += qlge.o qlge_dbg.o qlge_flash.o qlge_fm.o qlge_gld.o qlge_mpi.o
 
 ZCONS_OBJS += zcons.o
+
+ZFD_OBJS += zfd.o
 
 NV_SATA_OBJS += nv_sata.o
 

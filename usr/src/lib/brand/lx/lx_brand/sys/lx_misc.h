@@ -109,6 +109,8 @@ extern boolean_t lx_is_rpm;
  * Constants for prctl().  We only include the ones here that we actually
  * support; everything else will be ENOSYS.
  */
+#define	LX_PR_GET_DUMPABLE	3
+#define	LX_PR_SET_DUMPABLE	4
 #define	LX_PR_SET_KEEPCAPS	8
 #define	LX_PR_SET_NAME		15
 
@@ -167,6 +169,7 @@ extern char *lx_fd_to_path(int fd, char *buf, int buf_size);
 extern int lx_lpid_to_spair(pid_t, pid_t *, lwpid_t *);
 extern int lx_lpid_to_spid(pid_t, pid_t *);
 
+extern void lx_ptrace_init();
 extern int lx_ptrace_wait(siginfo_t *);
 extern void lx_ptrace_fork(void);
 extern void lx_ptrace_stop_if_option(int);

@@ -42,6 +42,7 @@
 #include <sys/lx_impl.h>
 #include <sys/machbrand.h>
 #include <sys/lx_syscalls.h>
+#include <sys/lx_misc.h>
 #include <sys/lx_pid.h>
 #include <sys/lx_futex.h>
 #include <sys/lx_brand.h>
@@ -77,17 +78,8 @@ void	lx_copy_procdata(proc_t *, proc_t *);
 
 extern int getsetcontext(int, void *);
 
-extern void lx_setrval(klwp_t *, int, int);
 extern void lx_proc_exit(proc_t *, klwp_t *);
-extern void lx_exec();
-extern int lx_initlwp(klwp_t *);
-extern void lx_forklwp(klwp_t *, klwp_t *);
-extern void lx_exitlwp(klwp_t *);
-extern void lx_freelwp(klwp_t *);
-extern void lx_exit_with_sig(proc_t *, sigqueue_t *, void *);
 static void lx_psig_to_proc(proc_t *, kthread_t *, int);
-extern boolean_t lx_wait_filter(proc_t *, proc_t *);
-extern greg_t lx_fixsegreg(greg_t, model_t);
 extern int lx_sched_affinity(int, uintptr_t, int, uintptr_t, int64_t *);
 
 extern void lx_ioctl_init();
@@ -99,6 +91,15 @@ lx_systrace_f *lx_systrace_entry_ptr;
 lx_systrace_f *lx_systrace_return_ptr;
 
 static int lx_systrace_enabled;
+
+/*
+ * While this is effectively mmu.hole_start - PAGESIZE, we don't particularly
+ * want an MMU dependency here (and should there be a microprocessor without
+ * a hole, we don't want to start allocating from the top of the VA range).
+ */
+#define	LX_MAXSTACK64	0x7ffffff00000
+
+uint64_t lx_maxstack64 = LX_MAXSTACK64;
 
 static int lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
     struct intpdata *idata, int level, long *execsz, int setid,
@@ -1272,6 +1273,22 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	 */
 	args->brandname = LX_BRANDNAME;
 	args->emulator = lib_path;
+
+#if defined(_LP64)
+	/*
+	 * To conform with the way Linux lays out the address space, we clamp
+	 * the stack to be the top of the lower region of the x86-64 canonical
+	 * form address space -- which has the side-effect of laying out the
+	 * entire address space in that lower region.  Note that this only
+	 * matters on 64-bit processes (this value will always be greater than
+	 * the size of a 32-bit address space) and doesn't actually affect
+	 * USERLIMIT:  if a Linux-branded processes wishes to map something
+	 * into the top half of the address space, it can do so -- but with
+	 * the user stack starting at the top of the bottom region, those high
+	 * virtual addresses won't be used unless explicitly directed.
+	 */
+	args->maxstack = lx_maxstack64;
+#endif
 
 	/*
 	 * We will first exec the brand library, then map in the linux

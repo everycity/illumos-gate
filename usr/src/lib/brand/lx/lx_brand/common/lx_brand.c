@@ -292,7 +292,7 @@ i_lx_msg(int fd, char *msg, va_list ap)
 		return;
 
 	/* if debugging is enabled, send this message to debug output */
-	if (lx_debug_enabled != 0)
+	if (LX_DEBUG_ISENABLED)
 		lx_debug(buf);
 
 	if (fd == 2) {
@@ -573,7 +573,7 @@ lx_emulate(lx_regs_t *rp)
 		goto out;
 	}
 
-	if (lx_debug_enabled != 0) {
+	if (LX_DEBUG_ISENABLED) {
 		const char *fmt = NULL;
 
 		switch (s->sy_narg) {
@@ -892,6 +892,8 @@ lx_init(int argc, char *argv[], char *envp[])
 
 	if (lx_statfs_init() != 0)
 		lx_err_fatal("failed to setup the statfs translator");
+
+	lx_ptrace_init();
 
 #if defined(_LP64)
 	vdso_hdr = map_vdso();
@@ -1375,13 +1377,13 @@ static struct lx_sysent sysents[] = {
 	{"epoll_pwait",	lx_epoll_pwait,		0,		5}, /* 281 */
 	{"signalfd",	NULL,			NOSYS_NULL,	0}, /* 282 */
 	{"timerfd_create", NULL,		NOSYS_NULL,	0}, /* 283 */
-	{"eventfd",	NULL,			NOSYS_NULL,	0}, /* 284 */
+	{"eventfd",	lx_eventfd,		0,		1}, /* 284 */
 	{"fallocate",	NULL,			NOSYS_NULL,	0}, /* 285 */
 	{"timerfd_settime", NULL,		NOSYS_NULL,	0}, /* 286 */
 	{"timerfd_gettime", NULL,		NOSYS_NULL,	0}, /* 287 */
 	{"accept4",	lx_accept4,		0,		4}, /* 288 */
 	{"signalfd4",	NULL,			NOSYS_NULL,	0}, /* 289 */
-	{"eventfd2",	NULL,			NOSYS_NULL,	0}, /* 290 */
+	{"eventfd2",	lx_eventfd2,		0,		2}, /* 290 */
 	{"epoll_create1", lx_epoll_create1,	0,		1}, /* 291 */
 	{"dup3",	lx_dup3,		0,		3}, /* 292 */
 	{"pipe2",	lx_pipe2,		0,		2}, /* 293 */
@@ -1741,12 +1743,12 @@ static struct lx_sysent sysents[] = {
 	{"utimensat",	lx_utimensat,	0,		4},	/* 320 */
 	{"signalfd",	NULL,		NOSYS_NULL,	0},	/* 321 */
 	{"timerfd_create", NULL,	NOSYS_NULL,	0},	/* 322 */
-	{"eventfd",	NULL,		NOSYS_NULL,	0},	/* 323 */
+	{"eventfd",	lx_eventfd,	0,		1},	/* 323 */
 	{"fallocate",	NULL,		NOSYS_NULL,	0},	/* 324 */
 	{"timerfd_settime", NULL,	NOSYS_NULL,	0},	/* 325 */
 	{"timerfd_gettime", NULL,	NOSYS_NULL,	0},	/* 326 */
 	{"signalfd4",	NULL,		NOSYS_NULL,	0},	/* 327 */
-	{"eventfd2",	NULL,		NOSYS_NULL,	0},	/* 328 */
+	{"eventfd2",	lx_eventfd2,	0,		2},	/* 328 */
 	{"epoll_create1", lx_epoll_create1, 0,		1},	/* 329 */
 	{"dup3",	lx_dup3,	0,		3},	/* 330 */
 	{"pipe2",	lx_pipe2,	0,		2},	/* 331 */

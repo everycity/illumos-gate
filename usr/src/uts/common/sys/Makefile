@@ -221,6 +221,7 @@ CHKHDRS=			\
 	ethernet.h		\
 	euc.h			\
 	eucioctl.h		\
+	eventfd.h		\
 	exacct.h		\
 	exacct_catalog.h	\
 	exacct_impl.h		\
@@ -658,6 +659,7 @@ CHKHDRS=			\
 	watchpoint.h		\
 	winlockio.h		\
 	zcons.h			\
+	zfd.h			\
 	zone.h			\
 	xti_inet.h		\
 	xti_osi.h		\

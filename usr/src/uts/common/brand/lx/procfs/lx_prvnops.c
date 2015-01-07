@@ -68,6 +68,12 @@
 #include <sys/param.h>
 #include <sys/utsname.h>
 #include <sys/rctl.h>
+#include <sys/kstat.h>
+#include <sys/lx_misc.h>
+#include <inet/ip.h>
+#include <inet/ip_ire.h>
+#include <inet/ip6.h>
+#include <inet/ip_if.h>
 
 /* Dependent on procfs */
 extern kthread_t *prchoose(proc_t *);
@@ -147,6 +153,7 @@ static void lxpr_read_pid_status(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_net_arp(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_net_dev(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_net_dev_mcast(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_net_if_inet6(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_net_igmp(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_net_ip_mr_cache(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_net_ip_mr_vif(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -295,6 +302,7 @@ static lxpr_dirent_t netdir[] = {
 	{ LXPR_NET_ARP,		"arp" },
 	{ LXPR_NET_DEV,		"dev" },
 	{ LXPR_NET_DEV_MCAST,	"dev_mcast" },
+	{ LXPR_NET_IF_INET6,	"if_inet6" },
 	{ LXPR_NET_IGMP,	"igmp" },
 	{ LXPR_NET_IP_MR_CACHE,	"ip_mr_cache" },
 	{ LXPR_NET_IP_MR_VIF,	"ip_mr_vif" },
@@ -474,6 +482,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_net_arp,		/* /proc/net/arp	*/
 	lxpr_read_net_dev,		/* /proc/net/dev	*/
 	lxpr_read_net_dev_mcast,	/* /proc/net/dev_mcast	*/
+	lxpr_read_net_if_inet6,		/* /proc/net/if_inet6	*/
 	lxpr_read_net_igmp,		/* /proc/net/igmp	*/
 	lxpr_read_net_ip_mr_cache,	/* /proc/net/ip_mr_cache */
 	lxpr_read_net_ip_mr_vif,	/* /proc/net/ip_mr_vif	*/
@@ -548,6 +557,7 @@ static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/net/arp	*/
 	lxpr_lookup_not_a_dir,		/* /proc/net/dev	*/
 	lxpr_lookup_not_a_dir,		/* /proc/net/dev_mcast	*/
+	lxpr_lookup_not_a_dir,		/* /proc/net/if_inet6	*/
 	lxpr_lookup_not_a_dir,		/* /proc/net/igmp	*/
 	lxpr_lookup_not_a_dir,		/* /proc/net/ip_mr_cache */
 	lxpr_lookup_not_a_dir,		/* /proc/net/ip_mr_vif	*/
@@ -622,6 +632,7 @@ static int (*lxpr_readdir_function[LXPR_NFILES])() = {
 	lxpr_readdir_not_a_dir,		/* /proc/net/arp	*/
 	lxpr_readdir_not_a_dir,		/* /proc/net/dev	*/
 	lxpr_readdir_not_a_dir,		/* /proc/net/dev_mcast	*/
+	lxpr_readdir_not_a_dir,		/* /proc/net/if_inet6	*/
 	lxpr_readdir_not_a_dir,		/* /proc/net/igmp	*/
 	lxpr_readdir_not_a_dir,		/* /proc/net/ip_mr_cache */
 	lxpr_readdir_not_a_dir,		/* /proc/net/ip_mr_vif	*/
@@ -1547,27 +1558,236 @@ lxpr_read_net_arp(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
 }
 
+struct lxpr_ifstat {
+	uint64_t rx_bytes;
+	uint64_t rx_packets;
+	uint64_t rx_errors;
+	uint64_t rx_drop;
+	uint64_t tx_bytes;
+	uint64_t tx_packets;
+	uint64_t tx_errors;
+	uint64_t tx_drop;
+	uint64_t collisions;
+	uint64_t rx_multicast;
+};
+
+static void *
+lxpr_kstat_read(kstat_t *kn, boolean_t byname, size_t *size, int *num)
+{
+	kstat_t *kp;
+	int i, nrec = 0;
+	size_t bufsize;
+	void *buf = NULL;
+
+	if (byname == B_TRUE)
+		kp = kstat_hold_byname(kn->ks_module, kn->ks_instance,
+		    kn->ks_name, getzoneid());
+	else
+		kp = kstat_hold_bykid(kn->ks_kid, getzoneid());
+	if (kp == NULL)
+		return (NULL);
+	if (kp->ks_flags & KSTAT_FLAG_INVALID) {
+		kstat_rele(kp);
+		return (NULL);
+	}
+
+	bufsize = kp->ks_data_size + 1;
+	kstat_rele(kp);
+
+	/*
+	 * The kstat in question is released so that kmem_alloc(KM_SLEEP) is
+	 * performed without it held.  After the alloc, the kstat is reacquired
+	 * and its size is checked again. If the buffer is no longer large
+	 * enough, the alloc and check are repeated up to three times.
+	 */
+	for (i = 0; i < 2; i++) {
+		buf = kmem_alloc(bufsize, KM_SLEEP);
+
+		/* Check if bufsize still appropriate */
+		if (byname == B_TRUE)
+			kp = kstat_hold_byname(kn->ks_module, kn->ks_instance,
+			    kn->ks_name, getzoneid());
+		else
+			kp = kstat_hold_bykid(kn->ks_kid, getzoneid());
+		if (kp == NULL || kp->ks_flags & KSTAT_FLAG_INVALID) {
+			if (kp != NULL)
+				kstat_rele(kp);
+			kmem_free(buf, bufsize);
+			return (NULL);
+		}
+		KSTAT_ENTER(kp);
+		(void) KSTAT_UPDATE(kp, KSTAT_READ);
+		if (bufsize < kp->ks_data_size) {
+			kmem_free(buf, bufsize);
+			bufsize = kp->ks_data_size + 1;
+			KSTAT_EXIT(kp);
+			kstat_rele(kp);
+			continue;
+		} else {
+			if (KSTAT_SNAPSHOT(kp, buf, KSTAT_READ) != 0) {
+				kmem_free(buf, bufsize);
+				buf = NULL;
+			}
+			nrec = kp->ks_ndata;
+			KSTAT_EXIT(kp);
+			kstat_rele(kp);
+			break;
+		}
+	}
+
+	if (buf != NULL) {
+		*size = bufsize;
+		*num = nrec;
+	}
+	return (buf);
+}
+
+static int
+lxpr_kstat_ifstat(kstat_t *kn, struct lxpr_ifstat *ifs)
+{
+	kstat_named_t *kp;
+	int i, num;
+	size_t size;
+
+	/*
+	 * Search by name instead of by kid since there's a small window to
+	 * race against kstats being added/removed.
+	 */
+	bzero(ifs, sizeof (*ifs));
+	kp = (kstat_named_t *)lxpr_kstat_read(kn, B_TRUE, &size, &num);
+	if (kp == NULL)
+		return (-1);
+	for (i = 0; i < num; i++) {
+		if (strncmp(kp[i].name, "rbytes64", KSTAT_STRLEN) == 0)
+			ifs->rx_bytes = kp[i].value.ui64;
+		else if (strncmp(kp[i].name, "ipackets64", KSTAT_STRLEN) == 0)
+			ifs->rx_packets = kp[i].value.ui64;
+		else if (strncmp(kp[i].name, "ierrors", KSTAT_STRLEN) == 0)
+			ifs->rx_errors = kp[i].value.ui32;
+		else if (strncmp(kp[i].name, "norcvbuf", KSTAT_STRLEN) == 0)
+			ifs->rx_drop = kp[i].value.ui32;
+		else if (strncmp(kp[i].name, "multircv", KSTAT_STRLEN) == 0)
+			ifs->rx_multicast = kp[i].value.ui32;
+		else if (strncmp(kp[i].name, "obytes64", KSTAT_STRLEN) == 0)
+			ifs->tx_bytes = kp[i].value.ui64;
+		else if (strncmp(kp[i].name, "opackets64", KSTAT_STRLEN) == 0)
+			ifs->tx_packets = kp[i].value.ui64;
+		else if (strncmp(kp[i].name, "oerrors", KSTAT_STRLEN) == 0)
+			ifs->tx_errors = kp[i].value.ui32;
+		else if (strncmp(kp[i].name, "noxmtbuf", KSTAT_STRLEN) == 0)
+			ifs->tx_drop = kp[i].value.ui32;
+		else if (strncmp(kp[i].name, "collisions", KSTAT_STRLEN) == 0)
+			ifs->collisions = kp[i].value.ui32;
+	}
+	kmem_free(kp, size);
+	return (0);
+}
+
 /* ARGSUSED */
 static void
 lxpr_read_net_dev(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
+	kstat_t *ksr;
+	kstat_t ks0;
+	int i, nidx;
+	size_t sidx;
+	struct lxpr_ifstat ifs;
+
 	lxpr_uiobuf_printf(uiobuf, "Inter-|   Receive                   "
 	    "                             |  Transmit\n");
 	lxpr_uiobuf_printf(uiobuf, " face |bytes    packets errs drop fifo"
 	    " frame compressed multicast|bytes    packets errs drop fifo"
 	    " colls carrier compressed\n");
 
-	/*
-	 * Data about each interface should go here, but that shouldn't be added
-	 * unless there is an lxproc reader that actually makes use of it (and
-	 * doesn't need anything else that we refuse to provide)...
-	 */
+	ks0.ks_kid = 0;
+	ksr = (kstat_t *)lxpr_kstat_read(&ks0, B_FALSE, &sidx, &nidx);
+	if (ksr == NULL)
+		return;
+
+	for (i = 1; i < nidx; i++) {
+		if (strncmp(ksr[i].ks_module, "link", KSTAT_STRLEN) == 0 ||
+		    strncmp(ksr[i].ks_module, "lo", KSTAT_STRLEN) == 0) {
+			if (lxpr_kstat_ifstat(&ksr[i], &ifs) != 0)
+				continue;
+
+			/* Overwriting the name is ok in the local snapshot */
+			lx_ifname_convert(ksr[i].ks_name, LX_IFNAME_FROMNATIVE);
+			lxpr_uiobuf_printf(uiobuf, "%6s: %7llu %7llu %4lu "
+			    "%4lu %4u %5u %10u %9lu %8llu %7llu %4lu %4lu %4u "
+			    "%5lu %7u %10u\n",
+			    ksr[i].ks_name,
+			    ifs.rx_bytes, ifs.rx_packets,
+			    ifs.rx_errors, ifs.rx_drop,
+			    0, 0, 0, ifs.rx_multicast,
+			    ifs.tx_bytes, ifs.tx_packets,
+			    ifs.tx_errors, ifs.tx_drop,
+			    0, ifs.collisions, 0, 0);
+		}
+	}
+
+	kmem_free(ksr, sidx);
 }
 
 /* ARGSUSED */
 static void
 lxpr_read_net_dev_mcast(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
+}
+
+static void
+lxpr_inet6_out(in6_addr_t addr, char buf[33])
+{
+	uint8_t *ip = addr.s6_addr;
+	char digits[] = "0123456789abcdef";
+	int i;
+	for (i = 0; i < 16; i++) {
+		buf[2 * i] = digits[ip[i] >> 4];
+		buf[2 * i + 1] = digits[ip[i] & 0xf];
+	}
+	buf[32] = '\0';
+}
+
+/* ARGSUSED */
+static void
+lxpr_read_net_if_inet6(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	netstack_t *ns;
+	ip_stack_t *ipst;
+	ill_t *ill;
+	ipif_t *ipif;
+	ill_walk_context_t	ctx;
+	char ifname[LIFNAMSIZ], ip6out[33];
+
+	ns = netstack_get_current();
+	if (ns == NULL)
+		return;
+	ipst = ns->netstack_ip;
+
+	rw_enter(&ipst->ips_ill_g_lock, RW_READER);
+	ill = ILL_START_WALK_V6(&ctx, ipst);
+
+	for (; ill != NULL; ill = ill_next(&ctx, ill)) {
+		for (ipif = ill->ill_ipif; ipif != NULL;
+		    ipif = ipif->ipif_next) {
+			uint_t index = ill->ill_phyint->phyint_ifindex;
+			int plen = ip_mask_to_plen_v6(&ipif->ipif_v6net_mask);
+			in6addr_scope_t scope = ip_addr_scope_v6(
+			    &ipif->ipif_v6lcl_addr);
+			/* Always report PERMANENT flag */
+			int flag = 0x80;
+
+			ipif_get_name(ipif, ifname, sizeof (ifname));
+			lx_ifname_convert(ifname, LX_IFNAME_FROMNATIVE);
+			lxpr_inet6_out(ipif->ipif_v6lcl_addr, ip6out);
+			/* Scope output is shifted on Linux */
+			scope = scope << 4;
+
+			lxpr_uiobuf_printf(uiobuf, "%32s %02x %02x %02x %02x"
+			    " %8s\n", ip6out, index, plen, scope, flag, ifname);
+		}
+	}
+	rw_exit(&ipst->ips_ill_g_lock);
+	netstack_rele(ns);
 }
 
 /* ARGSUSED */

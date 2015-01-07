@@ -48,6 +48,7 @@
 #include <sys/lx_thunk_server.h>
 #include <sys/lx_fcntl.h>
 #include <sys/inotify.h>
+#include <sys/eventfd.h>
 #include <thread.h>
 #include <unistd.h>
 #include <libintl.h>
@@ -600,6 +601,18 @@ lx_prctl(int option, uintptr_t arg2, uintptr_t arg3,
 	size_t psargslen = sizeof (psinfo.pr_psargs);
 	int fd;
 
+	if (option == LX_PR_GET_DUMPABLE) {
+		/* Indicate that process is always dumpable */
+		return (1);
+	}
+
+	if (option == LX_PR_SET_DUMPABLE) {
+		if (arg2 != 1 && arg2 != 0)
+			return (-EINVAL);
+		/* Lie about altering process dumpability */
+		return (0);
+	}
+
 	if (option == LX_PR_SET_KEEPCAPS) {
 		/*
 		 * The closest illumos analog to SET_KEEPCAPS is the PRIV_AWARE
@@ -1106,4 +1119,20 @@ lx_vhangup(void)
 	vhangup();
 
 	return (0);
+}
+
+long
+lx_eventfd(unsigned int initval)
+{
+	int r = eventfd(initval, 0);
+
+	return (r == -1 ? -errno : r);
+}
+
+long
+lx_eventfd2(unsigned int initval, int flags)
+{
+	int r = eventfd(initval, flags);
+
+	return (r == -1 ? -errno : r);
 }
