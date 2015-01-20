@@ -21,7 +21,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2014 Joyent, Inc.  All rights reserved.
+ * Copyright 2015 Joyent, Inc.  All rights reserved.
  */
 
 /*
@@ -77,6 +77,7 @@
 
 /* Dependent on procfs */
 extern kthread_t *prchoose(proc_t *);
+extern int prreadargv(proc_t *, char *, size_t, size_t *);
 
 #include "lx_proc.h"
 
@@ -191,6 +192,12 @@ static void lxpr_read_sys_kernel_threads_max(lxpr_node_t *, lxpr_uiobuf_t *);
 extern rctl_hndl_t rc_zone_msgmni;
 extern rctl_hndl_t rc_zone_shmmax;
 #define	FOURGB	4294967295
+
+/*
+ * The maximum length of the concatenation of argument vector strings we
+ * will return to the user via the branded procfs:
+ */
+int lxpr_maxargvlen = 4096;
 
 /*
  * The lx /proc vnode operations vector
@@ -761,33 +768,34 @@ lxpr_read_empty(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 }
 
 /*
- * lxpr_read_pid_cmdline():
- *
- * This is not precisely compatible with Linux: the Linux cmdline returns argv
- * with the correct separation using \0 between the arguments, but we cannot do
- * that without copying the real argv from the correct process context.  This
- * is too difficult to attempt so we pretend that the entire cmdline is just
- * argv[0]. This is good enough for ps and htop to display correctly, but might
- * cause some other things not to work correctly.
+ * lxpr_read_pid_cmdline(): read argument vector from process
  */
 static void
 lxpr_read_pid_cmdline(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
 	proc_t *p;
 	char *buf;
+	size_t asz = lxpr_maxargvlen, sz;
 
 	ASSERT(lxpnp->lxpr_type == LXPR_PID_CMDLINE);
+
+	buf = kmem_alloc(asz, KM_SLEEP);
 
 	p = lxpr_lock(lxpnp->lxpr_pid);
 	if (p == NULL) {
 		lxpr_uiobuf_seterr(uiobuf, EINVAL);
+		kmem_free(buf, asz);
 		return;
 	}
 
-	buf = PTOU(p)->u_argv != 0 ? PTOU(p)->u_psargs : PTOU(p)->u_comm;
+	if (prreadargv(p, buf, asz, &sz) != 0) {
+		lxpr_uiobuf_seterr(uiobuf, EINVAL);
+	} else {
+		lxpr_uiobuf_write(uiobuf, buf, sz);
+	}
 
-	lxpr_uiobuf_write(uiobuf, buf, strlen(buf) + 1);
 	lxpr_unlock(p);
+	kmem_free(buf, asz);
 }
 
 /*
@@ -1257,11 +1265,14 @@ lxpr_read_pid_status(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 	/*
 	 * Convert pid to the Linux default of 1 if we're the zone's init
-	 * process
+	 * process or if we're the zone's zsched the pid is 0.
 	 */
 	if (pid == curproc->p_zone->zone_proc_initpid) {
 		pid = 1;
 		ppid = 0;	/* parent pid for init is 0 */
+	} else if (pid == curproc->p_zone->zone_zsched->p_pid) {
+		pid = 0;	/* zsched is pid 0 */
+		ppid = 0;	/* parent pid for zsched is itself */
 	} else {
 		/*
 		 * Make sure not to reference parent PIDs that reside outside
@@ -1449,6 +1460,13 @@ lxpr_read_pid_stat(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		psgid = (gid_t)-1;	/* credential GID for init is -1 */
 		spid = 0;		/* session id for init is 0 */
 		psdev = 0;		/* session device for init is 0 */
+	} else if (pid == curproc->p_zone->zone_zsched->p_pid) {
+		pid = 0;		/* PID for zsched */
+		ppid = 0;		/* parent PID for zsched is 0 */
+		pgpid = 0;		/* process group for zsched is 0 */
+		psgid = (gid_t)-1;	/* credential GID for zsched is -1 */
+		spid = 0;		/* session id for zsched is 0 */
+		psdev = 0;		/* session device for zsched is 0 */
 	} else {
 		/*
 		 * Make sure not to reference parent PIDs that reside outside
@@ -3512,11 +3530,16 @@ lxpr_readdir_procdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 
 		/*
 		 * Convert pid to the Linux default of 1 if we're the zone's
-		 * init process, otherwise use the value from the proc
-		 * structure
+		 * init process, or 0 if zsched, otherwise use the value from
+		 * the proc structure
 		 */
-		pid = ((p->p_pid != curproc->p_zone->zone_proc_initpid) ?
-		    p->p_pid : 1);
+		if (p->p_pid == curproc->p_zone->zone_proc_initpid) {
+			pid = 1;
+		} else if (p->p_pid == curproc->p_zone->zone_zsched->p_pid) {
+			pid = 0;
+		} else {
+			pid = p->p_pid;
+		}
 
 		/*
 		 * If this /proc was mounted in the global zone, view
@@ -3576,14 +3599,21 @@ static int
 lxpr_readdir_piddir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 {
 	proc_t *p;
+	pid_t find_pid;
 
 	ASSERT(lxpnp->lxpr_type == LXPR_PIDDIR);
 
 	/* can't read its contents if it died */
 	mutex_enter(&pidlock);
 
-	p = prfind((lxpnp->lxpr_pid == 1) ?
-	    curproc->p_zone->zone_proc_initpid : lxpnp->lxpr_pid);
+	if (lxpnp->lxpr_pid == 1) {
+		find_pid = curproc->p_zone->zone_proc_initpid;
+	} else if (lxpnp->lxpr_pid == 0) {
+		find_pid = curproc->p_zone->zone_zsched->p_pid;
+	} else {
+		find_pid = lxpnp->lxpr_pid;
+	}
+	p = prfind(find_pid);
 
 	if (p == NULL || p->p_stat == SIDL) {
 		mutex_exit(&pidlock);
@@ -3771,11 +3801,17 @@ lxpr_readlink(vnode_t *vp, uio_t *uiop, cred_t *cr, caller_context_t *ct)
 		case LXPR_SELF:
 			/*
 			 * Convert pid to the Linux default of 1 if we're the
-			 * zone's init process
+			 * zone's init process or 0 if zsched.
 			 */
-			pid = ((curproc->p_pid !=
-			    curproc->p_zone->zone_proc_initpid)
-			    ? curproc->p_pid : 1);
+			if (curproc->p_pid ==
+			    curproc->p_zone->zone_proc_initpid) {
+				pid = 1;
+			} else if (curproc->p_pid ==
+			    curproc->p_zone->zone_zsched->p_pid) {
+				pid = 0;
+			} else {
+				pid = curproc->p_pid;
+			}
 
 			/*
 			 * Don't need to check result as every possible int

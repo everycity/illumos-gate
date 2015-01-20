@@ -22,6 +22,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
+ * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  */
 
 #include <sys/dsl_pool.h>
@@ -315,9 +316,18 @@ dsl_pool_close(dsl_pool_t *dp)
 	txg_list_destroy(&dp->dp_sync_tasks);
 	txg_list_destroy(&dp->dp_dirty_dirs);
 
-	arc_flush(dp->dp_spa);
+	/*
+	 * We can't set retry to TRUE since we're explicitly specifying
+	 * a spa to flush. This is good enough; any missed buffers for
+	 * this spa won't cause trouble, and they'll eventually fall
+	 * out of the ARC just like any other unused buffer.
+	 */
+	arc_flush(dp->dp_spa, FALSE);
+
 	txg_fini(dp);
 	dsl_scan_fini(dp);
+	dmu_buf_user_evict_wait();
+
 	rrw_destroy(&dp->dp_config_rwlock);
 	mutex_destroy(&dp->dp_lock);
 	taskq_destroy(dp->dp_vnrele_taskq);
