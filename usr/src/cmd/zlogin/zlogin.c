@@ -27,7 +27,7 @@
  */
 
 /*
- * zlogin provides four types of login which allow users in the global
+ * zlogin provides five types of login which allow users in the global
  * zone to access non-global zones.
  *
  * - "interactive login" is similar to rlogin(1); for example, the user could
@@ -56,6 +56,9 @@
  *   socket.  If zoneadmd is not running, it starts it.  This allows the
  *   console to be available anytime the zone is installed, regardless of
  *   whether it is running.
+ *
+ * - "standalone-processs interactive" is specified with -I and connects to
+ *   the zone's stdin, stdout and stderr zfd(7D) devices.
  */
 
 #include <sys/socket.h>
@@ -279,7 +282,7 @@ get_interactive_master(const char *zname, int notcons)
 	}
 
 	if (notcons) {
-		sock_str = "%s/%s.server_sock";
+		sock_str = "%s/%s.server_out";
 	} else {
 		sock_str = "%s/%s.console_sock";
 	}
@@ -348,6 +351,37 @@ bad:
 	return (-1);
 }
 
+/*
+ * Create the unix domain stderr socket and connect to the zoneadmd server.
+ */
+static int
+get_interactive_stderr(const char *zname)
+{
+	int sockfd = -1;
+	struct sockaddr_un servaddr;
+	char *sock_str;
+
+	if ((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+		zperror(gettext("could not create socket"));
+		return (-1);
+	}
+
+	sock_str = "%s/%s.server_err";
+
+	bzero(&servaddr, sizeof (servaddr));
+	servaddr.sun_family = AF_UNIX;
+	(void) snprintf(servaddr.sun_path, sizeof (servaddr.sun_path),
+	    sock_str, ZONES_TMPDIR, zname);
+
+	if (connect(sockfd, (struct sockaddr *)&servaddr,
+	    sizeof (servaddr)) == -1) {
+		zperror(gettext("Could not connect to zone's stderr"));
+		(void) close(sockfd);
+		return (-1);
+	}
+
+	return (sockfd);
+}
 
 /*
  * Routines to handle pty creation upon zone entry and to shuttle I/O back
@@ -1796,36 +1830,6 @@ get_username()
 	return (nptr->pw_name);
 }
 
-static boolean_t
-is_standalone_int_mode(char *zonename)
-{
-	boolean_t sa = B_FALSE;
-	zone_dochandle_t handle;
-	struct zone_attrtab attr;
-
-	if ((handle = zonecfg_init_handle()) == NULL)
-		return (sa);
-
-	if (zonecfg_get_handle(zonename, handle) != Z_OK)
-		goto done;
-
-	if (zonecfg_setattrent(handle) != Z_OK)
-		goto done;
-	while (zonecfg_getattrent(handle, &attr) == Z_OK) {
-		if (strcmp("zlog-mode", attr.zone_attr_name) == 0) {
-			if (strncmp("int", attr.zone_attr_value, 3) == 0)
-				sa = B_TRUE;
-			break;
-		}
-	}
-	(void) zonecfg_endattrent(handle);
-
-done:
-	zonecfg_fini_handle(handle);
-	return (sa);
-}
-
-
 int
 main(int argc, char **argv)
 {
@@ -2060,10 +2064,7 @@ main(int argc, char **argv)
 	 * the rest of the code; handle it first.
 	 */
 	if (console) {
-		if (imode && !is_standalone_int_mode(zonename)) {
-			zerror(gettext("the zlog-mode is not interactive"));
-			return (1);
-		}
+		int gz_stderr_fd = -1;
 
 		/*
 		 * Ensure that zoneadmd for this zone is running.
@@ -2076,6 +2077,10 @@ main(int argc, char **argv)
 		 */
 		if (get_interactive_master(zonename, imode) == -1)
 			return (1);
+
+		if (imode) {
+			gz_stderr_fd = get_interactive_stderr(zonename);
+		}
 
 		if (!quiet) {
 			if (imode)
@@ -2098,7 +2103,7 @@ main(int argc, char **argv)
 		/*
 		 * Run the I/O loop until we get disconnected.
 		 */
-		doio(masterfd, -1, masterfd, -1, -1, B_FALSE);
+		doio(masterfd, -1, masterfd, gz_stderr_fd, -1, B_FALSE);
 		if (!imode)
 			reset_tty();
 		if (!quiet) {
