@@ -872,17 +872,6 @@ lx_init(int argc, char *argv[], char *envp[])
 		    strerror(err));
 
 	/*
-	 * Ubuntu init will fail if its TERM environment variable is not set
-	 * so if we are running init, and TERM is not set, we set term and
-	 * reexec so that the new environment variable is propagated to the
-	 * linux application stack.
-	 */
-	if ((getpid() == zoneinit_pid) && (getenv("TERM") == NULL)) {
-		if (setenv("TERM", "vt100", 1) < 0 || execv(argv[0], argv) < 0)
-			lx_err_fatal("failed to set TERM");
-	}
-
-	/*
 	 * Upload data about the lx executable from the kernel.
 	 */
 	if (syscall(SYS_brand, B_ELFDATA, (void *)&edp))
@@ -1252,7 +1241,7 @@ static struct lx_sysent sysents[] = {
 	{"pivot_root",	NULL,			NOSYS_KERNEL,	0}, /* 155 */
 	{"sysctl",	lx_sysctl,		0,		1}, /* 156 */
 	{"prctl",	lx_prctl,		0,		5}, /* 157 */
-	{"arch_prctl",	LX_IKE(arch_prctl),	LX_SYS_IKE,	2}, /* 158 */
+	{"arch_prctl",	lx_arch_prctl,		0,		2}, /* 158 */
 	{"adjtimex",	lx_adjtimex,		0,		1}, /* 159 */
 	{"setrlimit",	lx_setrlimit,		0,		2}, /* 160 */
 	{"chroot",	lx_chroot,		0,		1}, /* 161 */
