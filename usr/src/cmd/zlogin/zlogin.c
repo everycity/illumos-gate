@@ -1152,16 +1152,9 @@ zone_login_cmd(brand_handle_t bh, const char *login)
  * 'login -z <from_zonename> -f' (-z is an undocumented option which tells
  * login that we're coming from another zone, and to disregard its CONSOLE
  * checks).
- *
- * The 'interactive' parameter (-i option) indicates that we're running a
- * command interactively. In this case we do not prepend the 'su root -c'
- * preamble to the command invocation since the 'su' command typically will
- * execute a setpgrp which will disassociate the actual command from the
- * controlling terminal that we (zlogin) setup.
  */
 static char **
-prep_args(brand_handle_t bh, char *zonename, const char *login, char **argv,
-    int interactive)
+prep_args(brand_handle_t bh, char *zonename, const char *login, char **argv)
 {
 	int argc = 0, a = 0, i, n = -1;
 	char **new_argv;
@@ -1187,8 +1180,6 @@ prep_args(brand_handle_t bh, char *zonename, const char *login, char **argv,
 
 		if (failsafe) {
 			n = 4;
-		} else if (interactive) {
-			n = 2;
 		} else {
 			n = 6;
 		}
@@ -1199,7 +1190,7 @@ prep_args(brand_handle_t bh, char *zonename, const char *login, char **argv,
 		if (failsafe) {
 			new_argv[a++] = FAILSAFESHELL;
 			new_argv[a++] = "-c";
-		} else if (!interactive) {
+		} else {
 			struct stat sb;
 			char zonepath[MAXPATHLEN];
 			char supath[MAXPATHLEN];
@@ -1830,6 +1821,35 @@ get_username()
 	return (nptr->pw_name);
 }
 
+static boolean_t
+zlog_mode_logging(char *zonename)
+{
+	boolean_t lm = B_FALSE;
+	zone_dochandle_t handle;
+	struct zone_attrtab attr;
+
+	if ((handle = zonecfg_init_handle()) == NULL)
+		return (lm);
+
+	if (zonecfg_get_handle(zonename, handle) != Z_OK)
+		goto done;
+
+	if (zonecfg_setattrent(handle) != Z_OK)
+		goto done;
+	while (zonecfg_getattrent(handle, &attr) == Z_OK) {
+		if (strcmp("zlog-mode", attr.zone_attr_name) == 0) {
+			if (strncmp("log", attr.zone_attr_value, 3) == 0)
+				lm = B_TRUE;
+			break;
+		}
+	}
+	(void) zonecfg_endattrent(handle);
+
+done:
+	zonecfg_fini_handle(handle);
+	return (lm);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2065,6 +2085,10 @@ main(int argc, char **argv)
 	 */
 	if (console) {
 		int gz_stderr_fd = -1;
+		boolean_t set_raw = B_TRUE;
+
+		if (imode && zlog_mode_logging(zonename))
+			set_raw = B_FALSE;
 
 		/*
 		 * Ensure that zoneadmd for this zone is running.
@@ -2091,7 +2115,7 @@ main(int argc, char **argv)
 				    "console]\n"), zonename);
 		}
 
-		if (set_tty_rawmode(STDIN_FILENO) == -1) {
+		if (set_raw && set_tty_rawmode(STDIN_FILENO) == -1) {
 			reset_tty();
 			zperror(gettext("failed to set stdin pty to raw mode"));
 			return (1);
@@ -2181,12 +2205,23 @@ main(int argc, char **argv)
 		return (1);
 	}
 
-	if ((new_args = prep_args(bh, zonename, login, proc_args, iflag))
-	    == NULL) {
-		zperror(gettext("could not assemble new arguments"));
-		brand_close(bh);
-		return (1);
+	/*
+	 * The 'interactive' parameter (-i option) indicates that we're running
+	 * a command interactively. In this case we skip prep_args so that we
+	 * don't prepend the 'su root -c' preamble to the command invocation
+	 * since the 'su' command typically will execute a setpgrp which will
+	 * disassociate the actual command from the controlling terminal that
+	 * we (zlogin) setup.
+	 */
+	if (!iflag) {
+		if ((new_args = prep_args(bh, zonename, login, proc_args))
+		    == NULL) {
+			zperror(gettext("could not assemble new arguments"));
+			brand_close(bh);
+			return (1);
+		}
 	}
+
 	/*
 	 * Get the brand specific user_cmd.  This command is used to get
 	 * a passwd(4) entry for login.
@@ -2399,7 +2434,11 @@ main(int argc, char **argv)
 			return (1);
 		}
 
-		(void) execve(new_args[0], new_args, new_env);
+		if (iflag) {
+			(void) execve(proc_args[0], proc_args, new_env);
+		} else {
+			(void) execve(new_args[0], new_args, new_env);
+		}
 		zperror("exec failure");
 		return (1);
 	}

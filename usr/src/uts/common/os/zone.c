@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014, Joyent Inc. All rights reserved.
+ * Copyright 2015, Joyent Inc. All rights reserved.
  */
 
 /*
@@ -2230,6 +2230,9 @@ zone_misc_kstat_update(kstat_t *ksp, int rw)
 	zmp->zm_ffnomem.value.ui32 = zone->zone_ffnomem;
 	zmp->zm_ffmisc.value.ui32 = zone->zone_ffmisc;
 
+	zmp->zm_init_pid.value.ui32 = zone->zone_proc_initpid;
+	zmp->zm_boot_time.value.ui64 = (uint64_t)zone->zone_boot_time;
+
 	return (0);
 }
 
@@ -2268,7 +2271,8 @@ zone_misc_kstat_create(zone_t *zone)
 	    KSTAT_DATA_UINT32);
 	kstat_named_init(&zmp->zm_ffnomem, "forkfail_nomem", KSTAT_DATA_UINT32);
 	kstat_named_init(&zmp->zm_ffmisc, "forkfail_misc", KSTAT_DATA_UINT32);
-
+	kstat_named_init(&zmp->zm_init_pid, "init_pid", KSTAT_DATA_UINT32);
+	kstat_named_init(&zmp->zm_boot_time, "boot_time", KSTAT_DATA_UINT64);
 
 	ksp->ks_update = zone_misc_kstat_update;
 	ksp->ks_private = zone;
@@ -4665,8 +4669,9 @@ parse_rctls(caddr_t ubuf, size_t buflen, nvlist_t **nvlp)
 
 		error = EINVAL;
 		name = nvpair_name(nvp);
-		if (strncmp(nvpair_name(nvp), "zone.", sizeof ("zone.") - 1)
-		    != 0 || nvpair_type(nvp) != DATA_TYPE_NVLIST_ARRAY) {
+		if ((strncmp(name, "zone.", sizeof ("zone.") - 1) != 0 &&
+		    strncmp(name, "project.", sizeof ("project.") - 1) != 0) ||
+		    nvpair_type(nvp) != DATA_TYPE_NVLIST_ARRAY) {
 			goto out;
 		}
 		if ((hndl = rctl_hndl_lookup(name)) == -1) {
@@ -5041,8 +5046,8 @@ zone_create(const char *zone_name, const char *zone_root,
 	/*
 	 * The process, task, and project rctls are probably wrong;
 	 * we need an interface to get the default values of all rctls,
-	 * and initialize zsched appropriately.  I'm not sure that that
-	 * makes much of a difference, though.
+	 * and initialize zsched appropriately. However, we allow zoneadmd
+	 * to pass down both zone and project rctls for the zone's init.
 	 */
 	error = newproc(zsched, (void *)&zarg, syscid, minclsyspri, NULL, 0);
 	if (error != 0) {

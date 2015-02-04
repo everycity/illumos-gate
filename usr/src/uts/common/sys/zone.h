@@ -23,7 +23,7 @@
  * Copyright 2013, Joyent, Inc. All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  * Copyright 2014 Igor Kozhukhov <ikozhukhov@gmail.com>.
- * Copyright 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2015, Joyent, Inc. All rights reserved.
  */
 
 #ifndef _SYS_ZONE_H
@@ -452,15 +452,12 @@ typedef struct {
 	kstat_named_t	zm_avenrun1;
 	kstat_named_t	zm_avenrun5;
 	kstat_named_t	zm_avenrun15;
-	kstat_named_t	zm_run_ticks;
-	kstat_named_t	zm_run_wait;
-	kstat_named_t	zm_fss_shr_pct;
-	kstat_named_t	zm_fss_pri_hi;
-	kstat_named_t	zm_fss_pri_avg;
 	kstat_named_t	zm_ffcap;
 	kstat_named_t	zm_ffnoproc;
 	kstat_named_t	zm_ffnomem;
 	kstat_named_t	zm_ffmisc;
+	kstat_named_t	zm_init_pid;
+	kstat_named_t	zm_boot_time;
 } zone_misc_kstat_t;
 
 typedef struct zone {
