@@ -4703,6 +4703,7 @@ f usr/lib/amd64/libbsdmalloc.so.1 0755 root bin
 s usr/lib/amd64/libbsdmalloc.so=libbsdmalloc.so.1
 s usr/lib/amd64/libbsm.so.1=../../../lib/amd64/libbsm.so.1
 s usr/lib/amd64/libbsm.so=../../../lib/amd64/libbsm.so.1
+f usr/lib/amd64/libbunyan.so.1 0755 root bin
 s usr/lib/amd64/libc.so.1=../../../lib/amd64/libc.so.1
 s usr/lib/amd64/libc.so=../../../lib/amd64/libc.so.1
 s usr/lib/amd64/libc_db.so.1=../../../lib/amd64/libc_db.so.1
@@ -4788,6 +4789,7 @@ f usr/lib/amd64/libhotplug.so.1 0755 root bin
 s usr/lib/amd64/libhotplug.so=libhotplug.so.1
 f usr/lib/amd64/libidmap.so.1 0755 root bin
 s usr/lib/amd64/libidmap.so=libidmap.so.1
+f usr/lib/amd64/libidspace.so.1 0755 root bin
 f usr/lib/amd64/libike.so.1 0755 root bin
 s usr/lib/amd64/libike.so=libike.so.1
 f usr/lib/amd64/libilb.so.1 0755 root bin
@@ -6100,6 +6102,7 @@ f usr/lib/libbsdmalloc.so.1 0755 root bin
 s usr/lib/libbsdmalloc.so=libbsdmalloc.so.1
 s usr/lib/libbsm.so.1=../../lib/libbsm.so.1
 s usr/lib/libbsm.so=../../lib/libbsm.so.1
+f usr/lib/libbunyan.so.1 0755 root bin
 d usr/lib/libc 0755 root bin
 s usr/lib/libc.so.1=../../lib/libc.so.1
 s usr/lib/libc.so=../../lib/libc.so.1
@@ -6201,6 +6204,7 @@ f usr/lib/libhotplug.so.1 0755 root bin
 s usr/lib/libhotplug.so=libhotplug.so.1
 f usr/lib/libidmap.so.1 0755 root bin
 s usr/lib/libidmap.so=libidmap.so.1
+f usr/lib/libidspace.so.1 0755 root bin
 f usr/lib/libike.so.1 0755 root bin
 s usr/lib/libike.so=libike.so.1
 f usr/lib/libilb.so.1 0755 root bin
