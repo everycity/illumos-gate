@@ -823,15 +823,6 @@ lx_fchdir(int fildes)
 	return ((r == -1) ? -errno : r);
 }
 
-long
-lx_fchmod(int fildes, mode_t mode)
-{
-	int r;
-
-	r = fchmod(fildes, mode);
-	return ((r == -1) ? -errno : r);
-}
-
 /*
  * We support neither the second argument (NUMA node), nor the third (obsolete
  * pre-2.6.24 caching functionality which was ultimately broken).
@@ -950,15 +941,6 @@ lx_mincore(caddr_t addr, size_t len, char *vec)
 		if (strcmp(lx_release, "2.6.11") > 0 && (long)len < 0)
 			errno = ENOMEM;
 	}
-	return ((r == -1) ? -errno : r);
-}
-
-long
-lx_mkdir(const char *path, mode_t mode)
-{
-	int r;
-
-	r = mkdir(path, mode);
 	return ((r == -1) ? -errno : r);
 }
 

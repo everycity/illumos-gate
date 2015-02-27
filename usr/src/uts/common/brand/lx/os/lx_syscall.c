@@ -441,7 +441,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"chdir",	NULL,			0,		1}, /* 12 */
 	{"time",	NULL,			0,		1}, /* 13 */
 	{"mknod",	NULL,			0,		3}, /* 14 */
-	{"chmod",	NULL,			0,		2}, /* 15 */
+	{"chmod",	lx_chmod,		0,		2}, /* 15 */
 	{"lchown16",	NULL,			0,		3}, /* 16 */
 	{"break",	NULL,			NOSYS_OBSOLETE,	0}, /* 17 */
 	{"stat",	NULL,			NOSYS_OBSOLETE,	0}, /* 18 */
@@ -465,7 +465,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"sync",	NULL,			0, 		0}, /* 36 */
 	{"kill",	lx_kill,		0,		2}, /* 37 */
 	{"rename",	NULL,			0,		2}, /* 38 */
-	{"mkdir",	NULL,			0,		2}, /* 39 */
+	{"mkdir",	lx_mkdir,		0,		2}, /* 39 */
 	{"rmdir",	NULL,			0,		1}, /* 40 */
 	{"dup",		NULL,			0,		1}, /* 41 */
 	{"pipe",	lx_pipe,		0,		1}, /* 42 */
@@ -520,7 +520,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"munmap",	NULL,			0,		2}, /* 91 */
 	{"truncate",	NULL,			0,		2}, /* 92 */
 	{"ftruncate",	NULL,			0,		2}, /* 93 */
-	{"fchmod",	NULL,			0,		2}, /* 94 */
+	{"fchmod",	lx_fchmod,		0,		2}, /* 94 */
 	{"fchown16",	NULL,			0,		3}, /* 95 */
 	{"getpriority",	NULL,			0,		2}, /* 96 */
 	{"setpriority",	NULL,			0,		3}, /* 97 */
@@ -671,11 +671,11 @@ lx_sysent_t lx_sysent32[] = {
 	{"sched_getaffinity", NULL, 		0,		3}, /* 242 */
 	{"set_thread_area", lx_set_thread_area,	0,		1}, /* 243 */
 	{"get_thread_area", lx_get_thread_area,	0,		1}, /* 244 */
-	{"io_setup",	NULL,			NOSYS_NO_EQUIV,	0}, /* 245 */
-	{"io_destroy",	NULL,			NOSYS_NO_EQUIV,	0}, /* 246 */
-	{"io_getevents", NULL,			NOSYS_NO_EQUIV,	0}, /* 247 */
-	{"io_submit",	NULL,			NOSYS_NO_EQUIV,	0}, /* 248 */
-	{"io_cancel",	NULL,			NOSYS_NO_EQUIV,	0}, /* 249 */
+	{"io_setup",	NULL,			0,		2}, /* 245 */
+	{"io_destroy",	NULL,			0,		1}, /* 246 */
+	{"io_getevents", NULL,			0,		5}, /* 247 */
+	{"io_submit",	NULL,			0,		3}, /* 248 */
+	{"io_cancel",	NULL,			0,		3}, /* 249 */
 	{"fadvise64",	NULL,			0,		4}, /* 250 */
 	{"nosys",	NULL,			0,		0}, /* 251 */
 	{"group_exit",	NULL,			0,		1}, /* 252 */
@@ -726,7 +726,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"inotify_rm_watch", NULL,		0,		2}, /* 293 */
 	{"migrate_pages", NULL,			NOSYS_NULL,	0}, /* 294 */
 	{"openat",	NULL,			0,		4}, /* 295 */
-	{"mkdirat",	NULL,			0,		3}, /* 296 */
+	{"mkdirat",	lx_mkdirat,		0,		3}, /* 296 */
 	{"mknodat",	NULL,			0,		4}, /* 297 */
 	{"fchownat",	NULL,			0,		5}, /* 298 */
 	{"futimesat",	NULL,			0,		3}, /* 299 */
@@ -736,7 +736,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"linkat",	NULL,			0,		5}, /* 303 */
 	{"symlinkat",	NULL,			0,		3}, /* 304 */
 	{"readlinkat",	NULL,			0,		4}, /* 305 */
-	{"fchmodat",	NULL,			0,		4}, /* 306 */
+	{"fchmodat",	lx_fchmodat,		0,		3}, /* 306 */
 	{"faccessat",	NULL,			0,		4}, /* 307 */
 	{"pselect6",	NULL,			LX_SYS_EBPARG6,	6}, /* 308 */
 	{"ppoll",	NULL,			0,		5}, /* 309 */
@@ -763,8 +763,8 @@ lx_sysent_t lx_sysent32[] = {
 	{"dup3",	NULL,			0,		3}, /* 330 */
 	{"pipe2",	lx_pipe2,		0,		2}, /* 331 */
 	{"inotify_init1", NULL,			0,		1}, /* 332 */
-	{"preadv",	NULL,			NOSYS_NULL,	0}, /* 333 */
-	{"pwritev",	NULL,			NOSYS_NULL,	0}, /* 334 */
+	{"preadv",	NULL,			0,		4}, /* 333 */
+	{"pwritev",	NULL,			0,		4}, /* 334 */
 	{"rt_tgsigqueueinfo", NULL,		0,		4}, /* 335 */
 	{"perf_event_open", NULL,		NOSYS_NULL,	0}, /* 336 */
 	{"recvmmsg",	NULL,			NOSYS_NULL,	0}, /* 337 */
@@ -880,15 +880,15 @@ lx_sysent_t lx_sysent64[] = {
 	{"chdir",	NULL,			0,		1}, /* 80 */
 	{"fchdir",	NULL,			0,		1}, /* 81 */
 	{"rename",	NULL,			0,		2}, /* 82 */
-	{"mkdir",	NULL,			0,		2}, /* 83 */
+	{"mkdir",	lx_mkdir,		0,		2}, /* 83 */
 	{"rmdir",	NULL,			0,		1}, /* 84 */
 	{"creat",	NULL,			0,		2}, /* 85 */
 	{"link",	NULL,			0,		2}, /* 86 */
 	{"unlink",	NULL,			0,		1}, /* 87 */
 	{"symlink",	NULL,			0,		2}, /* 88 */
 	{"readlink",	NULL,			0,		3}, /* 89 */
-	{"chmod",	NULL,			0,		2}, /* 90 */
-	{"fchmod",	NULL,			0,		2}, /* 91 */
+	{"chmod",	lx_chmod,		0,		2}, /* 90 */
+	{"fchmod",	lx_fchmod,		0,		2}, /* 91 */
 	{"chown",	NULL,			0,		3}, /* 92 */
 	{"fchown",	NULL,			0,		3}, /* 93 */
 	{"lchown",	NULL,			0,		3}, /* 94 */
@@ -1003,11 +1003,11 @@ lx_sysent_t lx_sysent64[] = {
 	{"sched_setaffinity", NULL,		0,		3}, /* 203 */
 	{"sched_getaffinity", NULL,		0,		3}, /* 204 */
 	{"set_thread_area", lx_set_thread_area, 0,		1}, /* 205 */
-	{"io_setup",	NULL,			NOSYS_NO_EQUIV,	0}, /* 206 */
-	{"io_destroy",	NULL,			NOSYS_NO_EQUIV,	0}, /* 207 */
-	{"io_getevents", NULL,			NOSYS_NO_EQUIV,	0}, /* 208 */
-	{"io_submit",	NULL,			NOSYS_NO_EQUIV,	0}, /* 209 */
-	{"io_cancel",	NULL,			NOSYS_NO_EQUIV,	0}, /* 210 */
+	{"io_setup",	NULL,			0,		2}, /* 206 */
+	{"io_destroy",	NULL,			0,		1}, /* 207 */
+	{"io_getevents", NULL,			0,		5}, /* 208 */
+	{"io_submit",	NULL,			0,		3}, /* 209 */
+	{"io_cancel",	NULL,			0,		3}, /* 210 */
 	{"get_thread_area", lx_get_thread_area,	0,		1}, /* 211 */
 	{"lookup_dcookie", NULL,		NOSYS_NO_EQUIV,	0}, /* 212 */
 	{"epoll_create", NULL,			0,		1}, /* 213 */
@@ -1055,7 +1055,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"inotify_rm_watch", NULL,		0,		2}, /* 255 */
 	{"migrate_pages", NULL,			NOSYS_NULL,	0}, /* 256 */
 	{"openat",	NULL,			0,		4}, /* 257 */
-	{"mkdirat",	NULL,			0,		3}, /* 258 */
+	{"mkdirat",	lx_mkdirat,		0,		3}, /* 258 */
 	{"mknodat",	NULL,			0,		4}, /* 259 */
 	{"fchownat",	NULL,			0,		5}, /* 260 */
 	{"futimesat",	NULL,			0,		3}, /* 261 */
@@ -1065,7 +1065,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"linkat",	NULL,			0,		5}, /* 265 */
 	{"symlinkat",	NULL,			0,		3}, /* 266 */
 	{"readlinkat",	NULL,			0,		4}, /* 267 */
-	{"fchmodat",	NULL,			0,		4}, /* 268 */
+	{"fchmodat",	lx_fchmodat,		0,		3}, /* 268 */
 	{"faccessat",	NULL,			0,		4}, /* 269 */
 	{"pselect6",	NULL,			0,		6}, /* 270 */
 	{"ppoll",	NULL,			0,		5}, /* 271 */
@@ -1092,8 +1092,8 @@ lx_sysent_t lx_sysent64[] = {
 	{"dup3",	NULL,			0,		3}, /* 292 */
 	{"pipe2",	lx_pipe2,		0,		2}, /* 293 */
 	{"inotify_init1", NULL,			0,		1}, /* 294 */
-	{"preadv",	NULL,			NOSYS_NULL,	0}, /* 295 */
-	{"pwritev",	NULL,			NOSYS_NULL,	0}, /* 296 */
+	{"preadv",	NULL,			0,		4}, /* 295 */
+	{"pwritev",	NULL,			0,		4}, /* 296 */
 	{"rt_tgsigqueueinfo", NULL, 		0,		4}, /* 297 */
 	{"perf_event_open", NULL,		NOSYS_NULL,	0}, /* 298 */
 	{"recvmmsg",	NULL,			NOSYS_NULL,	0}, /* 299 */
