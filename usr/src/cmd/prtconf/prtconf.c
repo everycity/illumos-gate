@@ -348,10 +348,10 @@ main(int argc, char *argv[])
 		/*
 		 * If 0 bytes are returned (the system returns '1', for the \0),
 		 * we're probably on x86, and there has been no si-hw-provider
-		 * set in /etc/bootrc, default to Joyent.
+		 * set in /etc/bootrc, default to EveryCity.
 		 */
 		if (ret <= 1) {
-			(void) strncpy(hw_provider, "Joyent",
+			(void) strncpy(hw_provider, "EveryCity",
 			    sizeof (hw_provider));
 		}
 		(void) printf("System Configuration:  %s  %s\n", hw_provider,
