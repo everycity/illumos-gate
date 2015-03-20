@@ -52,7 +52,6 @@
 #include <sys/efi_partition.h>
 #include <sys/var.h>
 #include <sys/aio_req.h>
-#include <sys/fs/dv_node.h>
 
 #ifdef __lock_lint
 #define	_LP64
@@ -233,6 +232,7 @@ int	sd_force_pm_supported		= 0;
 
 void *sd_state				= NULL;
 int sd_io_time				= SD_IO_TIME;
+int sd_failfast_enable			= 1;
 int sd_ua_retry_count			= SD_UA_RETRY_COUNT;
 int sd_report_pfa			= 1;
 int sd_max_throttle			= SD_MAX_THROTTLE;
@@ -242,14 +242,6 @@ int sd_qfull_throttle_enable		= TRUE;
 
 int sd_retry_on_reservation_conflict	= 1;
 int sd_reinstate_resv_delay		= SD_REINSTATE_RESV_DELAY;
-
-/*
- * Default safe I/O delay threshold of 2s for all devices.
- * Can be overriden for vendor/device id in sd.conf
- */
-
-hrtime_t sd_g_slow_io_threshold = 2 * NANOSEC;
-
 _NOTE(SCHEME_PROTECTS_DATA("safe sharing", sd_reinstate_resv_delay))
 
 static int sd_dtype_optical_bind	= -1;
@@ -367,41 +359,6 @@ _NOTE(MUTEX_PROTECTS_DATA(sd_scsi_probe_cache_mutex,
 
 _NOTE(MUTEX_PROTECTS_DATA(sd_scsi_probe_cache_mutex,
     sd_scsi_probe_cache_head))
-
-/*
- * Create taskq for all targets in the system. This is created at
- * _init(9E) and destroyed at _fini(9E).
- *
- * Note: here we set the minalloc to a reasonably high number to ensure that
- * we will have an adequate supply of task entries available at interrupt time.
- * This is used in conjunction with the TASKQ_PREPOPULATE flag in
- * sd_create_taskq().  Since we do not want to sleep for allocations at
- * interrupt time, set maxalloc equal to minalloc. That way we will just fail
- * the command if we ever try to dispatch more than SD_TASKQ_MAXALLOC taskq
- * requests any one instant in time.
- */
-#define	SD_TASKQ_NUMTHREADS	8
-#define	SD_TASKQ_MINALLOC	256
-#define	SD_TASKQ_MAXALLOC	256
-
-static taskq_t	*sd_tq = NULL;
-_NOTE(SCHEME_PROTECTS_DATA("stable data", sd_tq))
-
-static int	sd_taskq_minalloc = SD_TASKQ_MINALLOC;
-static int	sd_taskq_maxalloc = SD_TASKQ_MAXALLOC;
-
-/*
- * The following task queue is being created for the write part of
- * read-modify-write of non-512 block size devices.
- * Limit the number of threads to 1 for now. This number has been chosen
- * considering the fact that it applies only to dvd ram drives/MO drives
- * currently. Performance for which is not main criteria at this stage.
- * Note: It needs to be explored if we can use a single taskq in future
- */
-#define	SD_WMR_TASKQ_NUMTHREADS	1
-static taskq_t	*sd_wmr_tq = NULL;
-_NOTE(SCHEME_PROTECTS_DATA("stable data", sd_wmr_tq))
-
 
 /*
  * Power attribute table
@@ -949,10 +906,8 @@ static int sd_pm_idletime = 1;
 #define	sd_create_devid			ssd_create_devid
 #define	sd_write_deviceid		ssd_write_deviceid
 #define	sd_check_vpd_page_support	ssd_check_vpd_page_support
-#ifdef notyet
 #define	sd_setup_pm			ssd_setup_pm
 #define	sd_create_pm_components		ssd_create_pm_components
-#endif
 #define	sd_ddi_suspend			ssd_ddi_suspend
 #define	sd_ddi_resume			ssd_ddi_resume
 #define	sd_pm_state_change		ssd_pm_state_change
@@ -1166,9 +1121,7 @@ static int sd_pm_idletime = 1;
 #define	sd_delayed_cv_broadcast		ssd_delayed_cv_broadcast
 #define	sr_volume_ctrl			ssr_volume_ctrl
 #define	sr_read_sony_session_offset	ssr_read_sony_session_offset
-#ifdef notyet
 #define	sd_log_page_supported		ssd_log_page_supported
-#endif
 #define	sd_check_for_writable_cd	ssd_check_for_writable_cd
 #define	sd_wm_cache_constructor		ssd_wm_cache_constructor
 #define	sd_wm_cache_destructor		ssd_wm_cache_destructor
@@ -1297,12 +1250,11 @@ static void sd_register_devid(sd_ssc_t *ssc, dev_info_t *devi,
 static int  sd_get_devid(sd_ssc_t *ssc);
 static ddi_devid_t sd_create_devid(sd_ssc_t *ssc);
 static int  sd_write_deviceid(sd_ssc_t *ssc);
+static int  sd_get_devid_page(struct sd_lun *un, uchar_t *wwn, int *len);
 static int  sd_check_vpd_page_support(sd_ssc_t *ssc);
 
-#ifdef notyet
 static void sd_setup_pm(sd_ssc_t *ssc, dev_info_t *devi);
 static void sd_create_pm_components(dev_info_t *devi, struct sd_lun *un);
-#endif
 
 static int  sd_ddi_suspend(dev_info_t *devi);
 static int  sd_ddi_resume(dev_info_t *devi);
@@ -1311,7 +1263,7 @@ static int  sdpower(dev_info_t *devi, int component, int level);
 
 static int  sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd);
 static int  sddetach(dev_info_t *devi, ddi_detach_cmd_t cmd);
-static void sd_unit_attach(void *arg);
+static int  sd_unit_attach(dev_info_t *devi);
 static int  sd_unit_detach(dev_info_t *devi);
 
 static void sd_set_unit_attributes(struct sd_lun *un, dev_info_t *devi);
@@ -1457,7 +1409,7 @@ static void sd_set_retry_bp(struct sd_lun *un, struct buf *bp,
 	clock_t retry_delay, void (*statp)(kstat_io_t *));
 
 static void sd_send_request_sense_command(struct sd_lun *un, struct buf *bp,
-	int retry_check_flag, struct scsi_pkt *pktp);
+	struct scsi_pkt *pktp);
 static void sd_start_retry_command(void *arg);
 static void sd_start_direct_priority_command(void *arg);
 static void sd_return_failed_command(struct sd_lun *un, struct buf *bp,
@@ -1674,9 +1626,7 @@ static void sd_delayed_cv_broadcast(void *arg);
 static int sr_volume_ctrl(dev_t dev, caddr_t data, int flag);
 static int sr_read_sony_session_offset(dev_t dev, caddr_t data, int flag);
 
-#ifdef notyet
 static int sd_log_page_supported(sd_ssc_t *ssc, int log_page);
-#endif
 
 /*
  * Function Prototype for the non-512 support (DVDRAM, MO etc.) functions.
@@ -1699,7 +1649,7 @@ sddump_do_read_of_rmw(struct sd_lun *un, uint64_t blkno, uint64_t nblk,
 /*
  * Function prototypes for failfast support.
  */
-static void sd_failfast_flushq(struct sd_lun *un, boolean_t flush_all);
+static void sd_failfast_flushq(struct sd_lun *un);
 static int sd_failfast_flushq_callback(struct buf *bp);
 
 /*
@@ -1739,35 +1689,6 @@ static void sd_rmw_msg_print_handler(void *arg);
 #define	SD_FAILFAST_ACTIVE		1
 
 /*
- * Bitmask to control behaviour in failfast active state:
- *
- * SD_FAILFAST_ENABLE_FORCE_INACTIVE: When set, allow retries without
- * SD_RETRIES_FAILFAST to cause transition to failfast inactive state.
- *
- * SD_FAILFAST_ENABLE_FAIL_RETRIES: When set, cause retries with the flag
- * SD_RETRIES_FAILFAST set (following a timeout) to fail when in failfast
- * active state.
- *
- * SD_FAILFAST_ENABLE_FAIL_ALL_RETRIES: When set, cause ALL retries,
- * regardless of reason, to fail when in failfast active state. This takes
- * precedence over SD_FAILFAST_FAIL_RETRIES.
- *
- * SD_FAILFAST_ENABLE_FAIL_USCSI: When set, discard all commands in the USCSI
- * chain (sdioctl or driver generated) when in failfast active state.
- */
-
-#define	SD_FAILFAST_ENABLE_FORCE_INACTIVE	0x01
-#define	SD_FAILFAST_ENABLE_FAIL_RETRIES		0x02
-#define	SD_FAILFAST_ENABLE_FAIL_ALL_RETRIES	0x04
-#define	SD_FAILFAST_ENABLE_FAIL_USCSI		0x08
-
-/*
- * The default behaviour is to fail all retries due to timeout when in failfast
- * active state, and not allow other retries to transition to inactive.
- */
-static int sd_failfast_enable = SD_FAILFAST_ENABLE_FAIL_RETRIES;
-
-/*
  * Bitmask to control behavior of buf(9S) flushes when a transition to
  * the failfast state occurs. Optional bits include:
  *
@@ -1783,22 +1704,18 @@ static int sd_failfast_enable = SD_FAILFAST_ENABLE_FAIL_RETRIES;
 #define	SD_FAILFAST_FLUSH_ALL_QUEUES	0x02
 
 /*
- * The default behavior is to flush all bufs in all queues within the driver.
+ * The default behavior is to only flush bufs that have B_FAILFAST set, but
+ * to flush all queues within the driver.
  */
-static int sd_failfast_flushctl =
-    SD_FAILFAST_FLUSH_ALL_BUFS | SD_FAILFAST_FLUSH_ALL_QUEUES;
+static int sd_failfast_flushctl = SD_FAILFAST_FLUSH_ALL_QUEUES;
 
-#ifdef SD_FAULT_INJECTION
-static uint_t   sd_fault_injection_on = 0;
-#endif
 
 /*
  * SD Testing Fault Injection
  */
 #ifdef SD_FAULT_INJECTION
-static int sd_faultinjection_ioctl(int cmd, intptr_t arg, struct sd_lun *un);
+static void sd_faultinjection_ioctl(int cmd, intptr_t arg, struct sd_lun *un);
 static void sd_faultinjection(struct scsi_pkt *pktp);
-static void sd_prefaultinjection(struct scsi_pkt *pktp);
 static void sd_injection_log(char *buf, struct sd_lun *un);
 #endif
 
@@ -2970,25 +2887,12 @@ sd_prop_op(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op, int mod_flags,
 	struct sd_lun	*un;
 
 	if ((un = ddi_get_soft_state(sd_state, ddi_get_instance(dip))) == NULL)
-		goto fallback;
-
-	mutex_enter(SD_MUTEX(un));
-	while ((un->un_state == SD_STATE_ATTACHING))
-		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-
-	if (un->un_state == SD_STATE_ATTACH_FAILED) {
-		mutex_exit(SD_MUTEX(un));
-		goto fallback;
-	}
-	mutex_exit(SD_MUTEX(un));
+		return (ddi_prop_op(dev, dip, prop_op, mod_flags,
+		    name, valuep, lengthp));
 
 	return (cmlb_prop_op(un->un_cmlbhandle,
 	    dev, dip, prop_op, mod_flags, name, valuep, lengthp,
 	    SDPART(dev), (void *)SD_PATH_DIRECT));
-
-fallback:
-	return (ddi_prop_op(dev, dip, prop_op, mod_flags, name, valuep,
-	    lengthp));
 }
 
 /*
@@ -3336,13 +3240,9 @@ sd_spin_up_unit(sd_ssc_t *ssc)
 	status = sd_send_scsi_START_STOP_UNIT(ssc, SD_START_STOP,
 	    SD_TARGET_START, SD_PATH_DIRECT);
 
-	switch (status) {
-	case EIO:
-		sd_ssc_assessment(ssc, SD_FMT_STATUS_CHECK);
-		return (status);
-	case EACCES:
-		has_conflict = TRUE;
-	default: /*FALLTHROUGH*/
+	if (status != 0) {
+		if (status == EACCES)
+			has_conflict = TRUE;
 		sd_ssc_assessment(ssc, SD_FMT_IGNORE);
 	}
 
@@ -4336,19 +4236,6 @@ sd_set_properties(struct sd_lun *un, char *name, char *value)
 		    "physical block size set to %d\n", un->un_phy_blocksize);
 	}
 
-	if (strcasecmp(name, "slow-io-threshold") == 0) {
-		if (ddi_strtol(value, &endptr, 0, &val) == 0) {
-			un->un_slow_io_threshold = (hrtime_t)val * NANOSEC;
-		} else {
-			un->un_slow_io_threshold =
-			    (hrtime_t)sd_g_slow_io_threshold;
-			goto value_invalid;
-		}
-		SD_INFO(SD_LOG_ATTACH_DETACH, un, "sd_set_properties: "
-		    "slow IO threshold set to %llu\n",
-		    un->un_slow_io_threshold);
-	}
-
 	if (strcasecmp(name, "retries-victim") == 0) {
 		if (ddi_strtol(value, &endptr, 0, &val) == 0) {
 			un->un_victim_retry_count = val;
@@ -5160,20 +5047,8 @@ sd_get_physical_geometry(struct sd_lun *un, cmlb_geom_t *pgeom_p,
 	 * and MODE SENSE page four are reserved (see SBC spec
 	 * and MMC spec). To prevent soft errors just return
 	 * using the default LBA size.
-	 *
-	 * Since sata.c MODE SENSE function (sata_txlt_mode_sense())
-	 * does not implement support for mode page four or five
-	 * to prevent illegal requests on SATA drives return here.
-	 *
-	 * These pages are also reserved in SBC-2 and later.
-	 * We assume SBC-2 or later for a direct-attached block
-	 * device if the SCSI version is at least SPC-3 or if
-	 * the device is solid-state.
 	 */
-
-	if (ISCD(un) || (un->un_f_is_solid_state == TRUE) ||
-	    un->un_interconnect_type == SD_INTERCONNECT_SATA ||
-	    ((un->un_ctype == CTYPE_CCS) && (SD_INQUIRY(un)->inq_ansi >= 5)))
+	if (ISCD(un))
 		return (ret);
 
 	cdbsize = (un->un_f_cfg_is_atapi == TRUE) ? CDB_GROUP2 : CDB_GROUP0;
@@ -5513,8 +5388,6 @@ sd_update_block_info(struct sd_lun *un, uint32_t lbasize, uint64_t capacity)
 }
 
 
-#define	DEVID_IF_KNOWN(d) "devid", DATA_TYPE_STRING, (d) ? (d) : "unknown"
-
 /*
  *    Function: sd_register_devid
  *
@@ -5646,14 +5519,20 @@ sd_register_devid(sd_ssc_t *ssc, dev_info_t *devi, int reservation_flag)
 	 * on the drive and have them fabricated by the ddi layer by calling
 	 * ddi_devid_init and passing the DEVID_FAB flag.
 	 */
-	if (un->un_f_opt_fab_devid == TRUE &&
-	    reservation_flag != SD_TARGET_IS_RESERVED) {
-		if (sd_get_devid(ssc) == EINVAL)
+	if (un->un_f_opt_fab_devid == TRUE) {
+		/*
+		 * Depending on EINVAL isn't reliable, since a reserved disk
+		 * may result in invalid geometry, so check to make sure a
+		 * reservation conflict did not occur during attach.
+		 */
+		if ((sd_get_devid(ssc) == EINVAL) &&
+		    (reservation_flag != SD_TARGET_IS_RESERVED)) {
 			/*
 			 * The devid is invalid AND there is no reservation
 			 * conflict.  Fabricate a new devid.
 			 */
 			(void) sd_create_devid(ssc);
+		}
 
 		/* Register the devid if it exists */
 		if (un->un_devid != NULL) {
@@ -5675,7 +5554,7 @@ sd_register_devid(sd_ssc_t *ssc, dev_info_t *devi, int reservation_flag)
 		/* devid successfully encoded, register devid */
 		(void) ddi_devid_register(SD_DEVINFO(un), un->un_devid);
 
-	} else if (reservation_flag != SD_TARGET_IS_RESERVED) {
+	} else {
 		/*
 		 * Unable to encode a devid based on data available.
 		 * This is not a Sun qualified disk.  Older Sun disk
@@ -6065,7 +5944,7 @@ sd_check_vpd_page_support(sd_ssc_t *ssc)
  *
  *     Context: Kernel Thread
  */
-#ifdef notyet
+
 static void
 sd_setup_pm(sd_ssc_t *ssc, dev_info_t *devi)
 {
@@ -6120,7 +5999,6 @@ sd_setup_pm(sd_ssc_t *ssc, dev_info_t *devi)
 				un->un_f_power_condition_supported = FALSE;
 			}
 		}
-		/* WTF? this fails for optical drives with no media */
 		if (!un->un_f_power_condition_supported) {
 			rval = sd_send_scsi_START_STOP_UNIT(ssc,
 			    SD_START_STOP, SD_TARGET_START, SD_PATH_DIRECT);
@@ -6322,7 +6200,7 @@ sd_create_pm_components(dev_info_t *devi, struct sd_lun *un)
 	mutex_exit(&un->un_pm_mutex);
 	mutex_exit(SD_MUTEX(un));
 }
-#endif
+
 
 /*
  *    Function: sd_ddi_suspend
@@ -6813,12 +6691,12 @@ sdpower(dev_info_t *devi, int component, int level)
 	int		medium_present;
 	time_t		intvlp;
 	struct pm_trans_data	sd_pm_tran_data;
-	uchar_t		save_state = SD_STATE_NORMAL;
+	uchar_t		save_state;
 	int		sval;
 	uchar_t		state_before_pm;
 	int		got_semaphore_here;
 	sd_ssc_t	*ssc;
-	int	last_power_level = SD_SPINDLE_UNINIT;
+	int	last_power_level;
 
 	instance = ddi_get_instance(devi);
 
@@ -7293,24 +7171,113 @@ sdpower_failed:
 static int
 sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 {
-	struct	scsi_device	*devp;
-	struct	sd_lun		*un;
-	char			*variantp;
-	int	instance;
-	int	tgt;
-	dev_info_t	*pdip = ddi_get_parent(devi);
-	int		max_xfer_size;
-	sd_ssc_t	*ssc;
-	struct sd_fm_internal	*sfip = NULL;
-
 	switch (cmd) {
 	case DDI_ATTACH:
-		break;
+		return (sd_unit_attach(devi));
 	case DDI_RESUME:
 		return (sd_ddi_resume(devi));
 	default:
-		return (DDI_FAILURE);
+		break;
 	}
+	return (DDI_FAILURE);
+}
+
+
+/*
+ *    Function: sddetach
+ *
+ * Description: Driver's detach(9E) entry point function.
+ *
+ *   Arguments: devi - opaque device info handle
+ *		cmd  - detach  type
+ *
+ * Return Code: DDI_SUCCESS
+ *		DDI_FAILURE
+ *
+ *     Context: Kernel thread context
+ */
+
+static int
+sddetach(dev_info_t *devi, ddi_detach_cmd_t cmd)
+{
+	switch (cmd) {
+	case DDI_DETACH:
+		return (sd_unit_detach(devi));
+	case DDI_SUSPEND:
+		return (sd_ddi_suspend(devi));
+	default:
+		break;
+	}
+	return (DDI_FAILURE);
+}
+
+
+/*
+ *     Function: sd_sync_with_callback
+ *
+ *  Description: Prevents sd_unit_attach or sd_unit_detach from freeing the soft
+ *		 state while the callback routine is active.
+ *
+ *    Arguments: un: softstate structure for the instance
+ *
+ *	Context: Kernel thread context
+ */
+
+static void
+sd_sync_with_callback(struct sd_lun *un)
+{
+	ASSERT(un != NULL);
+
+	mutex_enter(SD_MUTEX(un));
+
+	ASSERT(un->un_in_callback >= 0);
+
+	while (un->un_in_callback > 0) {
+		mutex_exit(SD_MUTEX(un));
+		delay(2);
+		mutex_enter(SD_MUTEX(un));
+	}
+
+	mutex_exit(SD_MUTEX(un));
+}
+
+/*
+ *    Function: sd_unit_attach
+ *
+ * Description: Performs DDI_ATTACH processing for sdattach(). Allocates
+ *		the soft state structure for the device and performs
+ *		all necessary structure and device initializations.
+ *
+ *   Arguments: devi: the system's dev_info_t for the device.
+ *
+ * Return Code: DDI_SUCCESS if attach is successful.
+ *		DDI_FAILURE if any part of the attach fails.
+ *
+ *     Context: Called at attach(9e) time for the DDI_ATTACH flag.
+ *		Kernel thread context only.  Can sleep.
+ */
+
+static int
+sd_unit_attach(dev_info_t *devi)
+{
+	struct	scsi_device	*devp;
+	struct	sd_lun		*un;
+	char			*variantp;
+	char			name_str[48];
+	int	reservation_flag = SD_TARGET_IS_UNRESERVED;
+	int	instance;
+	int	rval;
+	int	wc_enabled;
+	int	tgt;
+	uint64_t	capacity;
+	uint_t		lbasize = 0;
+	dev_info_t	*pdip = ddi_get_parent(devi);
+	int		offbyone = 0;
+	int		geom_label_valid = 0;
+	sd_ssc_t	*ssc;
+	int		status;
+	struct sd_fm_internal	*sfip = NULL;
+	int		max_xfer_size;
 
 	/*
 	 * Retrieve the target driver's private data area. This was set
@@ -7408,7 +7375,7 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	 * probably better to halt here than just fail the attach....)
 	 */
 	if ((un = ddi_get_soft_state(sd_state, instance)) == NULL) {
-		panic("sdattach: NULL soft state on instance:0x%x",
+		panic("sd_unit_attach: NULL soft state on instance:0x%x",
 		    instance);
 		/*NOTREACHED*/
 	}
@@ -7472,37 +7439,37 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	case INTERCONNECT_SSA:
 		un->un_interconnect_type = SD_INTERCONNECT_SSA;
 		SD_INFO(SD_LOG_ATTACH_DETACH, un,
-		    "sdattach: un:0x%p SD_INTERCONNECT_SSA\n", un);
+		    "sd_unit_attach: un:0x%p SD_INTERCONNECT_SSA\n", un);
 		break;
 	case INTERCONNECT_PARALLEL:
 		un->un_f_is_fibre = FALSE;
 		un->un_interconnect_type = SD_INTERCONNECT_PARALLEL;
 		SD_INFO(SD_LOG_ATTACH_DETACH, un,
-		    "sdattach: un:0x%p SD_INTERCONNECT_PARALLEL\n", un);
+		    "sd_unit_attach: un:0x%p SD_INTERCONNECT_PARALLEL\n", un);
 		break;
 	case INTERCONNECT_SAS:
 		un->un_f_is_fibre = FALSE;
 		un->un_interconnect_type = SD_INTERCONNECT_SAS;
 		un->un_node_type = DDI_NT_BLOCK_SAS;
 		SD_INFO(SD_LOG_ATTACH_DETACH, un,
-		    "sdattach: un:0x%p SD_INTERCONNECT_SAS\n", un);
+		    "sd_unit_attach: un:0x%p SD_INTERCONNECT_SAS\n", un);
 		break;
 	case INTERCONNECT_SATA:
 		un->un_f_is_fibre = FALSE;
 		un->un_interconnect_type = SD_INTERCONNECT_SATA;
 		SD_INFO(SD_LOG_ATTACH_DETACH, un,
-		    "sdattach: un:0x%p SD_INTERCONNECT_SATA\n", un);
+		    "sd_unit_attach: un:0x%p SD_INTERCONNECT_SATA\n", un);
 		break;
 	case INTERCONNECT_FIBRE:
 		un->un_interconnect_type = SD_INTERCONNECT_FIBRE;
 		SD_INFO(SD_LOG_ATTACH_DETACH, un,
-		    "sdattach: un:0x%p SD_INTERCONNECT_FIBRE\n", un);
+		    "sd_unit_attach: un:0x%p SD_INTERCONNECT_FIBRE\n", un);
 		break;
 	case INTERCONNECT_FABRIC:
 		un->un_interconnect_type = SD_INTERCONNECT_FABRIC;
 		un->un_node_type = DDI_NT_BLOCK_FABRIC;
 		SD_INFO(SD_LOG_ATTACH_DETACH, un,
-		    "sdattach: un:0x%p SD_INTERCONNECT_FABRIC\n", un);
+		    "sd_unit_attach: un:0x%p SD_INTERCONNECT_FABRIC\n", un);
 		break;
 	default:
 #ifdef SD_DEFAULT_INTERCONNECT_TYPE
@@ -7521,11 +7488,11 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		un->un_interconnect_type = SD_DEFAULT_INTERCONNECT_TYPE;
 		if (!SD_IS_PARALLEL_SCSI(un)) {
 			SD_INFO(SD_LOG_ATTACH_DETACH, un,
-			    "sdattach: un:0x%p Assuming "
+			    "sd_unit_attach: un:0x%p Assuming "
 			    "INTERCONNECT_FIBRE\n", un);
 		} else {
 			SD_INFO(SD_LOG_ATTACH_DETACH, un,
-			    "sdattach: un:0x%p Assuming "
+			    "sd_unit_attach: un:0x%p Assuming "
 			    "INTERCONNECT_PARALLEL\n", un);
 			un->un_f_is_fibre = FALSE;
 		}
@@ -7556,9 +7523,6 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			}
 		}
 	}
-
-	(void) ddi_prop_update_int(DDI_DEV_T_NONE, devi,
-	    "allow-unconstrained-retire", 1);
 
 	/*
 	 * Initialize the Request Sense command for the target
@@ -7609,12 +7573,9 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	un->un_reset_retry_count = (un->un_retry_count / 2);
 
 	/*
-	 * Set the victim_retry_count to the default un_retry_count.
-	 * This value is used in addition to the standard retry count.
-	 * This can be overridden by entries in sd.conf or the device
-	 * config table.
+	 * Set the victim_retry_count to the default un_retry_count
 	 */
-	un->un_victim_retry_count = un->un_retry_count;
+	un->un_victim_retry_count = (2 * un->un_retry_count);
 
 	/*
 	 * Set the reservation release timeout to the default value of
@@ -7622,8 +7583,6 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	 * device config table.
 	 */
 	un->un_reserve_release_time = 5;
-
-	un->un_slow_io_threshold = sd_g_slow_io_threshold;
 
 	/*
 	 * Set up the default maximum transfer size. Note that this may
@@ -7651,12 +7610,12 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		    "allow-bus-device-reset", 1) != 0) {
 			un->un_f_allow_bus_device_reset = TRUE;
 			SD_INFO(SD_LOG_ATTACH_DETACH, un,
-			    "sdattach: un:0x%p Bus device reset "
+			    "sd_unit_attach: un:0x%p Bus device reset "
 			    "enabled\n", un);
 		} else {
 			un->un_f_allow_bus_device_reset = FALSE;
 			SD_INFO(SD_LOG_ATTACH_DETACH, un,
-			    "sdattach: un:0x%p Bus device reset "
+			    "sd_unit_attach: un:0x%p Bus device reset "
 			    "disabled\n", un);
 		}
 	}
@@ -7675,30 +7634,24 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	if (ddi_prop_get_int(DDI_DEV_T_ANY, devi, 0, "atapi", -1) != -1) {
 		un->un_f_cfg_is_atapi = TRUE;
 		SD_INFO(SD_LOG_ATTACH_DETACH, un,
-		    "sdattach: un:0x%p Atapi device\n", un);
+		    "sd_unit_attach: un:0x%p Atapi device\n", un);
 	}
 	if (ddi_prop_lookup_string(DDI_DEV_T_ANY, devi, 0, "variant",
 	    &variantp) == DDI_PROP_SUCCESS) {
 		if (strcmp(variantp, "atapi") == 0) {
 			un->un_f_cfg_is_atapi = TRUE;
 			SD_INFO(SD_LOG_ATTACH_DETACH, un,
-			    "sdattach: un:0x%p Atapi device\n", un);
+			    "sd_unit_attach: un:0x%p Atapi device\n", un);
 		}
 		ddi_prop_free(variantp);
 	}
 
-	un->un_cmd_timeout	= ((ISCD(un)) ? 2 : 1) * (ushort_t)sd_io_time;
-	un->un_uscsi_timeout	= un->un_cmd_timeout;
-	un->un_busy_timeout	= SD_BSY_TIMEOUT;
+	un->un_cmd_timeout	= SD_IO_TIME;
 
-	/*
-	 * Info on current states, statuses, etc. (Updated frequently)
-	 *
-	 * Current state is ATTACHING until we finished sd_unit_attach.
-	 * Last state is NORMAL so that sd_unit_attach can Restore_state()
-	 * when it finishes successfully.
-	 */
-	un->un_state		= SD_STATE_ATTACHING;
+	un->un_busy_timeout  = SD_BSY_TIMEOUT;
+
+	/* Info on current states, statuses, etc. (Updated frequently) */
+	un->un_state		= SD_STATE_NORMAL;
 	un->un_last_state	= SD_STATE_NORMAL;
 
 	/* Control & status info for command throttling */
@@ -7765,7 +7718,7 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	 */
 	sd_read_unit_properties(un);
 	SD_TRACE(SD_LOG_ATTACH_DETACH, un,
-	    "sdattach: un:0x%p property configuration complete.\n", un);
+	    "sd_unit_attach: un:0x%p property configuration complete.\n", un);
 
 	/*
 	 * Only if a device has "hotpluggable" property, it is
@@ -7851,14 +7804,14 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		kstat_install(un->un_stats);
 	}
 	SD_TRACE(SD_LOG_ATTACH_DETACH, un,
-	    "sdattach: un:0x%p un_stats created\n", un);
+	    "sd_unit_attach: un:0x%p un_stats created\n", un);
 
 	sd_create_errstats(un, instance);
 	if (un->un_errstats == NULL) {
 		goto create_errstats_failed;
 	}
 	SD_TRACE(SD_LOG_ATTACH_DETACH, un,
-	    "sdattach: un:0x%p errstats created\n", un);
+	    "sd_unit_attach: un:0x%p errstats created\n", un);
 
 	/*
 	 * The following if/else code was relocated here from below as part
@@ -7882,7 +7835,7 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			    1, 1) == 1) {
 				un->un_tagflags = FLAG_STAG;
 				SD_INFO(SD_LOG_ATTACH_DETACH, un,
-				    "sdattach: un:0x%p tag queueing "
+				    "sd_unit_attach: un:0x%p tag queueing "
 				    "enabled\n", un);
 			} else if (scsi_ifgetcap(SD_ADDRESS(un),
 			    "untagged-qing", 0) == 1) {
@@ -7903,7 +7856,7 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			un->un_f_opt_queueing = FALSE;
 			un->un_saved_throttle = un->un_throttle = 1;
 			SD_INFO(SD_LOG_ATTACH_DETACH, un,
-			    "sdattach: un:0x%p no tag queueing\n", un);
+			    "sd_unit_attach: un:0x%p no tag queueing\n", un);
 		}
 
 		/*
@@ -7914,7 +7867,7 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			    ddi_getprop(DDI_DEV_T_ANY, devi, 0,
 			    sd_max_xfer_size, SD_MAX_XFER_SIZE);
 			SD_INFO(SD_LOG_ATTACH_DETACH, un,
-			    "sdattach: un:0x%p max transfer "
+			    "sd_unit_attach: un:0x%p max transfer "
 			    "size=0x%x\n", un, un->un_max_xfer_size);
 
 		}
@@ -7934,7 +7887,7 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			if (scsi_ifsetcap(SD_ADDRESS(un), "wide-xfer",
 			    1, 1) == 1) {
 				SD_INFO(SD_LOG_ATTACH_DETACH, un,
-				    "sdattach: un:0x%p Wide Transfer "
+				    "sd_unit_attach: un:0x%p Wide Transfer "
 				    "enabled\n", un);
 			}
 
@@ -7947,14 +7900,14 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 				    ddi_getprop(DDI_DEV_T_ANY, devi, 0,
 				    sd_max_xfer_size, SD_MAX_XFER_SIZE);
 				SD_INFO(SD_LOG_ATTACH_DETACH, un,
-				    "sdattach: un:0x%p max transfer "
+				    "sd_unit_attach: un:0x%p max transfer "
 				    "size=0x%x\n", un, un->un_max_xfer_size);
 			}
 		} else {
 			if (scsi_ifsetcap(SD_ADDRESS(un), "wide-xfer",
 			    0, 1) == 1) {
 				SD_INFO(SD_LOG_ATTACH_DETACH, un,
-				    "sdattach: un:0x%p "
+				    "sd_unit_attach: un:0x%p "
 				    "Wide Transfer disabled\n", un);
 			}
 		}
@@ -7969,10 +7922,10 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	 */
 	if (un->un_f_lun_reset_enabled) {
 		if (scsi_ifsetcap(SD_ADDRESS(un), "lun-reset", 1, 1) == 1) {
-			SD_INFO(SD_LOG_ATTACH_DETACH, un, "sdattach: "
+			SD_INFO(SD_LOG_ATTACH_DETACH, un, "sd_unit_attach: "
 			    "un:0x%p lun_reset capability set\n", un);
 		} else {
-			SD_INFO(SD_LOG_ATTACH_DETACH, un, "sdattach: "
+			SD_INFO(SD_LOG_ATTACH_DETACH, un, "sd_unit_attach: "
 			    "un:0x%p lun-reset capability not set\n", un);
 		}
 	}
@@ -7997,7 +7950,7 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		if (ddi_xbuf_attr_setup_brk(un->un_xbuf_attr,
 		    un->un_max_xfer_size) == 1) {
 			un->un_buf_breakup_supported = 1;
-			SD_INFO(SD_LOG_ATTACH_DETACH, un, "sdattach: "
+			SD_INFO(SD_LOG_ATTACH_DETACH, un, "sd_unit_attach: "
 			    "un:0x%p Buf breakup enabled\n", un);
 		}
 	}
@@ -8011,10 +7964,12 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		un->un_pkt_flags = 0;
 	}
 
+	/* Initialize sd_ssc_t for internal uscsi commands */
+	ssc = sd_ssc_init(un);
 	scsi_fm_init(devp);
 
 	/*
-	 * Allocate memory for SCSI FMA stuff.
+	 * Allocate memory for SCSI FMA stuffs.
 	 */
 	un->un_fm_private =
 	    kmem_zalloc(sizeof (struct sd_fm_internal), KM_SLEEP);
@@ -8049,271 +8004,14 @@ sdattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			sfip->fm_log_level = SD_FM_LOG_SILENT;
 	}
 
-	/* Initialize sd_ssc_t for internal uscsi commands */
-	ssc = sd_ssc_init(un);
-
-	mutex_enter(SD_MUTEX(un));
-	/*
-	 * Initialize the devid for the unit. Indicate target reservation so
-	 * that no real I/O is done for devices that need devid fabrication.
-	 * We will try again in sd_unit_attach() if necessary.
-	 */
-	if (un->un_f_devid_supported) {
-		sd_register_devid(ssc, devi, SD_TARGET_IS_RESERVED);
-	}
-	mutex_exit(SD_MUTEX(un));
-
-	/* Uninitialize sd_ssc_t pointer */
-	sd_ssc_fini(ssc);
-
-	cmlb_alloc_handle(&un->un_cmlbhandle);
-
-	if (cmlb_attach(devi, &sd_tgops, (int)devp->sd_inq->inq_dtype,
-	    VOID2BOOLEAN(un->un_f_has_removable_media != 0),
-	    VOID2BOOLEAN(un->un_f_is_hotpluggable != 0),
-	    un->un_node_type, 0, un->un_cmlbhandle,
-	    (void *)SD_PATH_DIRECT) != 0) {
-		goto cmlb_attach_failed;
-	}
-
 	/*
 	 * At this point in the attach, we have enough info in the
 	 * soft state to be able to issue commands to the target.
 	 *
-	 * Schedule a taskq to finish attach to avoid holding the
-	 * device tree lock for too long. If this fails, rollback
-	 * and fail the attach.
-	 */
-
-	if (taskq_dispatch(sd_tq, sd_unit_attach, devi, KM_PUSHPAGE) != NULL)
-		return (DDI_SUCCESS);
-
-	cmlb_detach(un->un_cmlbhandle, (void *)SD_PATH_DIRECT);
-	cmlb_free_handle(&un->un_cmlbhandle);
-
-cmlb_attach_failed:
-	mutex_enter(SD_MUTEX(un));
-
-	/* Deallocate SCSI FMA memory spaces */
-	kmem_free(un->un_fm_private, sizeof (struct sd_fm_internal));
-
-	/* Cancel callback for SD_PATH_DIRECT_PRIORITY cmd. restart */
-	if (un->un_direct_priority_timeid != NULL) {
-		timeout_id_t temp_id = un->un_direct_priority_timeid;
-		un->un_direct_priority_timeid = NULL;
-		mutex_exit(SD_MUTEX(un));
-		(void) untimeout(temp_id);
-		mutex_enter(SD_MUTEX(un));
-	}
-
-	/* Cancel any pending start/stop timeouts */
-	if (un->un_startstop_timeid != NULL) {
-		timeout_id_t temp_id = un->un_startstop_timeid;
-		un->un_startstop_timeid = NULL;
-		mutex_exit(SD_MUTEX(un));
-		(void) untimeout(temp_id);
-		mutex_enter(SD_MUTEX(un));
-	}
-
-	/* Cancel any pending reset-throttle timeouts */
-	if (un->un_reset_throttle_timeid != NULL) {
-		timeout_id_t temp_id = un->un_reset_throttle_timeid;
-		un->un_reset_throttle_timeid = NULL;
-		mutex_exit(SD_MUTEX(un));
-		(void) untimeout(temp_id);
-		mutex_enter(SD_MUTEX(un));
-	}
-
-	/* Cancel rmw warning message timeouts */
-	if (un->un_rmw_msg_timeid != NULL) {
-		timeout_id_t temp_id = un->un_rmw_msg_timeid;
-		un->un_rmw_msg_timeid = NULL;
-		mutex_exit(SD_MUTEX(un));
-		(void) untimeout(temp_id);
-		mutex_enter(SD_MUTEX(un));
-	}
-
-	/* Cancel any pending retry timeouts */
-	if (un->un_retry_timeid != NULL) {
-		timeout_id_t temp_id = un->un_retry_timeid;
-		un->un_retry_timeid = NULL;
-		mutex_exit(SD_MUTEX(un));
-		(void) untimeout(temp_id);
-		mutex_enter(SD_MUTEX(un));
-	}
-
-	/* Cancel any pending delayed cv broadcast timeouts */
-	if (un->un_dcvb_timeid != NULL) {
-		timeout_id_t temp_id = un->un_dcvb_timeid;
-		un->un_dcvb_timeid = NULL;
-		mutex_exit(SD_MUTEX(un));
-		(void) untimeout(temp_id);
-		mutex_enter(SD_MUTEX(un));
-	}
-
-	mutex_exit(SD_MUTEX(un));
-
-	/* There should not be any in-progress I/O so ASSERT this check */
-	ASSERT(un->un_ncmds_in_transport == 0);
-	ASSERT(un->un_ncmds_in_driver == 0);
-
-	/* Do not free the softstate if the callback routine is active */
-	sd_sync_with_callback(un);
-
-	/*
-	 * Partition stats apparently are not used with removables. These would
-	 * not have been created during attach, so no need to clean them up...
-	 */
-	if (un->un_errstats != NULL) {
-		kstat_delete(un->un_errstats);
-		un->un_errstats = NULL;
-	}
-
-create_errstats_failed:
-
-	if (un->un_stats != NULL) {
-		kstat_delete(un->un_stats);
-		un->un_stats = NULL;
-	}
-
-	ddi_xbuf_attr_unregister_devinfo(un->un_xbuf_attr, devi);
-	ddi_xbuf_attr_destroy(un->un_xbuf_attr);
-
-	ddi_prop_remove_all(devi);
-	sema_destroy(&un->un_semoclose);
-	cv_destroy(&un->un_state_cv);
-
-	sd_free_rqs(un);
-
-alloc_rqs_failed:
-
-	devp->sd_private = NULL;
-	bzero(un, sizeof (struct sd_lun));	/* Clear any stale data! */
-
-	/*
-	 * Note: the man pages are unclear as to whether or not doing a
-	 * ddi_soft_state_free(sd_state, instance) is the right way to
-	 * clean up after the ddi_soft_state_zalloc() if the subsequent
-	 * ddi_get_soft_state() fails.  The implication seems to be
-	 * that the get_soft_state cannot fail if the zalloc succeeds.
-	 */
-#ifndef XPV_HVM_DRIVER
-	ddi_soft_state_free(sd_state, instance);
-#endif /* !XPV_HVM_DRIVER */
-
-probe_failed:
-	scsi_unprobe(devp);
-
-	return (DDI_FAILURE);
-}
-
-
-/*
- *    Function: sddetach
- *
- * Description: Driver's detach(9E) entry point function.
- *
- *   Arguments: devi - opaque device info handle
- *		cmd  - detach  type
- *
- * Return Code: DDI_SUCCESS
- *		DDI_FAILURE
- *
- *     Context: Kernel thread context
- */
-
-static int
-sddetach(dev_info_t *devi, ddi_detach_cmd_t cmd)
-{
-	switch (cmd) {
-	case DDI_DETACH:
-		return (sd_unit_detach(devi));
-	case DDI_SUSPEND:
-		return (sd_ddi_suspend(devi));
-	default:
-		break;
-	}
-	return (DDI_FAILURE);
-}
-
-
-/*
- *     Function: sd_sync_with_callback
- *
- *  Description: Prevents sd_unit_attach or sd_unit_detach from freeing the soft
- *		 state while the callback routine is active.
- *
- *    Arguments: un: softstate structure for the instance
- *
- *	Context: Kernel thread context
- */
-
-static void
-sd_sync_with_callback(struct sd_lun *un)
-{
-	ASSERT(un != NULL);
-
-	mutex_enter(SD_MUTEX(un));
-
-	ASSERT(un->un_in_callback >= 0);
-
-	while (un->un_in_callback > 0) {
-		mutex_exit(SD_MUTEX(un));
-		delay(2);
-		mutex_enter(SD_MUTEX(un));
-	}
-
-	mutex_exit(SD_MUTEX(un));
-}
-
-/*
- *    Function: sd_unit_attach
- *
- * Description: Performs DDI_ATTACH processing for sdattach(). Allocates
- *		the soft state structure for the device and performs
- *		all necessary structure and device initializations.
- *
- *   Arguments: devi: the system's dev_info_t for the device.
- *
- * Return Code: DDI_SUCCESS if attach is successful.
- *		DDI_FAILURE if any part of the attach fails.
- *
- *     Context: Called at attach(9e) time for the DDI_ATTACH flag.
- *		Kernel thread context only.  Can sleep.
- */
-void
-sd_unit_attach(void *arg)
-{
-	dev_info_t		*devi = arg;
-	struct	scsi_device	*devp = ddi_get_driver_private(devi);
-	struct	sd_lun		*un = (struct sd_lun *)devp->sd_private;
-	char			name_str[48];
-	int	reservation_flag = SD_TARGET_IS_UNRESERVED;
-	int	rval;
-	int	wc_enabled;
-	int	tgt;
-	uint64_t	capacity;
-	uint_t		lbasize = 0;
-	dev_info_t	*pdip = ddi_get_parent(devi);
-	int		geom_label_valid = 0;
-	sd_ssc_t	*ssc;
-	int		status;
-	char		*devid;
-
-	/*
-	 * Retrieve the target ID of the device.
-	 */
-	tgt = ddi_prop_get_int(DDI_DEV_T_ANY, devi, DDI_PROP_DONTPASS,
-	    SCSI_ADDR_PROP_TARGET, -1);
-
-	/*
 	 * All command paths used below MUST issue their commands as
 	 * SD_PATH_DIRECT. This is important as intermediate layers
 	 * are not all initialized yet (such as PM).
 	 */
-
-	/* Initialize sd_ssc_t for internal uscsi commands */
-	ssc = sd_ssc_init(un);
 
 	/*
 	 * Send a TEST UNIT READY command to the device. This should clear
@@ -8452,14 +8150,12 @@ sd_unit_attach(void *arg)
 				 * spin-up succeeded. Just continue with
 				 * the attach...
 				 */
-				if (status == EIO) {
+				if (status == EIO)
 					sd_ssc_assessment(ssc,
 					    SD_FMT_STATUS_CHECK);
-					goto spinup_failed;
-				} else {
+				else
 					sd_ssc_assessment(ssc,
 					    SD_FMT_IGNORE);
-				}
 				break;
 			}
 			break;
@@ -8509,9 +8205,7 @@ sd_unit_attach(void *arg)
 	 */
 	mutex_init(&un->un_pm_mutex, NULL, MUTEX_DRIVER, NULL);
 	cv_init(&un->un_pm_busy_cv, NULL, CV_DRIVER, NULL);
-#ifdef notyet
 	sd_setup_pm(ssc, devi);
-#endif
 	if (un->un_f_pm_is_enabled == FALSE) {
 		/*
 		 * For performance, point to a jump table that does
@@ -8582,14 +8276,25 @@ sd_unit_attach(void *arg)
 	 */
 	sd_check_emulation_mode(ssc);
 
+	cmlb_alloc_handle(&un->un_cmlbhandle);
+
 #if defined(__i386) || defined(__amd64)
 	/*
 	 * On x86, compensate for off-by-1 legacy error
 	 */
 	if (!un->un_f_has_removable_media && !un->un_f_is_hotpluggable &&
 	    (lbasize == un->un_sys_blocksize))
-		cmlb_workaround_off_by_one(un->un_cmlbhandle);
+		offbyone = CMLB_OFF_BY_ONE;
 #endif
+
+	if (cmlb_attach(devi, &sd_tgops, (int)devp->sd_inq->inq_dtype,
+	    VOID2BOOLEAN(un->un_f_has_removable_media != 0),
+	    VOID2BOOLEAN(un->un_f_is_hotpluggable != 0),
+	    un->un_node_type, offbyone, un->un_cmlbhandle,
+	    (void *)SD_PATH_DIRECT) != 0) {
+		goto cmlb_attach_failed;
+	}
+
 
 	/*
 	 * Read and validate the device's geometry (ie, disk label)
@@ -8603,9 +8308,9 @@ sd_unit_attach(void *arg)
 	mutex_enter(SD_MUTEX(un));
 
 	/*
-	 * Read and initialize the devid for the unit if not done already.
+	 * Read and initialize the devid for the unit.
 	 */
-	if (un->un_f_devid_supported && un->un_devid != NULL) {
+	if (un->un_f_devid_supported) {
 		sd_register_devid(ssc, devi, reservation_flag);
 	}
 	mutex_exit(SD_MUTEX(un));
@@ -8752,20 +8457,18 @@ sd_unit_attach(void *arg)
 	/* Uninitialize sd_ssc_t pointer */
 	sd_ssc_fini(ssc);
 
-	/* attach finished, switch to SD_STATE_NORMAL */
-	mutex_enter(SD_MUTEX(un));
-	New_state(un, SD_STATE_NORMAL);
-	cv_broadcast(&un->un_suspend_cv);
-	mutex_exit(SD_MUTEX(un));
-
-	return;
+	return (DDI_SUCCESS);
 
 	/*
 	 * An error occurred during the attach; clean up & return failure.
 	 */
-
 wm_cache_failed:
 devid_failed:
+
+setup_pm_failed:
+	ddi_remove_minor_node(devi, NULL);
+
+cmlb_attach_failed:
 	/*
 	 * Cleanup from the scsi_ifsetcap() calls (437868)
 	 */
@@ -8786,23 +8489,126 @@ devid_failed:
 	}
 
 spinup_failed:
-	/* attach failed, switch to SD_STATE_ATTACH_FAILED */
-	mutex_enter(SD_MUTEX(un));
-	New_state(un, SD_STATE_ATTACH_FAILED);
-	cv_broadcast(&un->un_suspend_cv);
-	mutex_exit(SD_MUTEX(un));
-
-	devid = DEVI(devi)->devi_devid_str;
-	scsi_fm_ereport_post(un->un_sd, 0,
-	    NULL, "disk.attach-failure", ssc->ssc_uscsi_info->ui_ena,
-	    devid, NULL, DDI_NOSLEEP, NULL,
-	    FM_VERSION, DATA_TYPE_UINT8, FM_EREPORT_VERS0,
-	    DEVID_IF_KNOWN(devid));
 
 	/* Uninitialize sd_ssc_t pointer */
 	sd_ssc_fini(ssc);
-	SD_ERROR(SD_LOG_ATTACH_DETACH, un, "sd_unit_attach failed: un: %p",
-	    (void *)un);
+
+	mutex_enter(SD_MUTEX(un));
+
+	/* Deallocate SCSI FMA memory spaces */
+	kmem_free(un->un_fm_private, sizeof (struct sd_fm_internal));
+
+	/* Cancel callback for SD_PATH_DIRECT_PRIORITY cmd. restart */
+	if (un->un_direct_priority_timeid != NULL) {
+		timeout_id_t temp_id = un->un_direct_priority_timeid;
+		un->un_direct_priority_timeid = NULL;
+		mutex_exit(SD_MUTEX(un));
+		(void) untimeout(temp_id);
+		mutex_enter(SD_MUTEX(un));
+	}
+
+	/* Cancel any pending start/stop timeouts */
+	if (un->un_startstop_timeid != NULL) {
+		timeout_id_t temp_id = un->un_startstop_timeid;
+		un->un_startstop_timeid = NULL;
+		mutex_exit(SD_MUTEX(un));
+		(void) untimeout(temp_id);
+		mutex_enter(SD_MUTEX(un));
+	}
+
+	/* Cancel any pending reset-throttle timeouts */
+	if (un->un_reset_throttle_timeid != NULL) {
+		timeout_id_t temp_id = un->un_reset_throttle_timeid;
+		un->un_reset_throttle_timeid = NULL;
+		mutex_exit(SD_MUTEX(un));
+		(void) untimeout(temp_id);
+		mutex_enter(SD_MUTEX(un));
+	}
+
+	/* Cancel rmw warning message timeouts */
+	if (un->un_rmw_msg_timeid != NULL) {
+		timeout_id_t temp_id = un->un_rmw_msg_timeid;
+		un->un_rmw_msg_timeid = NULL;
+		mutex_exit(SD_MUTEX(un));
+		(void) untimeout(temp_id);
+		mutex_enter(SD_MUTEX(un));
+	}
+
+	/* Cancel any pending retry timeouts */
+	if (un->un_retry_timeid != NULL) {
+		timeout_id_t temp_id = un->un_retry_timeid;
+		un->un_retry_timeid = NULL;
+		mutex_exit(SD_MUTEX(un));
+		(void) untimeout(temp_id);
+		mutex_enter(SD_MUTEX(un));
+	}
+
+	/* Cancel any pending delayed cv broadcast timeouts */
+	if (un->un_dcvb_timeid != NULL) {
+		timeout_id_t temp_id = un->un_dcvb_timeid;
+		un->un_dcvb_timeid = NULL;
+		mutex_exit(SD_MUTEX(un));
+		(void) untimeout(temp_id);
+		mutex_enter(SD_MUTEX(un));
+	}
+
+	mutex_exit(SD_MUTEX(un));
+
+	/* There should not be any in-progress I/O so ASSERT this check */
+	ASSERT(un->un_ncmds_in_transport == 0);
+	ASSERT(un->un_ncmds_in_driver == 0);
+
+	/* Do not free the softstate if the callback routine is active */
+	sd_sync_with_callback(un);
+
+	/*
+	 * Partition stats apparently are not used with removables. These would
+	 * not have been created during attach, so no need to clean them up...
+	 */
+	if (un->un_errstats != NULL) {
+		kstat_delete(un->un_errstats);
+		un->un_errstats = NULL;
+	}
+
+create_errstats_failed:
+
+	if (un->un_stats != NULL) {
+		kstat_delete(un->un_stats);
+		un->un_stats = NULL;
+	}
+
+	ddi_xbuf_attr_unregister_devinfo(un->un_xbuf_attr, devi);
+	ddi_xbuf_attr_destroy(un->un_xbuf_attr);
+
+	ddi_prop_remove_all(devi);
+	sema_destroy(&un->un_semoclose);
+	cv_destroy(&un->un_state_cv);
+
+getrbuf_failed:
+
+	sd_free_rqs(un);
+
+alloc_rqs_failed:
+
+	devp->sd_private = NULL;
+	bzero(un, sizeof (struct sd_lun));	/* Clear any stale data! */
+
+get_softstate_failed:
+	/*
+	 * Note: the man pages are unclear as to whether or not doing a
+	 * ddi_soft_state_free(sd_state, instance) is the right way to
+	 * clean up after the ddi_soft_state_zalloc() if the subsequent
+	 * ddi_get_soft_state() fails.  The implication seems to be
+	 * that the get_soft_state cannot fail if the zalloc succeeds.
+	 */
+#ifndef XPV_HVM_DRIVER
+	ddi_soft_state_free(sd_state, instance);
+#endif /* !XPV_HVM_DRIVER */
+
+probe_failed:
+	scsi_unprobe(devp);
+
+	return (DDI_FAILURE);
 }
 
 
@@ -8886,21 +8692,11 @@ sd_unit_detach(dev_info_t *devi)
 	 */
 	if ((un->un_ncmds_in_transport != 0) || (un->un_retry_timeid != NULL) ||
 	    (un->un_direct_priority_timeid != NULL) ||
-	    (un->un_state == SD_STATE_RWAIT) ||
-	    (un->un_state == SD_STATE_ATTACHING)) {
+	    (un->un_state == SD_STATE_RWAIT)) {
 		mutex_exit(SD_MUTEX(un));
 		SD_ERROR(SD_LOG_ATTACH_DETACH, un,
 		    "sd_dr_detach: Detach failure due to outstanding cmds\n");
 		goto err_stillbusy;
-	}
-
-	/*
-	 * If the attach wasn't successful, some normal cleanup work must not
-	 * be done.
-	 */
-	if (un->un_state == SD_STATE_ATTACH_FAILED) {
-		mutex_exit(SD_MUTEX(un));
-		goto no_attach_cleanup;
 	}
 
 	/*
@@ -9168,7 +8964,6 @@ sd_unit_detach(dev_info_t *devi)
 	/* Do not free the softstate if the callback routine is active */
 	sd_sync_with_callback(un);
 
-no_attach_cleanup:
 	cmlb_detach(un->un_cmlbhandle, (void *)SD_PATH_DIRECT);
 	cmlb_free_handle(&un->un_cmlbhandle);
 
@@ -9290,9 +9085,6 @@ no_attach_cleanup:
 	if ((tgt >= 0) && (tgt < NTARGETS_WIDE)) {
 		sd_scsi_update_lun_on_target(pdip, tgt, SD_SCSI_LUN_DETACH);
 	}
-
-	ddi_remove_minor_node(devi, NULL);
-	(void) devfs_clean(devi, NULL, DV_CLEAN_FORCE);
 
 	return (DDI_SUCCESS);
 
@@ -10464,17 +10256,8 @@ sdopen(dev_t *dev_p, int flag, int otyp, cred_t *cred_p)
 
 	if (!nodelay) {
 		while ((un->un_state == SD_STATE_SUSPENDED) ||
-		    (un->un_state == SD_STATE_PM_CHANGING) ||
-		    (un->un_state == SD_STATE_ATTACHING)) {
+		    (un->un_state == SD_STATE_PM_CHANGING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-		}
-
-		if (un->un_state == SD_STATE_ATTACH_FAILED) {
-			mutex_exit(SD_MUTEX(un));
-			rval = EIO;
-			SD_ERROR(SD_LOG_OPEN_CLOSE, un,
-			    "sdopen: attach failed, can't open\n");
-			goto open_failed_not_attached;
 		}
 
 		mutex_exit(SD_MUTEX(un));
@@ -10485,12 +10268,6 @@ sdopen(dev_t *dev_p, int flag, int otyp, cred_t *cred_p)
 			goto open_failed_with_pm;
 		}
 		mutex_enter(SD_MUTEX(un));
-	} else if (un->un_state == SD_STATE_ATTACH_FAILED) {
-		mutex_exit(SD_MUTEX(un));
-		rval = EIO;
-		SD_ERROR(SD_LOG_OPEN_CLOSE, un,
-		    "sdopen: attach failed, can't open\n");
-		goto open_failed_not_attached;
 	}
 
 	/* check for previous exclusive open */
@@ -10675,7 +10452,6 @@ open_fail:
 		sd_pm_exit(un);
 	}
 open_failed_with_pm:
-open_failed_not_attached:
 	sema_v(&un->un_semoclose);
 
 	mutex_enter(&sd_detach_mutex);
@@ -10736,9 +10512,8 @@ sdclose(dev_t dev, int flag, int otyp, cred_t *cred_p)
 
 	mutex_enter(SD_MUTEX(un));
 
-	/* Don't proceed if power is being changed or we're still attaching. */
-	while ((un->un_state == SD_STATE_PM_CHANGING) ||
-	    (un->un_state == SD_STATE_ATTACHING)) {
+	/* Don't proceed if power is being changed. */
+	while (un->un_state == SD_STATE_PM_CHANGING) {
 		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 	}
 
@@ -10780,7 +10555,7 @@ sdclose(dev_t dev, int flag, int otyp, cred_t *cred_p)
 			    (void *)SD_PATH_DIRECT);
 			mutex_enter(SD_MUTEX(un));
 
-		} else if (un->un_state != SD_STATE_ATTACH_FAILED) {
+		} else {
 			/*
 			 * Flush any outstanding writes in NVRAM cache.
 			 * Note: SYNCHRONIZE CACHE is an optional SCSI-2
@@ -11208,16 +10983,6 @@ sdread(dev_t dev, struct uio *uio, cred_t *cred_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
-	mutex_enter(SD_MUTEX(un));
-	while (un->un_state == SD_STATE_ATTACHING)
-		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-
-	if (un->un_state == SD_STATE_ATTACH_FAILED) {
-		mutex_exit(SD_MUTEX(un));
-		SD_ERROR(SD_LOG_READ_WRITE, un, "sdread: attach failed\n");
-		return (EIO);
-	}
-	mutex_exit(SD_MUTEX(un));
 
 	if (!SD_IS_VALID_LABEL(un) && !ISCD(un)) {
 		mutex_enter(SD_MUTEX(un));
@@ -11230,7 +10995,6 @@ sdread(dev_t dev, struct uio *uio, cred_t *cred_p)
 		    (un->un_state == SD_STATE_PM_CHANGING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 		}
-
 		un->un_ncmds_in_driver++;
 		mutex_exit(SD_MUTEX(un));
 
@@ -11310,17 +11074,6 @@ sdwrite(dev_t dev, struct uio *uio, cred_t *cred_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
-	mutex_enter(SD_MUTEX(un));
-	while (un->un_state == SD_STATE_ATTACHING)
-		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-
-	if (un->un_state == SD_STATE_ATTACH_FAILED) {
-		mutex_exit(SD_MUTEX(un));
-		SD_ERROR(SD_LOG_READ_WRITE, un, "sdwrite: attach failed\n");
-		return (EIO);
-	}
-	mutex_exit(SD_MUTEX(un));
-
 	if (!SD_IS_VALID_LABEL(un) && !ISCD(un)) {
 		mutex_enter(SD_MUTEX(un));
 		/*
@@ -11332,7 +11085,6 @@ sdwrite(dev_t dev, struct uio *uio, cred_t *cred_p)
 		    (un->un_state == SD_STATE_PM_CHANGING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 		}
-
 		un->un_ncmds_in_driver++;
 		mutex_exit(SD_MUTEX(un));
 
@@ -11412,17 +11164,6 @@ sdaread(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
-	mutex_enter(SD_MUTEX(un));
-	while (un->un_state == SD_STATE_ATTACHING)
-		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-
-	if (un->un_state == SD_STATE_ATTACH_FAILED) {
-		mutex_exit(SD_MUTEX(un));
-		SD_ERROR(SD_LOG_READ_WRITE, un, "sdaread: attach failed\n");
-		return (EIO);
-	}
-	mutex_exit(SD_MUTEX(un));
-
 	if (!SD_IS_VALID_LABEL(un) && !ISCD(un)) {
 		mutex_enter(SD_MUTEX(un));
 		/*
@@ -11434,7 +11175,6 @@ sdaread(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 		    (un->un_state == SD_STATE_PM_CHANGING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 		}
-
 		un->un_ncmds_in_driver++;
 		mutex_exit(SD_MUTEX(un));
 
@@ -11514,18 +11254,6 @@ sdawrite(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
-	mutex_enter(SD_MUTEX(un));
-	while (un->un_state == SD_STATE_ATTACHING)
-		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
-
-	if (un->un_state == SD_STATE_ATTACH_FAILED) {
-		mutex_exit(SD_MUTEX(un));
-		SD_ERROR(SD_LOG_READ_WRITE, un,
-		    "sdawrite: attach failed\n");
-		return (EIO);
-	}
-	mutex_exit(SD_MUTEX(un));
-
 	if (!SD_IS_VALID_LABEL(un) && !ISCD(un)) {
 		mutex_enter(SD_MUTEX(un));
 		/*
@@ -11537,7 +11265,6 @@ sdawrite(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 		    (un->un_state == SD_STATE_PM_CHANGING)) {
 			cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 		}
-
 		un->un_ncmds_in_driver++;
 		mutex_exit(SD_MUTEX(un));
 
@@ -11682,6 +11409,40 @@ sdawrite(dev_t dev, struct aio_req *aio, cred_t *cred_p)
 
 
 /*
+ * Create taskq for all targets in the system. This is created at
+ * _init(9E) and destroyed at _fini(9E).
+ *
+ * Note: here we set the minalloc to a reasonably high number to ensure that
+ * we will have an adequate supply of task entries available at interrupt time.
+ * This is used in conjunction with the TASKQ_PREPOPULATE flag in
+ * sd_create_taskq().  Since we do not want to sleep for allocations at
+ * interrupt time, set maxalloc equal to minalloc. That way we will just fail
+ * the command if we ever try to dispatch more than SD_TASKQ_MAXALLOC taskq
+ * requests any one instant in time.
+ */
+#define	SD_TASKQ_NUMTHREADS	8
+#define	SD_TASKQ_MINALLOC	256
+#define	SD_TASKQ_MAXALLOC	256
+
+static taskq_t	*sd_tq = NULL;
+_NOTE(SCHEME_PROTECTS_DATA("stable data", sd_tq))
+
+static int	sd_taskq_minalloc = SD_TASKQ_MINALLOC;
+static int	sd_taskq_maxalloc = SD_TASKQ_MAXALLOC;
+
+/*
+ * The following task queue is being created for the write part of
+ * read-modify-write of non-512 block size devices.
+ * Limit the number of threads to 1 for now. This number has been chosen
+ * considering the fact that it applies only to dvd ram drives/MO drives
+ * currently. Performance for which is not main criteria at this stage.
+ * Note: It needs to be explored if we can use a single taskq in future
+ */
+#define	SD_WMR_TASKQ_NUMTHREADS	1
+static taskq_t	*sd_wmr_tq = NULL;
+_NOTE(SCHEME_PROTECTS_DATA("stable data", sd_wmr_tq))
+
+/*
  *    Function: sd_taskq_create
  *
  * Description: Create taskq thread(s) and preallocate task entries
@@ -11790,21 +11551,9 @@ sdstrategy(struct buf *bp)
 	 * if it's power level is changing.
 	 */
 	while ((un->un_state == SD_STATE_SUSPENDED) ||
-	    (un->un_state == SD_STATE_PM_CHANGING) ||
-	    (un->un_state == SD_STATE_ATTACHING)) {
+	    (un->un_state == SD_STATE_PM_CHANGING)) {
 		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 	}
-
-	if (un->un_state == SD_STATE_ATTACH_FAILED) {
-		mutex_exit(SD_MUTEX(un));
-		bioerror(bp, EIO);
-		bp->b_resid = bp->b_bcount;
-		biodone(bp);
-		SD_ERROR(SD_LOG_READ_WRITE, un,
-		    "sdstrategy: attach failed\n");
-		return (0);
-	}
-
 
 	un->un_ncmds_in_driver++;
 
@@ -12056,13 +11805,6 @@ sd_uscsi_strategy(struct buf *bp)
 		un->un_f_sync_cache_required = TRUE;
 
 	mutex_exit(SD_MUTEX(un));
-
-	if (sd_failfast_enable & SD_FAILFAST_ENABLE_FAIL_USCSI) {
-		/*
-		 * Treat all commands as if they have B_FAILFAST set.
-		 */
-		bp->b_flags |= B_FAILFAST;
-	}
 
 	switch (uip->ui_flags) {
 	case SD_PATH_DIRECT:
@@ -13975,6 +13717,9 @@ sd_init_cdb_limits(struct sd_lun *un)
 
 	un->un_status_len = (int)((un->un_f_arq_enabled == TRUE)
 	    ? sizeof (struct scsi_arq_status) : 1);
+	if (!ISCD(un))
+		un->un_cmd_timeout = (ushort_t)sd_io_time;
+	un->un_uscsi_timeout = ((ISCD(un)) ? 2 : 1) * un->un_cmd_timeout;
 }
 
 
@@ -15113,32 +14858,6 @@ sd_start_cmds(struct sd_lun *un, struct buf *immed_bp)
 
 	SD_TRACE(SD_LOG_IO_CORE | SD_LOG_ERROR, un, "sd_start_cmds: entry\n");
 
-	/* check if LUN is retiring */
-	/* enable failfast in this case */
-	if (DEVI(un->un_sd->sd_dev)->devi_flags &
-	    DEVI_RETIRING) {
-		un->un_failfast_state = SD_FAILFAST_ACTIVE;
-		un->un_failfast_bp = NULL;
-		return;
-	}
-	/* check if LUN is in retired state */
-	/* abort IO and flush queue in case if it is */
-	if (DEVI(un->un_sd->sd_dev)->devi_flags &
-	    DEVI_RETIRED) {
-		if (immed_bp) {
-			immed_bp->b_resid = immed_bp->b_bcount;
-			bioerror(immed_bp, ENXIO);
-			biodone(immed_bp);
-		}
-		/* abort in-flight IO */
-		scsi_abort(SD_ADDRESS(un), NULL);
-		/* abort pending IO */
-		un->un_failfast_bp = NULL;
-		un->un_failfast_state = SD_FAILFAST_ACTIVE;
-		sd_failfast_flushq(un, B_TRUE);
-		return;
-	}
-
 	do {
 #if defined(__i386) || defined(__amd64)	/* DMAFREE for x86 only */
 		saved_statp = NULL;
@@ -15278,13 +14997,9 @@ sd_start_cmds(struct sd_lun *un, struct buf *immed_bp)
 		 * not be put back to normal. Doing so would would
 		 * allow new commands to proceed when they shouldn't,
 		 * the device may be going off.
-		 *
-		 * Similarly, if the state is SD_STATE_ATTACHING we should
-		 * not set it to SD_STATE_NORMAL to avoid corruption.
 		 */
 		if ((un->un_state != SD_STATE_SUSPENDED) &&
-		    (un->un_state != SD_STATE_PM_CHANGING) &&
-		    (un->un_state != SD_STATE_ATTACHING)) {
+		    (un->un_state != SD_STATE_PM_CHANGING)) {
 			New_state(un, SD_STATE_NORMAL);
 		}
 
@@ -15533,14 +15248,6 @@ got_pkt:
 		    "sd_start_cmds: calling scsi_transport()\n");
 		DTRACE_PROBE1(scsi__transport__dispatch, struct buf *, bp);
 
-#ifdef SD_FAULT_INJECTION
-		/*
-		 * Packet is ready for submission to the HBA. Perform HBA-based
-		 * fault-injection.
-		 */
-		sd_prefaultinjection(xp->xb_pktp);
-#endif /* SD_FAULT_INJECTION */
-
 		mutex_exit(SD_MUTEX(un));
 		rval = scsi_transport(xp->xb_pktp);
 		mutex_enter(SD_MUTEX(un));
@@ -15558,36 +15265,13 @@ got_pkt:
 			un->un_ncmds_in_transport--;
 			ASSERT(un->un_ncmds_in_transport >= 0);
 
-#ifdef SD_FAULT_INJECTION
-			/*
-			 * If the packet was rejected during active fault
-			 * injection session, move to the next fault slot
-			 * and reset packet flag related to rejection.
-			 */
-			if (sd_fault_injection_on) {
-				uint_t i = un->sd_fi_fifo_start;
-
-				if (un->sd_fi_fifo_tran[i] != NULL) {
-					kmem_free(un->sd_fi_fifo_tran[i],
-					    sizeof (struct sd_fi_tran));
-					un->sd_fi_fifo_tran[i] = NULL;
-				}
-				un->sd_fi_fifo_start++;
-			}
-
-			if (xp->xb_pktp->pkt_flags & FLAG_PKT_BUSY) {
-				xp->xb_pktp->pkt_flags &= ~FLAG_PKT_BUSY;
-			}
-#endif /* SD_FAULT_INJECTION */
-
 			/*
 			 * Don't retry request sense, the sense data
 			 * is lost when another request is sent.
 			 * Free up the rqs buf and retry
 			 * the original failed cmd.  Update kstat.
 			 */
-			if ((un->un_ncmds_in_transport > 0) &&
-			    (bp == un->un_rqs_bp)) {
+			if (bp == un->un_rqs_bp) {
 				SD_UPDATE_KSTATS(un, kstat_runq_exit, bp);
 				bp = sd_mark_rqs_idle(un, xp);
 				sd_retry_command(un, bp, SD_RETRIES_STANDARD,
@@ -16001,12 +15685,6 @@ sd_return_failed_command_no_restart(struct sd_lun *un, struct buf *bp,
  *		   in the pkt. If FLAG_ISOLATE is set, then the command is
  *		   not retried, it is simply failed.
  *
- *		   Optionally may be bitwise-OR'ed with SD_RETRIES_FAILFAST
- *		   to indicate a retry following a command timeout, and check
- *		   if the target should transition to failfast pending or
- *		   failfast active. If the buf has B_FAILFAST set, the
- *		   command should be failed when failfast is active.
- *
  *		user_funcp - Ptr to function to call before dispatching the
  *		   command. May be NULL if no action needs to be performed.
  *		   (Primarily intended for printing messages.)
@@ -16111,22 +15789,6 @@ sd_retry_command(struct sd_lun *un, struct buf *bp, int retry_check_flag,
 		}
 	}
 
-	if (sd_failfast_enable & SD_FAILFAST_ENABLE_FAIL_RETRIES) {
-		if (sd_failfast_enable & SD_FAILFAST_ENABLE_FAIL_ALL_RETRIES) {
-			/*
-			 * Fail ALL retries when in active failfast state,
-			 * regardless of reason.
-			 */
-			if (un->un_failfast_state == SD_FAILFAST_ACTIVE) {
-				goto fail_command;
-			}
-		}
-		/*
-		 * Treat bufs being retried as if they have the
-		 * B_FAILFAST flag set.
-		 */
-		bp->b_flags |= B_FAILFAST;
-	}
 
 	/*
 	 * If SD_RETRIES_FAILFAST is set, it indicates that either a
@@ -16178,7 +15840,7 @@ sd_retry_command(struct sd_lun *un, struct buf *bp, int retry_check_flag,
 				 */
 				un->un_failfast_state = SD_FAILFAST_ACTIVE;
 				un->un_failfast_bp = NULL;
-				sd_failfast_flushq(un, B_FALSE);
+				sd_failfast_flushq(un);
 
 				/*
 				 * Fail this bp now if B_FAILFAST set;
@@ -16219,14 +15881,8 @@ sd_retry_command(struct sd_lun *un, struct buf *bp, int retry_check_flag,
 		 * In this case we want to be aggressive about clearing
 		 * the failfast state. Note that this does not affect
 		 * the "failfast pending" condition.
-		 *
-		 * We limit this to retries that are not a side effect of an
-		 * unrelated event, as it would be unwise to clear failfast
-		 * active state when we see retries due to a reset.
 		 */
-		if ((sd_failfast_enable & SD_FAILFAST_ENABLE_FORCE_INACTIVE) &&
-		    (retry_check_flag & SD_RETRIES_MASK) != SD_RETRIES_VICTIM)
-			un->un_failfast_state = SD_FAILFAST_INACTIVE;
+		un->un_failfast_state = SD_FAILFAST_INACTIVE;
 	}
 
 
@@ -16669,7 +16325,7 @@ sd_start_direct_priority_command(void *arg)
 
 static void
 sd_send_request_sense_command(struct sd_lun *un, struct buf *bp,
-	int retry_check_flag, struct scsi_pkt *pktp)
+	struct scsi_pkt *pktp)
 {
 	ASSERT(bp != NULL);
 	ASSERT(un != NULL);
@@ -16696,11 +16352,14 @@ sd_send_request_sense_command(struct sd_lun *un, struct buf *bp,
 	 *    1) the sense buf is busy
 	 *    2) we have 1 or more outstanding commands on the target
 	 *    (the sense data will be cleared or invalidated any way)
+	 *
+	 * Note: There could be an issue with not checking a retry limit here,
+	 * the problem is determining which retry limit to check.
 	 */
 	if ((un->un_sense_isbusy != 0) || (un->un_ncmds_in_transport > 0)) {
 		/* Don't retry if the command is flagged as non-retryable */
 		if ((pktp->pkt_flags & FLAG_DIAGNOSE) == 0) {
-			sd_retry_command(un, bp, retry_check_flag,
+			sd_retry_command(un, bp, SD_RETRIES_NOCHECK,
 			    NULL, NULL, 0, un->un_busy_timeout,
 			    kstat_waitq_enter);
 			SD_TRACE(SD_LOG_IO_CORE | SD_LOG_ERROR, un,
@@ -16872,7 +16531,7 @@ sd_alloc_rqs(struct scsi_device *devp, struct sd_lun *un)
 
 	/* Set up the other needed members in the ARQ scsi_pkt. */
 	un->un_rqs_pktp->pkt_comp   = sdintr;
-	un->un_rqs_pktp->pkt_time   = ((ISCD(un)) ? 2 : 1) * sd_io_time;
+	un->un_rqs_pktp->pkt_time   = sd_io_time;
 	un->un_rqs_pktp->pkt_flags |=
 	    (FLAG_SENSING | FLAG_HEAD);	/* (1222170) */
 
@@ -17216,33 +16875,6 @@ sdrunout(caddr_t arg)
 	return (1);
 }
 
-static void
-sd_slow_io_ereport(struct scsi_pkt *pktp)
-{
-	struct buf *bp;
-	struct sd_lun *un;
-	char *devid;
-
-	ASSERT(pktp != NULL);
-	bp = (struct buf *)pktp->pkt_private;
-	ASSERT(bp != NULL);
-	un = SD_GET_UN(bp);
-	ASSERT(un != NULL);
-
-	SD_ERROR(SD_LOG_IO_CORE | SD_LOG_ERROR, un,
-	    "Slow IO detected SD: 0x%p delta in nsec: %llu",
-	    (void *)un, pktp->pkt_stop - pktp->pkt_start);
-
-	devid = DEVI(un->un_sd->sd_dev)->devi_devid_str;
-	scsi_fm_ereport_post(un->un_sd, 0, NULL, "cmd.disk.slow-io",
-	    fm_ena_generate(0, FM_ENA_FMT1), devid, NULL, DDI_NOSLEEP, NULL,
-	    FM_VERSION, DATA_TYPE_UINT8, FM_EREPORT_VERS0,
-	    "start", DATA_TYPE_UINT64, pktp->pkt_start,
-	    "stop", DATA_TYPE_UINT64, pktp->pkt_stop,
-	    "delta", DATA_TYPE_UINT64, pktp->pkt_stop - pktp->pkt_start,
-	    "threshold", DATA_TYPE_UINT64, un->un_slow_io_threshold,
-	    NULL);
-}
 
 /*
  *    Function: sdintr
@@ -17297,10 +16929,6 @@ sdintr(struct scsi_pkt *pktp)
 	un->un_in_callback++;
 
 	SD_UPDATE_KSTATS(un, kstat_runq_exit, bp);
-	if ((pktp->pkt_stop - pktp->pkt_start) > un->un_slow_io_threshold) {
-		sd_slow_io_ereport(pktp);
-	}
-
 
 #ifdef	SDDEBUG
 	if (bp == un->un_retry_bp) {
@@ -17539,8 +17167,7 @@ not_successful:
 		 */
 		if ((pktp->pkt_reason == CMD_CMPLT) &&
 		    (SD_GET_PKT_STATUS(pktp) == STATUS_CHECK)) {
-			sd_send_request_sense_command(un, bp,
-			    SD_RETRIES_STANDARD, pktp);
+			sd_send_request_sense_command(un, bp, pktp);
 		} else {
 			sd_return_failed_command(un, bp, EIO);
 		}
@@ -19649,7 +19276,7 @@ sd_pkt_reason_cmd_unx_bus_free(struct sd_lun *un, struct buf *bp,
 	funcp = ((pktp->pkt_statistics & STAT_PERR) == 0) ?
 	    sd_print_retry_msg : NULL;
 
-	sd_retry_command(un, bp, (SD_RETRIES_VICTIM | SD_RETRIES_ISOLATE),
+	sd_retry_command(un, bp, (SD_RETRIES_STANDARD | SD_RETRIES_ISOLATE),
 	    funcp, NULL, EIO, SD_RESTART_TIMEOUT, NULL);
 }
 
@@ -19752,8 +19379,7 @@ sd_pkt_status_check_condition(struct sd_lun *un, struct buf *bp,
 	if (un->un_f_arq_enabled == FALSE) {
 		SD_INFO(SD_LOG_IO_CORE, un, "sd_pkt_status_check_condition: "
 		    "no ARQ, sending request sense command\n");
-		sd_send_request_sense_command(un, bp, SD_RETRIES_STANDARD,
-		    pktp);
+		sd_send_request_sense_command(un, bp, pktp);
 	} else {
 		SD_INFO(SD_LOG_IO_CORE, un, "sd_pkt_status_check_condition: "
 		    "ARQ,retrying request sense command\n");
@@ -20524,7 +20150,7 @@ sd_send_scsi_READ_CAPACITY(sd_ssc_t *ssc, uint64_t *capp, uint32_t *lbap,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (sense_buf);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -20740,7 +20366,7 @@ sd_send_scsi_READ_CAPACITY_16(sd_ssc_t *ssc, uint64_t *capp,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (sense_buf);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 
 	/*
 	 * Read Capacity (16) is a Service Action In command.  One
@@ -20962,7 +20588,7 @@ sd_send_scsi_START_STOP_UNIT(sd_ssc_t *ssc, int pc_flag, int flag,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 3 * un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 200;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -21181,7 +20807,7 @@ sd_send_scsi_INQUIRY(sd_ssc_t *ssc, uchar_t *bufaddr, size_t buflen,
 	ucmd_buf.uscsi_rqbuf	= NULL;
 	ucmd_buf.uscsi_rqlen	= 0;
 	ucmd_buf.uscsi_flags	= USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= 2 * un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 200;	/* Excessive legacy value */
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, SD_PATH_DIRECT);
@@ -21284,7 +20910,7 @@ sd_send_scsi_TEST_UNIT_READY(sd_ssc_t *ssc, int flag)
 	if ((flag & SD_DONT_RETRY_TUR) != 0) {
 		ucmd_buf.uscsi_flags |= USCSI_DIAGNOSE;
 	}
-	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, ((flag & SD_BYPASS_PM) ? SD_PATH_DIRECT :
@@ -21381,7 +21007,7 @@ sd_send_scsi_PERSISTENT_RESERVE_IN(sd_ssc_t *ssc, uchar_t  usr_cmd,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, SD_PATH_STANDARD);
@@ -21487,7 +21113,7 @@ sd_send_scsi_PERSISTENT_RESERVE_OUT(sd_ssc_t *ssc, uchar_t usr_cmd,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_WRITE | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 
 	switch (usr_cmd) {
 	case SD_SCSI3_REGISTER: {
@@ -21682,7 +21308,7 @@ sd_send_scsi_SYNCHRONIZE_CACHE(struct sd_lun *un, struct dk_callback *dkc)
 	uscmd->uscsi_rqlen = SENSE_LENGTH;
 	uscmd->uscsi_rqresid = SENSE_LENGTH;
 	uscmd->uscsi_flags = USCSI_RQENABLE | USCSI_SILENT;
-	uscmd->uscsi_timeout = un->un_cmd_timeout;
+	uscmd->uscsi_timeout = sd_io_time;
 
 	/*
 	 * Allocate an sd_uscsi_info struct and fill it with the info
@@ -21900,7 +21526,7 @@ sd_send_scsi_GET_CONFIGURATION(sd_ssc_t *ssc, struct uscsi_cmd *ucmdbuf,
 	ucmdbuf->uscsi_cdblen = CDB_GROUP1;
 	ucmdbuf->uscsi_bufaddr = (caddr_t)bufaddr;
 	ucmdbuf->uscsi_buflen = buflen;
-	ucmdbuf->uscsi_timeout = un->un_uscsi_timeout;
+	ucmdbuf->uscsi_timeout = sd_io_time;
 	ucmdbuf->uscsi_rqbuf = (caddr_t)rqbuf;
 	ucmdbuf->uscsi_rqlen = rqbuflen;
 	ucmdbuf->uscsi_flags = USCSI_RQENABLE|USCSI_SILENT|USCSI_READ;
@@ -21993,7 +21619,7 @@ sd_send_scsi_feature_GET_CONFIGURATION(sd_ssc_t *ssc,
 	ucmdbuf->uscsi_cdblen = CDB_GROUP1;
 	ucmdbuf->uscsi_bufaddr = (caddr_t)bufaddr;
 	ucmdbuf->uscsi_buflen = buflen;
-	ucmdbuf->uscsi_timeout = un->un_uscsi_timeout;
+	ucmdbuf->uscsi_timeout = sd_io_time;
 	ucmdbuf->uscsi_rqbuf = (caddr_t)rqbuf;
 	ucmdbuf->uscsi_rqlen = rqbuflen;
 	ucmdbuf->uscsi_flags = USCSI_RQENABLE|USCSI_SILENT|USCSI_READ;
@@ -22106,7 +21732,7 @@ sd_send_scsi_MODE_SENSE(sd_ssc_t *ssc, int cdbsize, uchar_t *bufaddr,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -22225,7 +21851,7 @@ sd_send_scsi_MODE_SELECT(sd_ssc_t *ssc, int cdbsize, uchar_t *bufaddr,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_WRITE | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -22363,7 +21989,7 @@ sd_send_scsi_RDWR(sd_ssc_t *ssc, uchar_t cmd, void *bufaddr,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= flag | USCSI_RQENABLE | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= un->un_cmd_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
 
@@ -22445,7 +22071,7 @@ sd_send_scsi_LOG_SENSE(sd_ssc_t *ssc, uchar_t *bufaddr, uint16_t buflen,
 	ucmd_buf.uscsi_rqbuf	= (caddr_t)&sense_buf;
 	ucmd_buf.uscsi_rqlen	= sizeof (struct scsi_extended_sense);
 	ucmd_buf.uscsi_flags	= USCSI_RQENABLE | USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, path_flag);
@@ -22577,7 +22203,7 @@ sd_send_scsi_GET_EVENT_STATUS_NOTIFICATION(sd_ssc_t *ssc, uchar_t *bufaddr,
 	ucmd_buf.uscsi_rqbuf	= NULL;
 	ucmd_buf.uscsi_rqlen	= 0;
 	ucmd_buf.uscsi_flags	= USCSI_READ | USCSI_SILENT;
-	ucmd_buf.uscsi_timeout	= un->un_uscsi_timeout;
+	ucmd_buf.uscsi_timeout	= 60;
 
 	status = sd_ssc_send(ssc, &ucmd_buf, FKIOCTL,
 	    UIO_SYSSPACE, SD_PATH_DIRECT);
@@ -22659,6 +22285,11 @@ sdioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cred_p, int *rval_p)
 
 	ASSERT(!mutex_owned(SD_MUTEX(un)));
 
+	/* Initialize sd_ssc_t for internal uscsi commands */
+	ssc = sd_ssc_init(un);
+
+	is_valid = SD_IS_VALID_LABEL(un);
+
 	/*
 	 * Moved this wait from sd_uscsi_strategy to here for
 	 * reasons of deadlock prevention. Internal driver commands,
@@ -22667,18 +22298,9 @@ sdioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cred_p, int *rval_p)
 	 */
 	mutex_enter(SD_MUTEX(un));
 	while ((un->un_state == SD_STATE_SUSPENDED) ||
-	    (un->un_state == SD_STATE_PM_CHANGING) ||
-	    (un->un_state == SD_STATE_ATTACHING)) {
+	    (un->un_state == SD_STATE_PM_CHANGING)) {
 		cv_wait(&un->un_suspend_cv, SD_MUTEX(un));
 	}
-
-	if (un->un_state == SD_STATE_ATTACH_FAILED) {
-		mutex_exit(SD_MUTEX(un));
-		SD_ERROR(SD_LOG_READ_WRITE, un,
-		    "sdioctl: attach failed\n");
-		return (EIO);
-	}
-
 	/*
 	 * Twiddling the counter here protects commands from now
 	 * through to the top of sd_uscsi_strategy. Without the
@@ -22688,14 +22310,6 @@ sdioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *cred_p, int *rval_p)
 	 * That would cause problems.
 	 */
 	un->un_ncmds_in_driver++;
-	mutex_exit(SD_MUTEX(un));
-
-	/* Initialize sd_ssc_t for internal uscsi commands */
-	ssc = sd_ssc_init(un);
-
-	is_valid = SD_IS_VALID_LABEL(un);
-
-	mutex_enter(SD_MUTEX(un));
 
 	if (!is_valid &&
 	    (flag & (FNDELAY | FNONBLOCK))) {
@@ -22892,9 +22506,9 @@ skip_ready_valid:
 
 		if ((err == 0) &&
 		    ((cmd == DKIOCSETEFI) ||
-		    ((un->un_f_pkstats_enabled) &&
+		    (un->un_f_pkstats_enabled) &&
 		    (cmd == DKIOCSAPART || cmd == DKIOCSVTOC ||
-		    cmd == DKIOCSEXTVTOC)))) {
+		    cmd == DKIOCSEXTVTOC))) {
 
 			tmprval = cmlb_validate(un->un_cmlbhandle, CMLB_SILENT,
 			    (void *)SD_PATH_DIRECT);
@@ -23549,11 +23163,11 @@ skip_ready_valid:
 	case SDIOCPUSH:
 	case SDIOCRETRIEVE:
 	case SDIOCRUN:
-	case SDIOCINSERTTRAN:
 		SD_INFO(SD_LOG_SDTEST, un, "sdioctl:"
 		    "SDIOC detected cmd:0x%X:\n", cmd);
 		/* call error generator */
-		err = sd_faultinjection_ioctl(cmd, arg, un);
+		sd_faultinjection_ioctl(cmd, arg, un);
+		err = 0;
 		break;
 
 #endif /* SD_FAULT_INJECTION */
@@ -23851,7 +23465,7 @@ sd_dkio_ctrl_info(dev_t dev, caddr_t arg, int flag)
  *		dki_pbsize	- physical block size (if requested)
  *
  * Return Code: 0
- *		EACCES
+ *		EACCESS
  *		EFAULT
  *		ENXIO
  *		EIO
@@ -24726,7 +24340,7 @@ done:
  *		0  - log page not found.
  *  		1  - log page found.
  */
-#ifdef notyet
+
 static int
 sd_log_page_supported(sd_ssc_t *ssc, int log_page)
 {
@@ -24791,7 +24405,7 @@ sd_log_page_supported(sd_ssc_t *ssc, int log_page)
 	kmem_free(log_page_data, 0xFF);
 	return (match);
 }
-#endif
+
 
 /*
  *    Function: sd_mhdioc_failfast
@@ -26228,8 +25842,6 @@ sddump(dev_t dev, caddr_t addr, daddr_t blkno, int nblk)
 
 	instance = SDUNIT(dev);
 	if (((un = ddi_get_soft_state(sd_state, instance)) == NULL) ||
-	    (un->un_state == SD_STATE_ATTACHING) ||
-	    (un->un_state == SD_STATE_ATTACH_FAILED) ||
 	    !SD_IS_VALID_LABEL(un) || ISCD(un)) {
 		return (ENXIO);
 	}
@@ -26441,7 +26053,8 @@ sddump(dev_t dev, caddr_t addr, daddr_t blkno, int nblk)
 			    ((uint64_t)(blkno * un->un_sys_blocksize)) -
 			    ((uint64_t)(tgt_blkno * un->un_tgt_blocksize));
 
-			ASSERT((io_start_offset < un->un_tgt_blocksize));
+			ASSERT((io_start_offset >= 0) &&
+			    (io_start_offset < un->un_tgt_blocksize));
 			/*
 			 * Do the modify portion of read modify write.
 			 */
@@ -27003,10 +26616,10 @@ sd_persistent_reservation_in_read_keys(struct sd_lun *un,
 	sd_prin_readkeys_t	*in;
 	mhioc_inkeys_t		*ptr;
 	mhioc_key_list_t	li;
-	uchar_t			*data_bufp = NULL;
-	int 			data_len = 0;
+	uchar_t			*data_bufp;
+	int 			data_len;
 	int			rval = 0;
-	size_t			copysz = 0;
+	size_t			copysz;
 	sd_ssc_t		*ssc;
 
 	if ((ptr = (mhioc_inkeys_t *)usrp) == NULL) {
@@ -27020,6 +26633,7 @@ sd_persistent_reservation_in_read_keys(struct sd_lun *un,
 	 * Get the listsize from user
 	 */
 #ifdef _MULTI_DATAMODEL
+
 	switch (ddi_model_convert_from(flag & FMODELS)) {
 	case DDI_MODEL_ILP32:
 		copysz = sizeof (struct mhioc_key_list32);
@@ -27169,7 +26783,7 @@ sd_persistent_reservation_in_read_resv(struct sd_lun *un,
 	int 			data_len;
 	int			rval = 0;
 	int			i;
-	size_t			copysz = 0;
+	size_t			copysz;
 	mhioc_resv_desc_t	*bufp;
 	sd_ssc_t		*ssc;
 
@@ -28479,7 +28093,7 @@ sr_read_tochdr(dev_t dev, caddr_t data, int flag)
 	com->uscsi_cdblen  = CDB_GROUP1;
 	com->uscsi_bufaddr = buffer;
 	com->uscsi_buflen  = 0x04;
-	com->uscsi_timeout = 3 * un->un_cmd_timeout;
+	com->uscsi_timeout = 300;
 	com->uscsi_flags   = USCSI_DIAGNOSE|USCSI_SILENT|USCSI_READ;
 
 	rval = sd_send_scsi_cmd(dev, com, FKIOCTL, UIO_SYSSPACE,
@@ -29881,9 +29495,8 @@ sd_range_lock(struct sd_lun *un, daddr_t startb, daddr_t endb, ushort_t typ)
 			 */
 			ASSERT(!(sl_wmp->wm_flags & SD_WM_BUSY));
 			if (sl_wmp->wm_wanted_count == 0) {
-				if (wmp != NULL) {
+				if (wmp != NULL)
 					CHK_N_FREEWMP(un, wmp);
-				}
 				wmp = sl_wmp;
 			}
 			sl_wmp = NULL;
@@ -30228,7 +29841,7 @@ done:
  */
 
 static void
-sd_failfast_flushq(struct sd_lun *un, boolean_t flush_all)
+sd_failfast_flushq(struct sd_lun *un)
 {
 	struct buf *bp;
 	struct buf *next_waitq_bp;
@@ -30246,8 +29859,7 @@ sd_failfast_flushq(struct sd_lun *un, boolean_t flush_all)
 	 * Check if we should flush all bufs when entering failfast state, or
 	 * just those with B_FAILFAST set.
 	 */
-	if ((sd_failfast_flushctl & SD_FAILFAST_FLUSH_ALL_BUFS) ||
-	    flush_all) {
+	if (sd_failfast_flushctl & SD_FAILFAST_FLUSH_ALL_BUFS) {
 		/*
 		 * Move *all* bp's on the wait queue to the failfast flush
 		 * queue, including those that do NOT have B_FAILFAST set.
@@ -30507,6 +30119,7 @@ sd_panic_for_res_conflict(struct sd_lun *un)
  */
 
 #ifdef SD_FAULT_INJECTION
+static uint_t   sd_fault_injection_on = 0;
 
 /*
  *    Function: sd_faultinjection_ioctl()
@@ -30519,12 +30132,11 @@ sd_panic_for_res_conflict(struct sd_lun *un)
  *		arg	- the arguments from user and returns
  */
 
-static int
+static void
 sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 
 	uint_t i = 0;
 	uint_t rval;
-	int ret = 0;
 
 	SD_TRACE(SD_LOG_IOERR, un, "sd_faultinjection_ioctl: entry\n");
 
@@ -30554,7 +30166,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			un->sd_fi_fifo_xb[i] = NULL;
 			un->sd_fi_fifo_un[i] = NULL;
 			un->sd_fi_fifo_arq[i] = NULL;
-			un->sd_fi_fifo_tran[i] = NULL;
 		}
 		un->sd_fi_fifo_start = 0;
 		un->sd_fi_fifo_end = 0;
@@ -30593,15 +30204,10 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_arq[i],
 				    sizeof (struct sd_fi_arq));
 			}
-			if (un->sd_fi_fifo_tran[i] != NULL) {
-				kmem_free(un->sd_fi_fifo_tran[i],
-				    sizeof (struct sd_fi_tran));
-			}
 			un->sd_fi_fifo_pkt[i] = NULL;
 			un->sd_fi_fifo_un[i] = NULL;
 			un->sd_fi_fifo_xb[i] = NULL;
 			un->sd_fi_fifo_arq[i] = NULL;
-			un->sd_fi_fifo_tran[i] = NULL;
 		}
 		un->sd_fi_fifo_start = 0;
 		un->sd_fi_fifo_end = 0;
@@ -30617,11 +30223,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 
 		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
 
-		if (un->sd_fi_fifo_tran[i] != NULL) {
-			ret = EBUSY;
-			break;
-		}
-
 		sd_fault_injection_on = 0;
 
 		/* No more that SD_FI_MAX_ERROR allowed in Queue */
@@ -30634,7 +30235,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			    kmem_alloc(sizeof (struct sd_fi_pkt), KM_NOSLEEP);
 			if (un->sd_fi_fifo_pkt[i] == NULL) {
 				/* Alloc failed don't store anything */
-				ret = ENOMEM;
 				break;
 			}
 			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_pkt[i],
@@ -30643,73 +30243,10 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_pkt[i],
 				    sizeof (struct sd_fi_pkt));
 				un->sd_fi_fifo_pkt[i] = NULL;
-				ret = EFAULT;
-				break;
 			}
 		} else {
 			SD_INFO(SD_LOG_IOERR, un,
 			    "sd_faultinjection_ioctl: pkt null\n");
-		}
-		break;
-
-	case SDIOCINSERTTRAN:
-		/* Store a tran packet struct to be pushed onto fifo. */
-		SD_INFO(SD_LOG_SDTEST, un,
-		    "sd_faultinjection_ioctl: Injecting Fault Insert TRAN\n");
-		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
-
-		/*
-		 * HBA-related fault injections can't be mixed with target-level
-		 * fault injections.
-		 */
-		if (un->sd_fi_fifo_pkt[i] != NULL ||
-		    un->sd_fi_fifo_xb[i] != NULL ||
-		    un->sd_fi_fifo_un[i] != NULL ||
-		    un->sd_fi_fifo_arq[i] != NULL) {
-			ret = EBUSY;
-			break;
-		}
-
-		sd_fault_injection_on = 0;
-
-		if (un->sd_fi_fifo_tran[i] != NULL) {
-			kmem_free(un->sd_fi_fifo_tran[i],
-			    sizeof (struct sd_fi_tran));
-			un->sd_fi_fifo_tran[i] = NULL;
-		}
-		if (arg != NULL) {
-			un->sd_fi_fifo_tran[i] =
-			    kmem_alloc(sizeof (struct sd_fi_tran), KM_NOSLEEP);
-			if (un->sd_fi_fifo_tran[i] == NULL) {
-				/* Alloc failed don't store anything */
-				ret = ENOMEM;
-				break;
-			}
-			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_tran[i],
-			    sizeof (struct sd_fi_tran), 0);
-
-			if (rval == 0) {
-				switch (un->sd_fi_fifo_tran[i]->tran_cmd) {
-					case SD_FLTINJ_CMD_BUSY:
-					case SD_FLTINJ_CMD_TIMEOUT:
-						break;
-					default:
-						ret = EINVAL;
-						break;
-				}
-			} else {
-				ret = EFAULT;
-			}
-
-			if (ret != 0) {
-				kmem_free(un->sd_fi_fifo_tran[i],
-				    sizeof (struct sd_fi_tran));
-				un->sd_fi_fifo_tran[i] = NULL;
-				break;
-			}
-		} else {
-			SD_INFO(SD_LOG_IOERR, un,
-			    "sd_faultinjection_ioctl: tran null\n");
 		}
 		break;
 
@@ -30719,11 +30256,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 		    "sd_faultinjection_ioctl: Injecting Fault Insert XB\n");
 
 		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
-
-		if (un->sd_fi_fifo_tran[i] != NULL) {
-			ret = EBUSY;
-			break;
-		}
 
 		sd_fault_injection_on = 0;
 
@@ -30737,7 +30269,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			    kmem_alloc(sizeof (struct sd_fi_xb), KM_NOSLEEP);
 			if (un->sd_fi_fifo_xb[i] == NULL) {
 				/* Alloc failed don't store anything */
-				ret = ENOMEM;
 				break;
 			}
 			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_xb[i],
@@ -30747,8 +30278,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_xb[i],
 				    sizeof (struct sd_fi_xb));
 				un->sd_fi_fifo_xb[i] = NULL;
-				ret = EFAULT;
-				break;
 			}
 		} else {
 			SD_INFO(SD_LOG_IOERR, un,
@@ -30762,10 +30291,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 		    "sd_faultinjection_ioctl: Injecting Fault Insert UN\n");
 
 		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
-		if (un->sd_fi_fifo_tran[i] != NULL) {
-			ret = EBUSY;
-			break;
-		}
 
 		sd_fault_injection_on = 0;
 
@@ -30779,7 +30304,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			    kmem_alloc(sizeof (struct sd_fi_un), KM_NOSLEEP);
 			if (un->sd_fi_fifo_un[i] == NULL) {
 				/* Alloc failed don't store anything */
-				ret = ENOMEM;
 				break;
 			}
 			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_un[i],
@@ -30788,8 +30312,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_un[i],
 				    sizeof (struct sd_fi_un));
 				un->sd_fi_fifo_un[i] = NULL;
-				ret = EFAULT;
-				break;
 			}
 
 		} else {
@@ -30804,10 +30326,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 		SD_INFO(SD_LOG_SDTEST, un,
 		    "sd_faultinjection_ioctl: Injecting Fault Insert ARQ\n");
 		i = un->sd_fi_fifo_end % SD_FI_MAX_ERROR;
-		if (un->sd_fi_fifo_tran[i] != NULL) {
-			ret = EBUSY;
-			break;
-		}
 
 		sd_fault_injection_on = 0;
 
@@ -30821,7 +30339,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 			    kmem_alloc(sizeof (struct sd_fi_arq), KM_NOSLEEP);
 			if (un->sd_fi_fifo_arq[i] == NULL) {
 				/* Alloc failed don't store anything */
-				ret = ENOMEM;
 				break;
 			}
 			rval = ddi_copyin((void *)arg, un->sd_fi_fifo_arq[i],
@@ -30830,8 +30347,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 				kmem_free(un->sd_fi_fifo_arq[i],
 				    sizeof (struct sd_fi_arq));
 				un->sd_fi_fifo_arq[i] = NULL;
-				ret = EFAULT;
-				break;
 			}
 
 		} else {
@@ -30842,7 +30357,7 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 		break;
 
 	case SDIOCPUSH:
-		/* Push stored xb, pkt, un, arq and tran onto fifo */
+		/* Push stored xb, pkt, un, and arq onto fifo */
 		sd_fault_injection_on = 0;
 
 		if (arg != NULL) {
@@ -30888,7 +30403,6 @@ sd_faultinjection_ioctl(int cmd, intptr_t arg,  struct sd_lun *un) {
 	mutex_exit(SD_MUTEX(un));
 	SD_TRACE(SD_LOG_IOERR, un, "sd_faultinjection_ioctl:"
 			    " exit\n");
-	return (ret);
 }
 
 
@@ -30926,57 +30440,6 @@ sd_injection_log(char *buf, struct sd_lun *un)
 	}
 
 	mutex_exit(&(un->un_fi_mutex));
-}
-
-/*
- * This function is called just before sending the packet to the HBA.
- * Caller must hold per-LUN mutex. Mutex is held locked upon return.
- */
-static void
-sd_prefaultinjection(struct scsi_pkt *pktp)
-{
-	uint_t i;
-	struct buf *bp;
-	/*struct sd_xbuf *xb;*/
-	struct sd_lun *un;
-	struct sd_fi_tran *fi_tran;
-
-	ASSERT(pktp != NULL);
-
-	/* pull bp xb and un from pktp */
-	bp = (struct buf *)pktp->pkt_private;
-	/*xb = SD_GET_XBUF(bp);*/
-	un = SD_GET_UN(bp);
-
-	/* if injection is off return */
-	if (sd_fault_injection_on == 0 ||
-	    un->sd_fi_fifo_start == un->sd_fi_fifo_end) {
-		return;
-	}
-
-	ASSERT(un != NULL);
-	ASSERT(mutex_owned(SD_MUTEX(un)));
-
-	/* take next set off fifo */
-	i = un->sd_fi_fifo_start % SD_FI_MAX_ERROR;
-
-	fi_tran = un->sd_fi_fifo_tran[i];
-	if (fi_tran != NULL) {
-		switch (fi_tran->tran_cmd) {
-			case SD_FLTINJ_CMD_BUSY:
-				pktp->pkt_flags |= FLAG_PKT_BUSY;
-				break;
-			case SD_FLTINJ_CMD_TIMEOUT:
-				pktp->pkt_flags |= FLAG_PKT_TIMEOUT;
-				break;
-			default:
-				return;
-		}
-	}
-	/*
-	 * We don't deallocate any data here - it will be deallocated after
-	 * the packet has been processed by the HBA.
-	 */
 }
 
 
@@ -31809,9 +31272,13 @@ sd_tg_getinfo(dev_info_t *devi, int cmd, void *arg, void *tg_cookie)
  *
  *    Context: Kernel thread or interrupt context.
  */
+
+#define	DEVID_IF_KNOWN(d) "devid", DATA_TYPE_STRING, (d) ? (d) : "unknown"
+
 static void
 sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 {
+	int uscsi_path_instance = 0;
 	uchar_t	uscsi_pkt_reason;
 	uint32_t uscsi_pkt_state;
 	uint32_t uscsi_pkt_statistics;
@@ -31854,6 +31321,7 @@ sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 		return;
 
 	uscsi_pkt_reason = ssc->ssc_uscsi_info->ui_pkt_reason;
+	uscsi_path_instance = ssc->ssc_uscsi_cmd->uscsi_path_instance;
 	uscsi_pkt_state = ssc->ssc_uscsi_info->ui_pkt_state;
 	uscsi_pkt_statistics = ssc->ssc_uscsi_info->ui_pkt_statistics;
 	uscsi_ena = ssc->ssc_uscsi_info->ui_ena;
@@ -31902,7 +31370,7 @@ sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 	 * driver-assessment will always be "recovered" here.
 	 */
 	if (drv_assess == SD_FM_DRV_RECOVERY) {
-		scsi_fm_ereport_post(un->un_sd, 0, NULL,
+		scsi_fm_ereport_post(un->un_sd, uscsi_path_instance, NULL,
 		    "cmd.disk.recovered", uscsi_ena, devid, NULL,
 		    DDI_NOSLEEP, NULL,
 		    FM_VERSION, DATA_TYPE_UINT8, FM_EREPORT_VERS0,
@@ -31929,7 +31397,7 @@ sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 	 */
 	if (ssc->ssc_flags & ssc_invalid_flags) {
 		if (ssc->ssc_flags & SSC_FLAGS_INVALID_SENSE) {
-			scsi_fm_ereport_post(un->un_sd, 0,
+			scsi_fm_ereport_post(un->un_sd, uscsi_path_instance,
 			    NULL, "cmd.disk.dev.uderr", uscsi_ena, devid,
 			    NULL, DDI_NOSLEEP, NULL,
 			    FM_VERSION, DATA_TYPE_UINT8, FM_EREPORT_VERS0,
@@ -31958,7 +31426,7 @@ sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 			 * un-decodable content could be seen from upper
 			 * level payload or inside un-decode-info.
 			 */
-			scsi_fm_ereport_post(un->un_sd, 0,
+			scsi_fm_ereport_post(un->un_sd, uscsi_path_instance,
 			    NULL,
 			    "cmd.disk.dev.uderr", uscsi_ena, devid,
 			    NULL, DDI_NOSLEEP, NULL,
@@ -32000,7 +31468,7 @@ sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 		if (ssc->ssc_flags & SSC_FLAGS_TRAN_ABORT)
 			ssc->ssc_flags &= ~SSC_FLAGS_TRAN_ABORT;
 
-		scsi_fm_ereport_post(un->un_sd, 0, NULL,
+		scsi_fm_ereport_post(un->un_sd, uscsi_path_instance, NULL,
 		    "cmd.disk.tran", uscsi_ena, NULL, NULL, DDI_NOSLEEP, NULL,
 		    FM_VERSION, DATA_TYPE_UINT8, FM_EREPORT_VERS0,
 		    DEVID_IF_KNOWN(devid),
@@ -32044,7 +31512,7 @@ sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 				 * drv_assess is SD_FM_DRV_FATAL.
 				 */
 				scsi_fm_ereport_post(un->un_sd,
-				    0, NULL,
+				    uscsi_path_instance, NULL,
 				    "cmd.disk.dev.rqs.merr",
 				    uscsi_ena, devid, NULL, DDI_NOSLEEP, NULL,
 				    FM_VERSION, DATA_TYPE_UINT8,
@@ -32093,7 +31561,7 @@ sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 				 * SD_FM_DRV_FATAL.
 				 */
 				scsi_fm_ereport_post(un->un_sd,
-				    0, NULL,
+				    uscsi_path_instance, NULL,
 				    "cmd.disk.dev.rqs.derr",
 				    uscsi_ena, devid,
 				    NULL, DDI_NOSLEEP, NULL,
@@ -32148,7 +31616,7 @@ sd_ssc_ereport_post(sd_ssc_t *ssc, enum sd_driver_assessment drv_assess)
 			 * driver-assessment will be set based on parameter
 			 * drv_assess.
 			 */
-			scsi_fm_ereport_post(un->un_sd, 0,
+			scsi_fm_ereport_post(un->un_sd, uscsi_path_instance,
 			    NULL,
 			    "cmd.disk.dev.serr", uscsi_ena,
 			    devid, NULL, DDI_NOSLEEP, NULL,

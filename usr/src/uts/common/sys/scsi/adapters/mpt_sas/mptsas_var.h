@@ -77,11 +77,6 @@ extern "C" {
 #define	MPTSAS_DEBUG		/* turn on debugging code */
 #endif	/* DEBUG */
 
-
-#if defined(DEBUG) || lint
-#define	MPTSAS_FAULTINJECTION
-#endif
-
 #define	MPTSAS_INITIAL_SOFT_SPACE	4
 
 #define	MAX_MPI_PORTS		16
@@ -941,10 +936,6 @@ typedef struct mptsas {
 	 */
 	m_event_struct_t	m_event_task_mgmt;	/* must be last */
 							/* ... scsi_pkt_size */
-
-#ifdef MPTSAS_FAULTINJECTION
-	struct mptsas_active_cmdq  m_fminj_cmdq;
-#endif
 } mptsas_t;
 #define	MPTSAS_SIZE	(sizeof (struct mptsas) - \
 			sizeof (struct scsi_pkt) + scsi_pkt_size())

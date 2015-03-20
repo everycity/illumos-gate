@@ -526,7 +526,6 @@ struct sd_lun {
 	 * sense code.
 	 */
 	uint_t		un_sonoma_failure_count;
-	hrtime_t 	un_slow_io_threshold;
 
 	/*
 	 * Support for failfast operation.
@@ -552,7 +551,6 @@ struct sd_lun {
 	struct sd_fi_xb		*sd_fi_fifo_xb[SD_FI_MAX_ERROR];
 	struct sd_fi_un		*sd_fi_fifo_un[SD_FI_MAX_ERROR];
 	struct sd_fi_arq	*sd_fi_fifo_arq[SD_FI_MAX_ERROR];
-	struct sd_fi_tran	*sd_fi_fifo_tran[SD_FI_MAX_ERROR];
 	uint_t				sd_fi_fifo_start;
 	uint_t				sd_fi_fifo_end;
 	uint_t				sd_injection_mask;
@@ -1049,8 +1047,6 @@ _NOTE(SCHEME_PROTECTS_DATA("Unshared data", sd_prout))
  * sd_fi_arq replicates the variables that are
  *           exposed for Auto-Reqeust-Sense
  *
- * sd_fi_tran HBA-level fault injection.
- *
  */
 struct sd_fi_pkt {
 	uint_t  pkt_flags;			/* flags */
@@ -1101,15 +1097,6 @@ struct sd_fi_arq {
 	struct scsi_extended_sense	sts_sensedata;
 };
 
-enum sd_fi_tran_cmd {
-	SD_FLTINJ_CMD_BUSY, /* Reject command instead of sending it to HW */
-	SD_FLTINJ_CMD_TIMEOUT /* Time-out command. */
-};
-
-struct sd_fi_tran {
-	enum sd_fi_tran_cmd tran_cmd;
-};
-
 /*
  * Conditional set def
  */
@@ -1133,7 +1120,6 @@ struct sd_fi_tran {
 #define	SDIOCPUSH		(SDIOC|7)
 #define	SDIOCRETRIEVE	(SDIOC|8)
 #define	SDIOCRUN		(SDIOC|9)
-#define	SDIOCINSERTTRAN	(SDIOC|0xA)
 #endif
 
 #else
@@ -1186,8 +1172,6 @@ struct sd_fi_tran {
 #define	SD_STATE_DUMPING	3
 #define	SD_STATE_SUSPENDED	4
 #define	SD_STATE_PM_CHANGING	5
-#define	SD_STATE_ATTACHING	6
-#define	SD_STATE_ATTACH_FAILED	7
 
 /*
  * The table is to be interpreted as follows: The rows lists all the states
@@ -1719,10 +1703,10 @@ struct sd_fm_internal {
 
 
 /*
- * 20 seconds is a *very* reasonable amount of time for any device with retries.
- * Doubled for slow CD operations.
+ * 60 seconds is a *very* reasonable amount of time for most slow CD
+ * operations.
  */
-#define	SD_IO_TIME			20
+#define	SD_IO_TIME			60
 
 /*
  * 2 hours is an excessively reasonable amount of time for format operations.

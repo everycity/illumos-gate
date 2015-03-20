@@ -22,7 +22,7 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 #
-# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+
 #
 # The default for payload-bearing actions in this package is to appear in the
 # global zone only.  See the include file for greater detail, as well as
@@ -428,8 +428,6 @@ file path=usr/lib/fm/fmd/plugins/disk-lights.conf
 file path=usr/lib/fm/fmd/plugins/disk-lights.so mode=0555
 file path=usr/lib/fm/fmd/plugins/disk-monitor.conf
 file path=usr/lib/fm/fmd/plugins/disk-monitor.so mode=0555
-file path=usr/lib/fm/fmd/plugins/disk-sense-de.conf
-file path=usr/lib/fm/fmd/plugins/disk-sense-de.so mode=0555
 file path=usr/lib/fm/fmd/plugins/disk-transport.conf
 file path=usr/lib/fm/fmd/plugins/disk-transport.so mode=0555
 file path=usr/lib/fm/fmd/plugins/eft.conf
@@ -452,8 +450,6 @@ file path=usr/lib/fm/fmd/plugins/sensor-transport.conf
 file path=usr/lib/fm/fmd/plugins/sensor-transport.so mode=0555
 file path=usr/lib/fm/fmd/plugins/ses-log-transport.conf
 file path=usr/lib/fm/fmd/plugins/ses-log-transport.so mode=0555
-file path=usr/lib/fm/fmd/plugins/slow-io-de.conf
-file path=usr/lib/fm/fmd/plugins/slow-io-de.so mode=0555
 file path=usr/lib/fm/fmd/plugins/software-diagnosis.conf \
     variant.opensolaris.zone=__NODEFAULT
 file path=usr/lib/fm/fmd/plugins/software-diagnosis.so mode=0555 \

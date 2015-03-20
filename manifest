@@ -2029,7 +2029,6 @@ h usr/bin/digest=usr/lib/isaexec
 f usr/bin/dircmp 0555 root bin
 f usr/bin/dirname 0555 root bin
 f usr/bin/dis 0555 root bin
-f usr/bin/diskfltinj 0555 root bin
 f usr/bin/diskscan 0555 root bin
 h usr/bin/dispgid=usr/bin/ckgid
 h usr/bin/dispuid=usr/bin/ckuid
@@ -2203,6 +2202,7 @@ f usr/bin/pathchk 0555 root bin
 f usr/bin/pax 0555 root bin
 s usr/bin/pcat=unpack
 h usr/bin/pcred=usr/lib/isaexec
+s usr/bin/perl=/opt/local/bin/perl
 h usr/bin/pfbash=usr/bin/pfexec
 h usr/bin/pfcsh=usr/bin/pfexec
 f usr/bin/pfexec 0555 root bin
@@ -5295,8 +5295,6 @@ f usr/lib/fm/fmd/plugins/disk-lights.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/disk-lights.so 0555 root bin
 f usr/lib/fm/fmd/plugins/disk-monitor.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/disk-monitor.so 0555 root bin
-f usr/lib/fm/fmd/plugins/disk-sense-de.conf 0644 root bin
-f usr/lib/fm/fmd/plugins/disk-sense-de.so 0555 root bin
 f usr/lib/fm/fmd/plugins/disk-transport.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/disk-transport.so 0555 root bin
 f usr/lib/fm/fmd/plugins/eft.conf 0644 root bin
@@ -5315,8 +5313,6 @@ f usr/lib/fm/fmd/plugins/sensor-transport.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/sensor-transport.so 0555 root bin
 f usr/lib/fm/fmd/plugins/ses-log-transport.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/ses-log-transport.so 0555 root bin
-f usr/lib/fm/fmd/plugins/slow-io-de.conf 0644 root bin
-f usr/lib/fm/fmd/plugins/slow-io-de.so 0555 root bin
 f usr/lib/fm/fmd/plugins/software-diagnosis.conf 0644 root bin
 f usr/lib/fm/fmd/plugins/software-diagnosis.so 0555 root bin
 f usr/lib/fm/fmd/plugins/software-response.conf 0644 root bin
