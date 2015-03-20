@@ -168,6 +168,7 @@
 #include <sys/controlregs.h>
 #include <sys/core.h>
 #include <sys/stack.h>
+#include <sys/stat.h>
 #include <lx_signum.h>
 
 int	lx_debug = 0;
@@ -223,6 +224,11 @@ static void lx_sendsig(int);
 #if defined(_SYSCALL32_IMPL)
 static void lx_savecontext32(ucontext32_t *);
 #endif
+static int lx_setid_clear(vattr_t *, cred_t *);
+#if defined(_LP64)
+static int lx_pagefault(proc_t *, klwp_t *, caddr_t, enum fault_type,
+    enum seg_rw);
+#endif
 
 
 /* lx brand */
@@ -254,14 +260,20 @@ struct brand_ops lx_brops = {
 	lx_stop_notify,			/* b_stop_notify */
 	lx_waitid_helper,		/* b_waitid_helper */
 	lx_sigcld_repost,		/* b_sigcld_repost */
-	lx_issig_stop,			/* b_issig_stop */
+	lx_ptrace_issig_stop,		/* b_issig_stop */
 	lx_savecontext,			/* b_savecontext */
 #if defined(_SYSCALL32_IMPL)
 	lx_savecontext32,		/* b_savecontext32 */
 #endif
 	lx_restorecontext,		/* b_restorecontext */
 	lx_sendsig_stack,		/* b_sendsig_stack */
-	lx_sendsig			/* b_sendsig */
+	lx_sendsig,			/* b_sendsig */
+	lx_setid_clear,			/* b_setid_clear */
+#if defined(_LP64)
+	lx_pagefault			/* b_pagefault */
+#else
+	NULL
+#endif
 };
 
 struct brand_mach_ops lx_mops = {
@@ -444,6 +456,38 @@ lx_lwp_set_native_stack_current(lx_lwp_data_t *lwpd, uintptr_t new_sp)
 
 	lwpd->br_ntv_stack_current = new_sp;
 }
+
+#if defined(_LP64)
+static int
+lx_pagefault(proc_t *p, klwp_t *lwp, caddr_t addr, enum fault_type type,
+    enum seg_rw rw)
+{
+	int syscall_num;
+
+	/*
+	 * We only want to handle a very specific set of circumstances.
+	 * Namely: this is a 64-bit LX-branded process attempting to execute an
+	 * address in a page for which it does not have a valid mapping.  If
+	 * this is not the case, we bail out as fast as possible.
+	 */
+	VERIFY(PROC_IS_BRANDED(p));
+	if (type != F_INVAL || rw != S_EXEC || lwp_getdatamodel(lwp) !=
+	    DATAMODEL_NATIVE) {
+		return (-1);
+	}
+
+	if (!lx_vsyscall_iscall(lwp, (uintptr_t)addr, &syscall_num)) {
+		return (-1);
+	}
+
+	/*
+	 * This is a valid vsyscall address.  We service the system call and
+	 * return 0 to signal that the pagefault has been handled completely.
+	 */
+	lx_vsyscall_enter(p, lwp, syscall_num);
+	return (0);
+}
+#endif
 
 /*
  * This hook runs prior to sendsig() processing and allows us to nominate
@@ -1234,6 +1278,30 @@ lx_set_kern_version(zone_t *zone, char *vers)
 	lx_zone_data_t *lxzd = (lx_zone_data_t *)zone->zone_brand_data;
 
 	(void) strlcpy(lxzd->lxzd_kernel_version, vers, LX_VERS_MAX);
+}
+
+/*
+ * Linux unconditionally removes the setuid and setgid bits when changing
+ * file ownership.  This brand hook overrides the illumos native behaviour,
+ * which is based on the PRIV_FILE_SETID privilege.
+ */
+static int
+lx_setid_clear(vattr_t *vap, cred_t *cr)
+{
+	if (S_ISDIR(vap->va_mode)) {
+		return (0);
+	}
+
+	if (vap->va_mode & S_ISUID) {
+		vap->va_mask |= AT_MODE;
+		vap->va_mode &= ~S_ISUID;
+	}
+	if ((vap->va_mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP)) {
+		vap->va_mask |= AT_MODE;
+		vap->va_mode &= ~S_ISGID;
+	}
+
+	return (0);
 }
 
 /*

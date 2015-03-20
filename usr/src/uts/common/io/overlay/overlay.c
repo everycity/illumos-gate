@@ -764,7 +764,11 @@
  *
  * Today, we don't support any notion of hardware capabilities. However, if
  * future NIC hardware or other changes to the system cause it to make sense for
- * us to emulate logical groups, then we should do that.
+ * us to emulate logical groups, then we should do that. However, we still do
+ * implement a capab function so that we can identify ourselves as an overlay
+ * device to the broader MAC framework. This is done mostly so that a device
+ * created on top of us can have fanout rings as we don't try to lie about a
+ * speed for our device.
  *
  * The other question is what should be done for a device's MTU and margin. We
  * set our minimum supported MTU to be the minimum value that an IP network may
@@ -1113,6 +1117,11 @@ overlay_m_ioctl(void *arg, queue_t *q, mblk_t *mp)
 static boolean_t
 overlay_m_getcapab(void *arg, mac_capab_t cap, void *cap_data)
 {
+	/*
+	 * Tell MAC we're an overlay.
+	 */
+	if (cap == MAC_CAPAB_OVERLAY)
+		return (B_TRUE);
 	return (B_FALSE);
 }
 
@@ -2048,7 +2057,7 @@ overlay_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	mutex_exit(&overlay_dev_lock);
 
 
-	dld_ioc_unregister(VNIC_IOC);
+	dld_ioc_unregister(OVERLAY_IOC);
 	ddi_remove_minor_node(dip, OVERLAY_CTL);
 	ddi_fm_fini(dip);
 	overlay_dip = NULL;

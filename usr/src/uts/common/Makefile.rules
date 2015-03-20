@@ -96,6 +96,10 @@ $(OBJS_DIR)/%.o:		$(COMMONBASE)/avl/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(COMMONBASE)/inet/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(COMMONBASE)/ucode/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -676,6 +680,38 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bge/%.c
 	$(CTFCONVERT_O)
 
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/blkdev/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/common/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/ecore/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/device/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/fw/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/l4/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/l5/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/device/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
@@ -1693,6 +1729,9 @@ $(LINTS_DIR)/%.ln:		$(COMMONBASE)/acl/%.c
 $(LINTS_DIR)/%.ln:		$(COMMONBASE)/avl/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(COMMONBASE)/inet/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 $(LINTS_DIR)/%.ln:		$(COMMONBASE)/ucode/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
@@ -2117,6 +2156,30 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bge/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/blkdev/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/common/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/ecore/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/device/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/fw/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/l4/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/l5/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/device/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/cardbus/%.c

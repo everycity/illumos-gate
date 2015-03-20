@@ -42,6 +42,7 @@
 #include <sys/lx_brand.h>
 #include <sys/lx_impl.h>
 #include <sys/lx_misc.h>
+#include <lx_errno.h>
 
 
 /*
@@ -95,10 +96,18 @@ int lx_nsysent64;
 lx_sysent_t lx_sysent32[LX_NSYSCALLS + 1];
 int lx_nsysent32;
 
-/*
- * Map Illumos errno to the Linux equivalent.
- */
-int lx_stol_errno[] = LX_STOL_ERRNO_INIT;
+#if defined(_LP64)
+struct lx_vsyscall
+{
+	uintptr_t lv_addr;
+	uintptr_t lv_scnum;
+} lx_vsyscalls[] = {
+	{ LX_VSYS_gettimeofday, LX_SYS_gettimeofday },
+	{ LX_VSYS_time, LX_SYS_time },
+	{ LX_VSYS_getcpu, LX_SYS_getcpu },
+	{ NULL, NULL }
+};
+#endif
 
 #if defined(__amd64)
 static int
@@ -219,14 +228,7 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 		/*
 		 * Convert from illumos to Linux errno:
 		 */
-		if (error < 1 || error >= (sizeof (lx_stol_errno) /
-		    sizeof (lx_stol_errno[0]))) {
-			/*
-			 * The provided error number is not valid.
-			 */
-			error = EINVAL;
-		}
-		ret = -lx_stol_errno[error];
+		ret = -lx_errno(error, EINVAL);
 	}
 
 	/*
@@ -421,6 +423,96 @@ lx_syscall_enter(void)
 	}
 }
 
+#if defined(_LP64)
+/*
+ * Emulate vsyscall support.
+ *
+ * Linux magically maps a single page into the address space of each process,
+ * allowing them to make 'vsyscalls'.  Originally designed to counteract the
+ * perceived overhead of regular system calls, vsyscalls were implemented as
+ * code residing in userspace which could be called directly.  The userspace
+ * implementations of these vsyscalls which have now been replaced by
+ * instructions which vector into the normal syscall path.
+ *
+ * Implementing vsyscalls on Illumos is complicated by the fact that the
+ * required static address region resides inside the kernel address space.
+ * Rather than mapping a user-accessible page into the KAS, a different
+ * approach is taken.  The vsyscall gate is emulated by interposing on
+ * pagefaults in trap().  An attempt to execute a known vsyscall address will
+ * result in emulating the appropriate system call rather than inducing a
+ * SIGSEGV.
+ */
+void
+lx_vsyscall_enter(proc_t *p, klwp_t *lwp, int scnum)
+{
+	struct regs *rp = lwptoregs(lwp);
+	uintptr_t raddr;
+
+	/*
+	 * Fetch the return address from the process stack.
+	 */
+	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
+	if (copyin((void *)rp->r_rsp, &raddr, sizeof (raddr)) != 0) {
+#if DEBUG
+		printf("lx_vsyscall_call: bad brand stack at vsyscall "
+		    "cmd=%s, pid=%d, sp=0x%p\n", PTOU(p)->u_comm,
+		    p->p_pid, (void *)rp->r_rsp);
+#endif
+
+		/*
+		 * The process jumped to the vsyscall address without a
+		 * correctly configured stack.  Terminate the process.
+		 */
+		exit(CLD_KILLED, SIGSEGV);
+		return;
+	}
+
+	DTRACE_PROBE1(brand__lx__vsyscall, int, scnum);
+
+	/* Simulate vectoring into the syscall */
+	rp->r_rax = scnum;
+	rp->r_rip = raddr;
+	rp->r_rsp += sizeof (uintptr_t);
+
+	lx_syscall_enter();
+}
+
+boolean_t
+lx_vsyscall_iscall(klwp_t *lwp, uintptr_t addr, int *scnum)
+{
+	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
+	int i;
+
+	if (lwpd->br_stack_mode != LX_STACK_MODE_BRAND) {
+		/*
+		 * We only handle vsyscalls when running Linux code.
+		 */
+		return (B_FALSE);
+	}
+
+	if (addr < LX_VSYSCALL_ADDR ||
+	    addr >= (LX_VSYSCALL_ADDR + LX_VSYSCALL_SIZE)) {
+		/*
+		 * Ignore faults outside the vsyscall page.
+		 */
+		return (B_FALSE);
+	}
+
+	for (i = 0; lx_vsyscalls[i].lv_addr != NULL; i++) {
+		if (addr == lx_vsyscalls[i].lv_addr) {
+			/*
+			 * This is a valid vsyscall address.
+			 */
+			*scnum = lx_vsyscalls[i].lv_scnum;
+			return (B_TRUE);
+		}
+	}
+
+	lx_unsupported("bad vsyscall access");
+	return (B_FALSE);
+}
+#endif
+
 /*
  * Linux defines system call numbers for 32-bit x86 in the file:
  *   arch/x86/syscalls/syscall_32.tbl
@@ -442,7 +534,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"time",	NULL,			0,		1}, /* 13 */
 	{"mknod",	NULL,			0,		3}, /* 14 */
 	{"chmod",	lx_chmod,		0,		2}, /* 15 */
-	{"lchown16",	NULL,			0,		3}, /* 16 */
+	{"lchown16",	lx_lchown16,		0,		3}, /* 16 */
 	{"break",	NULL,			NOSYS_OBSOLETE,	0}, /* 17 */
 	{"stat",	NULL,			NOSYS_OBSOLETE,	0}, /* 18 */
 	{"lseek",	NULL,			0,		3}, /* 19 */
@@ -504,7 +596,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"setrlimit",	NULL,			0,		2}, /* 75 */
 	{"getrlimit",	NULL,			0,		2}, /* 76 */
 	{"getrusage",	NULL,			0,		2}, /* 77 */
-	{"gettimeofday", NULL, 			0,		2}, /* 78 */
+	{"gettimeofday", lx_gettimeofday,	0,		2}, /* 78 */
 	{"settimeofday", NULL, 			0,		2}, /* 79 */
 	{"getgroups16",	NULL,			0,		2}, /* 80 */
 	{"setgroups16",	NULL,			0,		2}, /* 81 */
@@ -521,7 +613,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"truncate",	NULL,			0,		2}, /* 92 */
 	{"ftruncate",	NULL,			0,		2}, /* 93 */
 	{"fchmod",	lx_fchmod,		0,		2}, /* 94 */
-	{"fchown16",	NULL,			0,		3}, /* 95 */
+	{"fchown16",	lx_fchown16,		0,		3}, /* 95 */
 	{"getpriority",	NULL,			0,		2}, /* 96 */
 	{"setpriority",	NULL,			0,		3}, /* 97 */
 	{"profil",	NULL,			NOSYS_NO_EQUIV,	0}, /* 98 */
@@ -608,7 +700,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"rt_sigsuspend", NULL,			0,		2}, /* 179 */
 	{"pread64",	NULL,			0,		5}, /* 180 */
 	{"pwrite64",	NULL,			0,		5}, /* 181 */
-	{"chown16",	NULL,			0,		3}, /* 182 */
+	{"chown16",	lx_chown16,		0,		3}, /* 182 */
 	{"getcwd",	NULL,			0,		2}, /* 183 */
 	{"capget",	NULL,			0,		2}, /* 184 */
 	{"capset",	NULL,			0,		2}, /* 185 */
@@ -624,7 +716,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"stat64",	NULL,			0,		2}, /* 195 */
 	{"lstat64",	NULL,			0,		2}, /* 196 */
 	{"fstat64",	NULL,			0,		2}, /* 197 */
-	{"lchown",	NULL,			0,		3}, /* 198 */
+	{"lchown",	lx_lchown,		0,		3}, /* 198 */
 	{"getuid",	NULL,			0,		0}, /* 199 */
 	{"getgid",	NULL,			0,		0}, /* 200 */
 	{"geteuid",	NULL,			0,		0}, /* 201 */
@@ -633,12 +725,12 @@ lx_sysent_t lx_sysent32[] = {
 	{"setregid",	NULL,			0,		0}, /* 204 */
 	{"getgroups",	NULL,			0,		2}, /* 205 */
 	{"setgroups",	NULL,			0,		2}, /* 206 */
-	{"fchown",	NULL,			0,		3}, /* 207 */
+	{"fchown",	lx_fchown,		0,		3}, /* 207 */
 	{"setresuid",	lx_setresuid,		0,		3}, /* 208 */
 	{"getresuid",	NULL,			0,		3}, /* 209 */
 	{"setresgid",	lx_setresgid,		0,		3}, /* 210 */
 	{"getresgid",	NULL,			0,		3}, /* 211 */
-	{"chown",	NULL,			0,		3}, /* 212 */
+	{"chown",	lx_chown,		0,		3}, /* 212 */
 	{"setuid",	NULL,			0,		1}, /* 213 */
 	{"setgid",	NULL,			0,		1}, /* 214 */
 	{"setfsuid",	NULL,			0,		1}, /* 215 */
@@ -690,9 +782,9 @@ lx_sysent_t lx_sysent32[] = {
 	{"timer_gettime", NULL,			0,		2}, /* 261 */
 	{"timer_getoverrun", NULL,		0,		1}, /* 262 */
 	{"timer_delete", NULL,			0,		1}, /* 263 */
-	{"clock_settime", NULL,			0,		2}, /* 264 */
-	{"clock_gettime", NULL,			0,		2}, /* 265 */
-	{"clock_getres", NULL,			0,		2}, /* 266 */
+	{"clock_settime", lx_clock_settime,	0,		2}, /* 264 */
+	{"clock_gettime", lx_clock_gettime,	0,		2}, /* 265 */
+	{"clock_getres", lx_clock_getres,	0,		2}, /* 266 */
 	{"clock_nanosleep", NULL,		0,		4}, /* 267 */
 	{"statfs64",	NULL,			0,		2}, /* 268 */
 	{"fstatfs64",	NULL,			0,		2}, /* 269 */
@@ -728,7 +820,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"openat",	NULL,			0,		4}, /* 295 */
 	{"mkdirat",	lx_mkdirat,		0,		3}, /* 296 */
 	{"mknodat",	NULL,			0,		4}, /* 297 */
-	{"fchownat",	NULL,			0,		5}, /* 298 */
+	{"fchownat",	lx_fchownat,		0,		5}, /* 298 */
 	{"futimesat",	NULL,			0,		3}, /* 299 */
 	{"fstatat64",	NULL,			0,		4}, /* 300 */
 	{"unlinkat",	NULL,			0,		3}, /* 301 */
@@ -889,11 +981,11 @@ lx_sysent_t lx_sysent64[] = {
 	{"readlink",	NULL,			0,		3}, /* 89 */
 	{"chmod",	lx_chmod,		0,		2}, /* 90 */
 	{"fchmod",	lx_fchmod,		0,		2}, /* 91 */
-	{"chown",	NULL,			0,		3}, /* 92 */
-	{"fchown",	NULL,			0,		3}, /* 93 */
-	{"lchown",	NULL,			0,		3}, /* 94 */
+	{"chown",	lx_chown,		0,		3}, /* 92 */
+	{"fchown",	lx_fchown,		0,		3}, /* 93 */
+	{"lchown",	lx_lchown,		0,		3}, /* 94 */
 	{"umask",	NULL,			0,		1}, /* 95 */
-	{"gettimeofday", NULL,			0,		2}, /* 96 */
+	{"gettimeofday", lx_gettimeofday,	0,		2}, /* 96 */
 	{"getrlimit",	NULL,			0,		2}, /* 97 */
 	{"getrusage",	NULL,			0,		2}, /* 98 */
 	{"sysinfo",	lx_sysinfo64,		0,		1}, /* 99 */
@@ -1024,9 +1116,9 @@ lx_sysent_t lx_sysent64[] = {
 	{"timer_gettime", NULL,			0,		2}, /* 224 */
 	{"timer_getoverrun", NULL,		0,		1}, /* 225 */
 	{"timer_delete", NULL,			0,		1}, /* 226 */
-	{"clock_settime", NULL,			0,		2}, /* 227 */
-	{"clock_gettime", NULL,			0,		2}, /* 228 */
-	{"clock_getres", NULL,			0,		2}, /* 229 */
+	{"clock_settime", lx_clock_settime,	0,		2}, /* 227 */
+	{"clock_gettime", lx_clock_gettime,	0,		2}, /* 228 */
+	{"clock_getres", lx_clock_getres,	0,		2}, /* 229 */
 	{"clock_nanosleep", NULL,		0,		4}, /* 230 */
 	{"exit_group",	NULL,			0,		1}, /* 231 */
 	{"epoll_wait",	NULL,			0,		4}, /* 232 */
@@ -1057,7 +1149,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"openat",	NULL,			0,		4}, /* 257 */
 	{"mkdirat",	lx_mkdirat,		0,		3}, /* 258 */
 	{"mknodat",	NULL,			0,		4}, /* 259 */
-	{"fchownat",	NULL,			0,		5}, /* 260 */
+	{"fchownat",	lx_fchownat,		0,		5}, /* 260 */
 	{"futimesat",	NULL,			0,		3}, /* 261 */
 	{"fstatat64",	NULL,			0,		4}, /* 262 */
 	{"unlinkat",	NULL,			0,		3}, /* 263 */

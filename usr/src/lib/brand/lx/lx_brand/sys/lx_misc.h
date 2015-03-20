@@ -41,6 +41,8 @@
 #include <sys/lx_brand.h>
 #include <sys/lx_thread.h>
 
+#include <lx_errno.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -48,12 +50,6 @@ extern "C" {
 extern char lx_release[LX_VERS_MAX];
 extern char lx_cmd_name[MAXNAMLEN];
 extern pid_t zoneinit_pid;
-
-/*
- * Support for the unfortunate RPM race condition workaround.
- */
-extern int lx_rpm_delay;
-extern boolean_t lx_is_rpm;
 
 /*
  * Values Linux expects for init
@@ -168,7 +164,6 @@ struct ucontext;
 extern ucontext_t *lx_syscall_regs(void);
 extern uintptr_t lx_find_brand_sp(void);
 extern const ucontext_t *lx_find_brand_uc(void);
-extern int lx_errno(int);
 
 extern char *lx_fd_to_path(int fd, char *buf, int buf_size);
 extern int lx_lpid_to_spair(pid_t, pid_t *, lwpid_t *);
@@ -190,6 +185,8 @@ extern int lx_alloc_stack(void **, size_t *);
 extern void lx_install_stack(void *, size_t, lx_tsd_t *);
 extern void lx_free_stack(void);
 extern void lx_free_other_stacks(void);
+extern void lx_stack_prefork(void);
+extern void lx_stack_postfork(void);
 
 /*
  * NO_UUCOPY disables calls to the uucopy* system calls to help with

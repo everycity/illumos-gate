@@ -88,11 +88,6 @@
  * function should return -errno back to the Linux caller.
  */
 
-/*
- * Map Illumos errno to the Linux equivalent.
- */
-static int stol_errno[] = LX_STOL_ERRNO_INIT;
-
 char lx_release[LX_VERS_MAX];
 char lx_cmd_name[MAXNAMLEN];
 
@@ -134,8 +129,6 @@ long lx_fsb;
 long lx_fs;
 #endif
 int lx_install = 0;		/* install mode enabled if non-zero */
-boolean_t lx_is_rpm = B_FALSE;
-int lx_rpm_delay = 1;
 int lx_strict = 0;		/* "strict" mode enabled if non-zero */
 int lx_verbose = 0;		/* verbose mode enabled if non-zero */
 int lx_debug_enabled = 0;	/* debugging output enabled if non-zero */
@@ -143,17 +136,6 @@ int lx_debug_enabled = 0;	/* debugging output enabled if non-zero */
 pid_t zoneinit_pid;		/* zone init PID */
 
 thread_key_t lx_tsd_key;
-
-int
-lx_errno(int err)
-{
-	if (err >= sizeof (stol_errno) / sizeof (stol_errno[0])) {
-		lx_debug("invalid errno %d\n", err);
-		assert(0);
-	}
-
-	return (stol_errno[err]);
-}
 
 int
 uucopy_unsafe(const void *src, void *dst, size_t n)
@@ -641,24 +623,6 @@ lx_init(int argc, char *argv[], char *envp[])
 	lx_debug("branding myself and setting handler to 0x%p",
 	    (void *)lx_emulate);
 
-	/*
-	 * The version of rpm that ships with CentOS/RHEL 3.x has a race
-	 * condition in it.  If it creates a child process to run a
-	 * post-install script, and that child process completes too
-	 * quickly, it will disappear before the parent notices.  This
-	 * causes the parent to hang forever waiting for the already dead
-	 * child to die.  I'm sure there's a Lazarus joke buried in here
-	 * somewhere.
-	 *
-	 * Anyway, as a workaround, we make every child of an 'rpm' process
-	 * sleep for 1 second, giving the parent a chance to enter its
-	 * wait-for-the-child-to-die loop.  Thay may be the hackiest trick
-	 * in all of our Linux emulation code - and that's saying
-	 * something.
-	 */
-	if (strcmp("rpm", basename(argv[0])) == NULL)
-		lx_is_rpm = B_TRUE;
-
 	reg.lxbr_version = LX_VERSION;
 	reg.lxbr_handler = (void *)&lx_emulate;
 
@@ -1054,11 +1018,11 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_readlink,			/*  89: readlink */
 	NULL,				/*  90: chmod */
 	NULL,				/*  91: fchmod */
-	lx_chown,			/*  92: chown */
-	lx_fchown,			/*  93: fchown */
-	lx_lchown,			/*  94: lchown */
+	NULL,				/*  92: chown */
+	NULL,				/*  93: fchown */
+	NULL,				/*  94: lchown */
 	lx_umask,			/*  95: umask */
-	lx_gettimeofday,		/*  96: gettimeofday */
+	NULL,				/*  96: gettimeofday */
 	lx_getrlimit,			/*  97: getrlimit */
 	lx_getrusage,			/*  98: getrusage */
 	NULL,				/*  99: sysinfo */
@@ -1189,9 +1153,9 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_timer_gettime,		/* 224: timer_gettime */
 	lx_timer_getoverrun,		/* 225: timer_getoverrun */
 	lx_timer_delete,		/* 226: timer_delete */
-	lx_clock_settime,		/* 227: clock_settime */
-	lx_clock_gettime,		/* 228: clock_gettime */
-	lx_clock_getres,		/* 229: clock_getres */
+	NULL,				/* 227: clock_settime */
+	NULL,				/* 228: clock_gettime */
+	NULL,				/* 229: clock_getres */
 	lx_clock_nanosleep,		/* 230: clock_nanosleep */
 	lx_group_exit,			/* 231: exit_group */
 	lx_epoll_wait,			/* 232: epoll_wait */
@@ -1222,7 +1186,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_openat,			/* 257: openat */
 	NULL,				/* 258: mkdirat */
 	lx_mknodat,			/* 259: mknodat */
-	lx_fchownat,			/* 260: fchownat */
+	NULL,				/* 260: fchownat */
 	lx_futimesat,			/* 261: futimesat */
 	lx_fstatat64,			/* 262: fstatat64 */
 	lx_unlinkat,			/* 263: unlinkat */
@@ -1309,7 +1273,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_time,			/*  13: time */
 	lx_mknod,			/*  14: mknod */
 	NULL,				/*  15: chmod */
-	lx_lchown16,			/*  16: lchown16 */
+	NULL,				/*  16: lchown16 */
 	NULL,				/*  17: break */
 	NULL,				/*  18: stat */
 	lx_lseek,			/*  19: lseek */
@@ -1371,7 +1335,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_setrlimit,			/*  75: setrlimit */
 	lx_oldgetrlimit,		/*  76: getrlimit */
 	lx_getrusage,			/*  77: getrusage */
-	lx_gettimeofday,		/*  78: gettimeofday */
+	NULL,				/*  78: gettimeofday */
 	lx_settimeofday,		/*  79: settimeofday */
 	lx_getgroups16,			/*  80: getgroups16 */
 	lx_setgroups16,			/*  81: setgroups16 */
@@ -1388,7 +1352,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_truncate,			/*  92: truncate */
 	lx_ftruncate,			/*  93: ftruncate */
 	NULL,				/*  94: fchmod */
-	lx_fchown16,			/*  95: fchown16 */
+	NULL,				/*  95: fchown16 */
 	lx_getpriority,			/*  96: getpriority */
 	lx_setpriority,			/*  97: setpriority */
 	NULL,				/*  98: profil */
@@ -1475,7 +1439,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_rt_sigsuspend,		/* 179: rt_sigsuspend */
 	lx_pread64,			/* 180: pread64 */
 	lx_pwrite64,			/* 181: pwrite64 */
-	lx_chown16,			/* 182: chown16 */
+	NULL,				/* 182: chown16 */
 	lx_getcwd,			/* 183: getcwd */
 	lx_capget,			/* 184: capget */
 	lx_capset,			/* 185: capset */
@@ -1491,7 +1455,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_stat64,			/* 195: stat64 */
 	lx_lstat64,			/* 196: lstat64 */
 	lx_fstat64,			/* 197: fstat64 */
-	lx_lchown,			/* 198: lchown */
+	NULL,				/* 198: lchown */
 	lx_getuid,			/* 199: getuid */
 	lx_getgid,			/* 200: getgid */
 	lx_geteuid,			/* 201: geteuid */
@@ -1500,12 +1464,12 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_setregid,			/* 204: setregid */
 	lx_getgroups,			/* 205: getgroups */
 	lx_setgroups,			/* 206: setgroups */
-	lx_fchown,			/* 207: fchown */
+	NULL,				/* 207: fchown */
 	NULL,				/* 208: setresuid */
 	lx_getresuid,			/* 209: getresuid */
 	NULL,				/* 210: setresgid */
 	lx_getresgid,			/* 211: getresgid */
-	lx_chown,			/* 212: chown */
+	NULL,				/* 212: chown */
 	lx_setuid,			/* 213: setuid */
 	lx_setgid,			/* 214: setgid */
 	lx_setfsuid,			/* 215: setfsuid */
@@ -1557,9 +1521,9 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_timer_gettime,		/* 261: timer_gettime */
 	lx_timer_getoverrun,		/* 262: timer_getoverrun */
 	lx_timer_delete,		/* 263: timer_delete */
-	lx_clock_settime,		/* 264: clock_settime */
-	lx_clock_gettime,		/* 265: clock_gettime */
-	lx_clock_getres,		/* 266: clock_getres */
+	NULL,				/* 264: clock_settime */
+	NULL,				/* 265: clock_gettime */
+	NULL,				/* 266: clock_getres */
 	lx_clock_nanosleep,		/* 267: clock_nanosleep */
 	lx_statfs64,			/* 268: statfs64 */
 	lx_fstatfs64,			/* 269: fstatfs64 */
@@ -1591,7 +1555,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_openat,			/* 295: openat */
 	NULL,				/* 296: mkdirat */
 	lx_mknodat,			/* 297: mknodat */
-	lx_fchownat,			/* 298: fchownat */
+	NULL,				/* 298: fchownat */
 	lx_futimesat,			/* 299: futimesat */
 	lx_fstatat64,			/* 300: fstatat64 */
 	lx_unlinkat,			/* 301: unlinkat */

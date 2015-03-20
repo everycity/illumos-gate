@@ -253,8 +253,28 @@ lx_madvise(uintptr_t start, uintptr_t len, uintptr_t advice)
 
 		ret = madvise((void *)start, len, advice);
 		if (ret == -1) {
-			if (errno == EBUSY)
+			if (errno == EBUSY) {
+				if (advice != MADV_PURGE)
+					return (-EINVAL);
+
+				/*
+				 * If we got an EBUSY from a MADV_PURGE, we
+				 * will now try again with a MADV_DONTNEED:
+				 * there are conditions (namely, with locked
+				 * mappings that haven't yet been faulted in)
+				 * where MADV_PURGE will fail but MADV_DONTNEED
+				 * will succeed.  If this succeeds, we'll call
+				 * the operation successful; if not, we'll kick
+				 * back EINVAL.
+				 */
+				advice = MADV_DONTNEED;
+
+				if (madvise((void *)start, len, advice) == 0)
+					return (0);
+
 				return (-EINVAL);
+			}
+
 			return (-errno);
 		} else {
 			return (0);
@@ -293,6 +313,19 @@ lx_mprotect(uintptr_t start, uintptr_t len, uintptr_t prot)
 #define	LX_MREMAP_MAYMOVE	1	/* mapping can be moved */
 #define	LX_MREMAP_FIXED		2	/* address is fixed */
 
+/*
+ * We don't have a native mremap() (and nor do we particularly want one), so
+ * we emulate it strictly in user-land.  The idea is simple: we just want to
+ * mmap() the underlying object with the new size and rip down the old mapping.
+ * However, this is problematic because we don't actually have the file
+ * descriptor that corresponds to the resized mapping (and indeed, the mapped
+ * file may not exist in any file system name space).  So to get a file
+ * descriptor, we find the (or rather, a) path to the mapped object via its
+ * entry in /proc/self/path and attempt to open it.  Assuming that this
+ * succeeds, we then mmap() it and rip down the original mapping.  There are
+ * clearly many reasons why this might fail; absent a more apt errno (e.g.,
+ * ENOMEM in some cases), we return EINVAL to denote these cases.
+ */
 long
 lx_remap(uintptr_t old_address, uintptr_t old_size,
     uintptr_t new_size, uintptr_t flags, uintptr_t new_address)
@@ -306,15 +339,15 @@ lx_remap(uintptr_t old_address, uintptr_t old_size,
 	boolean_t found = B_FALSE;
 
 	/*
-	 * The kernel doesn't actually support mremap(), so to emulate it,
-	 * we're going to mmap() the underlying object with the new size.
-	 * We don't actually have a file descriptor (and indeed, the mapped
-	 * file may not exist in any file system name space), so we'll
-	 * find the path via the object's entry in /proc/self/path.  There are
-	 * many reasons why this might fail; generally, we'll return EINVAL,
-	 * but in some cases we'll return ENOMEM.
+	 * We need to search the mappings to find our specified mapping.  Note
+	 * that to perform this search, we use /proc/self/rmap instead of
+	 * /proc/self/map.  This is to accommodate the case where an mmap()'d
+	 * and then ftruncate()'d file is being mremap()'d:  rmap will report
+	 * the size of the mapping (which we need to validate old_size) where
+	 * map will report the smaller of the size of the mapping and the
+	 * size of the object.  (The "r" in "rmap" denotes "reserved".)
 	 */
-	if ((fd = open("/native/proc/self/map", O_RDONLY)) == -1 ||
+	if ((fd = open("/native/proc/self/rmap", O_RDONLY)) == -1 ||
 	    fstat(fd, &st) != 0) {
 		if (fd >= 0) {
 			(void) close(fd);

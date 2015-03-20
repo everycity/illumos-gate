@@ -22,7 +22,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2014 Joyent, Inc.  All rights reserved.
+ * Copyright 2015 Joyent, Inc.  All rights reserved.
  */
 
 #include <sys/fstyp.h>
@@ -148,6 +148,20 @@ lx_unlink(uintptr_t p)
 	if ((lstat64(pathname, &statbuf) == 0) && S_ISDIR(statbuf.st_mode))
 		return (-EISDIR);
 
+	/*
+	 * Some versions of the zone's /dev/log setup code (e.g. syslog-ng) get
+	 * cranky if they can't cleanup /dev/log so we lie and tell them they
+	 * succeeded.
+	 */
+	if (pathname != NULL) {
+		char p[MAXPATHLEN];
+
+		if (uucopystr((void *)pathname, p, sizeof (p)) < 0)
+			return (-errno);
+		if (strcmp(p, "/dev/log") == 0)
+			return (0);
+	}
+
 	return (unlink(pathname) ? -errno : 0);
 }
 
@@ -171,6 +185,15 @@ lx_unlinkat(uintptr_t ext1, uintptr_t p1, uintptr_t p2)
 		if ((fstatat64(atfd, pathname, &statbuf, AT_SYMLINK_NOFOLLOW) ==
 		    0) && S_ISDIR(statbuf.st_mode))
 			return (-EISDIR);
+
+		if (pathname != NULL) {
+			char p[MAXPATHLEN];
+
+			if (uucopystr((void *)pathname, p, sizeof (p)) < 0)
+				return (-errno);
+			if (strcmp(p, "/dev/log") == 0)
+				return (0);
+		}
 	}
 
 	return (unlinkat(atfd, pathname, flag) ? -errno : 0);
@@ -207,114 +230,6 @@ lx_fdatasync(uintptr_t fd)
 	return (fdatasync((int)fd) ? -errno : 0);
 }
 
-/*
- * Linux, unlike Solaris, ALWAYS resets the setuid and setgid bits on a
- * chown/fchown  regardless of whether it was done by root or not.  Therefore,
- * we must do extra work after each chown/fchown call to emulate this behavior.
- */
-#define	SETUGID	(S_ISUID | S_ISGID)
-
-/*
- * [lf]chown16() - Translate the uid/gid and pass onto the real functions.
- */
-long
-lx_chown16(uintptr_t p1, uintptr_t p2, uintptr_t p3)
-{
-	char *filename = (char *)p1;
-	struct stat64 statbuf;
-
-	if (chown(filename, LX_UID16_TO_UID32((lx_gid16_t)p2),
-	    LX_GID16_TO_GID32((lx_gid16_t)p3)))
-		return (-errno);
-
-	if (stat64(filename, &statbuf) == 0) {
-		statbuf.st_mode &= ~S_ISUID;
-		if (statbuf.st_mode & S_IXGRP)
-			statbuf.st_mode &= ~S_ISGID;
-		(void) chmod(filename, (statbuf.st_mode & MODEMASK));
-	}
-
-	return (0);
-}
-
-long
-lx_fchown16(uintptr_t p1, uintptr_t p2, uintptr_t p3)
-{
-	int fd = (int)p1;
-	struct stat64 statbuf;
-
-	if (fchown(fd, LX_UID16_TO_UID32((lx_gid16_t)p2),
-	    LX_GID16_TO_GID32((lx_gid16_t)p3)))
-		return (-errno);
-
-	if (fstat64(fd, &statbuf) == 0) {
-		statbuf.st_mode &= ~S_ISUID;
-		if (statbuf.st_mode & S_IXGRP)
-			statbuf.st_mode &= ~S_ISGID;
-		(void) fchmod(fd, (statbuf.st_mode & MODEMASK));
-	}
-
-	return (0);
-}
-
-long
-lx_lchown16(uintptr_t p1, uintptr_t p2, uintptr_t p3)
-{
-	return (lchown((char *)p1, LX_UID16_TO_UID32((lx_gid16_t)p2),
-	    LX_GID16_TO_GID32((lx_gid16_t)p3)) ? -errno : 0);
-}
-
-long
-lx_chown(uintptr_t p1, uintptr_t p2, uintptr_t p3)
-{
-	char *filename = (char *)p1;
-	struct stat64 statbuf;
-	int ret;
-
-	ret = chown(filename, (uid_t)p2, (gid_t)p3);
-
-	if (ret < 0) {
-		/*
-		 * If chown() failed and we're in install mode, return success
-		 * if the the reason we failed was because the source file
-		 * didn't actually exist or if we're trying to modify /dev/pts.
-		 */
-		if ((lx_install != 0) &&
-		    ((errno == ENOENT) || (install_checkpath(p1) == 0)))
-			return (0);
-
-		return (-errno);
-	}
-
-	if (stat64(filename, &statbuf) == 0) {
-		statbuf.st_mode &= ~S_ISUID;
-		if (statbuf.st_mode & S_IXGRP)
-			statbuf.st_mode &= ~S_ISGID;
-		(void) chmod(filename, (statbuf.st_mode & MODEMASK));
-	}
-
-	return (0);
-}
-
-long
-lx_fchown(uintptr_t p1, uintptr_t p2, uintptr_t p3)
-{
-	int fd = (int)p1;
-	struct stat64 statbuf;
-
-	if (fchown(fd, (uid_t)p2, (gid_t)p3))
-		return (-errno);
-
-	if (fstat64(fd, &statbuf) == 0) {
-		statbuf.st_mode &= ~S_ISUID;
-		if (statbuf.st_mode & S_IXGRP)
-			statbuf.st_mode &= ~S_ISGID;
-		(void) fchmod(fd, (statbuf.st_mode & MODEMASK));
-	}
-
-	return (0);
-}
-
 long
 lx_utime(uintptr_t p1, uintptr_t p2)
 {
@@ -324,7 +239,7 @@ lx_utime(uintptr_t p1, uintptr_t p2)
 
 	if (ret < 0) {
 		/*
-		 * If chown() failed and we're in install mode, return success
+		 * If utime() failed and we're in install mode, return success
 		 * if the the reason we failed was because the source file
 		 * didn't actually exist or if we're trying to modify /dev/pts.
 		 */
@@ -806,27 +721,4 @@ lx_readlinkat(uintptr_t ext1, uintptr_t p1, uintptr_t p2, uintptr_t p3)
 		return (-errno);
 
 	return (ret);
-}
-
-long
-lx_fchownat(uintptr_t ext1, uintptr_t p1, uintptr_t p2, uintptr_t p3,
-    uintptr_t p4)
-{
-	int flag;
-	int atfd = (int)ext1;
-	char pathbuf[MAXPATHLEN];
-	int ret;
-
-	flag = ltos_at_flag(p4, AT_SYMLINK_NOFOLLOW, B_TRUE);
-	if (flag < 0)
-		return (-EINVAL);
-
-	ret = getpathat(atfd, p1, pathbuf, sizeof (pathbuf));
-	if (ret < 0)
-		return (ret);
-
-	if (flag & AT_SYMLINK_NOFOLLOW)
-		return (lchown(pathbuf, (uid_t)p2, (gid_t)p3) ? -errno : 0);
-	else
-		return (lx_chown((uintptr_t)pathbuf, p2, p3));
 }

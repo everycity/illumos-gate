@@ -48,6 +48,7 @@
 #include <netinet/icmp6.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/lx_debug.h>
 #include <sys/lx_syscall.h>
 #include <sys/lx_socket.h>
@@ -1028,12 +1029,6 @@ stol_sockaddr(struct sockaddr *addr, socklen_t *len,
 	case AF_UNIX:
 		if (inlen > sizeof (struct sockaddr_un))
 			return (EINVAL);
-		/*
-		 * If inlen is larger than orig, copy out the maximum amount of
-		 * data possible and then update *len to indicate the actual
-		 * size of all the data that it wanted to copy out.
-		 */
-		size = (orig > 0 && orig < size) ? orig : size;
 		break;
 
 	case (sa_family_t)AF_NOTSUPPORTED:
@@ -1045,6 +1040,13 @@ stol_sockaddr(struct sockaddr *addr, socklen_t *len,
 	default:
 		break;
 	}
+
+	/*
+	 * If inlen is larger than orig, copy out the maximum amount of
+	 * data possible and then update *len to indicate the actual
+	 * size of all the data that it wanted to copy out.
+	 */
+	size = (orig > 0 && orig < size) ? orig : size;
 
 	if (uucopy(inaddr, addr, size) < 0)
 		return (errno);
@@ -2088,7 +2090,7 @@ lx_getsockopt(int sockfd, int level, int optname, void *optval, int *optlenp)
 			break;
 
 		case SO_ERROR:
-			*(int *)optval = lx_errno(*(int *)optval);
+			*(int *)optval = lx_errno(*(int *)optval, -1);
 			break;
 		}
 	}
@@ -2227,7 +2229,7 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 	struct cmsghdr *cmsg = NULL;
 	void *new_cmsg = NULL;
 	int r, err;
-	socklen_t len, orig_len = 0;
+	socklen_t len, orig_len = 0, controllen = 0;
 	void *msg_control = NULL;
 
 	int nosigpipe = flags & LX_MSG_NOSIGNAL;
@@ -2268,7 +2270,7 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 	 */
 	if (msg.msg_control != NULL) {
 		cmsg = msg.msg_control;
-		if (msg.msg_controllen == 0) {
+		if ((controllen = msg.msg_controllen) == 0) {
 			msg.msg_control = NULL;
 		} else {
 			/*
@@ -2334,8 +2336,8 @@ lx_recvmsg(int sockfd, void *lmp, int flags)
 			return (-err);
 		}
 
-		if ((uucopy(msg.msg_control, cmsg,
-		    msg.msg_controllen)) != 0) {
+		if (uucopy(msg.msg_control, cmsg,
+		    MIN(controllen, msg.msg_controllen)) != 0) {
 			free(msg_control);
 			free(new_cmsg);
 			return (-errno);

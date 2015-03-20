@@ -97,7 +97,9 @@ struct brand_ops sngl_brops = {
 #endif
 	NULL,				/* b_restorecontext */
 	NULL,				/* b_sendsig_stack */
-	NULL				/* b_sendsig */
+	NULL,				/* b_sendsig */
+	NULL,				/* b_setid_clear */
+	NULL				/* b_pagefault */
 };
 
 #ifdef	__amd64

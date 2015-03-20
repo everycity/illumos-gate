@@ -37,15 +37,26 @@ extern "C" {
 extern long lx_arch_prctl();
 extern long lx_brk();
 extern long lx_chmod();
+extern long lx_chown();
+extern long lx_chown16();
+extern long lx_clock_getres();
+extern long lx_clock_gettime();
+extern long lx_clock_settime();
 extern long lx_fchmod();
 extern long lx_fchmodat();
+extern long lx_fchown();
+extern long lx_fchown16();
+extern long lx_fchownat();
 extern long lx_futex();
 extern long lx_get_thread_area();
 extern long lx_getpid();
 extern long lx_getppid();
 extern long lx_gettid();
+extern long lx_gettimeofday();
 extern long lx_ioctl();
 extern long lx_kill();
+extern long lx_lchown();
+extern long lx_lchown16();
 extern long lx_mkdir();
 extern long lx_mkdirat();
 extern long lx_modify_ldt();
@@ -73,6 +84,24 @@ extern long lx_waitid();
 extern long lx_waitpid();
 extern long lx_write();
 extern long lx_xattr();
+
+#if defined(_LP64)
+/*
+ * Linux vsyscall addresses:
+ */
+#define	LX_VSYS_gettimeofday	(uintptr_t)0xffffffffff600000
+#define	LX_VSYS_time		(uintptr_t)0xffffffffff600400
+#define	LX_VSYS_getcpu		(uintptr_t)0xffffffffff600800
+
+#define	LX_VSYSCALL_ADDR		(uintptr_t)0xffffffffff600000
+#define	LX_VSYSCALL_SIZE		(uintptr_t)0x1000
+/*
+ * System call numbers for vsyscall revectoring:
+ */
+#define	LX_SYS_gettimeofday	96
+#define	LX_SYS_time		201
+#define	LX_SYS_getcpu		309
+#endif
 
 #endif	/* _KERNEL */
 

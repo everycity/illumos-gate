@@ -415,10 +415,11 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 			fork_flags |= FORK_NOSIGCHLD;
 
 		/*
-		 * Suspend signal delivery and perform the actual fork(2)
-		 * operation.
+		 * Suspend signal delivery, run the stack management prefork
+		 * handler and perform the actual fork(2) operation.
 		 */
 		_sigoff();
+		lx_stack_prefork();
 		if (flags & LX_CLONE_VFORK) {
 			is_vforked++;
 			rval = vforkx(fork_flags);
@@ -426,8 +427,6 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 				is_vforked--;
 		} else {
 			rval = forkx(fork_flags);
-			if (rval == 0 && lx_is_rpm)
-				(void) sleep(lx_rpm_delay);
 		}
 
 		/*
@@ -435,6 +434,17 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		 * path here.
 		 */
 		if (rval != 0) {
+			if (!IS_VFORK(flags) || rval < 0) {
+				/*
+				 * Run the stack management postfork handler in
+				 * the parent.  If this was a vfork(2), we only
+				 * run it in the parent if the fork operation
+				 * failed; the vfork(2) child has already run
+				 * it for our address space.
+				 */
+				lx_stack_postfork();
+			}
+
 			/*
 			 * Since we've already forked, we can't do much if
 			 * uucopy fails, so we just ignore failure. Failure is
@@ -462,6 +472,11 @@ lx_clone(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		 * The rest of this block runs only within the new child
 		 * process.
 		 */
+
+		/*
+		 * Run the stack management postfork handler in the child.
+		 */
+		lx_stack_postfork();
 
 		if (!IS_VFORK(flags)) {
 			/*

@@ -340,6 +340,12 @@ overlay_target_lookup(overlay_dev_t *odd, mblk_t *mp, struct sockaddr *sock,
 	}
 
 	ASSERT(ott->ott_mode == OVERLAY_TARGET_DYNAMIC);
+
+	/*
+	 * Note we only want the MAC address here, therefore we won't bother
+	 * using mac_vlan_header_info(). If any caller needs the vlan info at
+	 * this point, this should change to a call to mac_vlan_header_info().
+	 */
 	if (mac_header_info(odd->odd_mh, mp, &mhi) != 0)
 		return (OVERLAY_TARGET_DROP);
 	mutex_enter(&ott->ott_lock);
@@ -612,10 +618,10 @@ again:
 	ASSERT(entry->ote_chead != NULL);
 
 	/*
-	 * We have a bogon that doesn't have a valid mac header. Drop this entry
-	 * and figure out what to do next.
+	 * If we have a bogon that doesn't have a valid mac header, drop it and
+	 * try again.
 	 */
-	if (mac_header_info(entry->ote_odd->odd_mh, entry->ote_chead,
+	if (mac_vlan_header_info(entry->ote_odd->odd_mh, entry->ote_chead,
 	    &mhi) != 0) {
 		boolean_t queue = B_FALSE;
 		mblk_t *mp = entry->ote_chead;
@@ -1044,7 +1050,7 @@ overlay_target_list_copyout(void *ubuf, void *buf, size_t bufsize, int flags)
 		if (ddi_copyout(otl->otli_ents,
 		    (void *)((uintptr_t)ubuf +
 		    offsetof(overlay_targ_list_t, otl_ents)),
-		    sizeof (uint32_t *) * otl->otli_nents,
+		    sizeof (uint32_t) * otl->otli_nents,
 		    flags & FKIOCTL) != 0)
 			return (EFAULT);
 	}

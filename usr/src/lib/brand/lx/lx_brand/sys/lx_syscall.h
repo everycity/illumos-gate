@@ -46,7 +46,6 @@ extern int lx_install;
 
 extern long lx_openat(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_mknodat(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_fchownat(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_futimesat(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_utimensat(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_fstatat64(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
@@ -119,7 +118,6 @@ extern long lx_oldgetrlimit(uintptr_t, uintptr_t);
 extern long lx_getrlimit(uintptr_t, uintptr_t);
 extern long lx_setrlimit(uintptr_t, uintptr_t);
 extern long lx_prlimit64(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_gettimeofday(uintptr_t, uintptr_t);
 extern long lx_settimeofday(uintptr_t, uintptr_t);
 extern long lx_getrusage(uintptr_t, uintptr_t);
 extern long lx_mknod(uintptr_t, uintptr_t, uintptr_t);
@@ -153,9 +151,6 @@ extern long lx_setfsgid16(uintptr_t);
 extern long lx_setfsuid(uintptr_t);
 extern long lx_setfsgid(uintptr_t);
 
-extern long lx_clock_settime(int, struct timespec *);
-extern long lx_clock_gettime(int, struct timespec *);
-extern long lx_clock_getres(int, struct timespec *);
 extern long lx_clock_nanosleep(int, int flags, struct timespec *,
     struct timespec *);
 extern long lx_adjtimex(void *);
@@ -177,11 +172,6 @@ extern long lx_fdatasync(uintptr_t);
 extern long lx_link(uintptr_t, uintptr_t);
 extern long lx_unlink(uintptr_t);
 extern long lx_rmdir(uintptr_t);
-extern long lx_chown16(uintptr_t, uintptr_t, uintptr_t);
-extern long lx_fchown16(uintptr_t, uintptr_t, uintptr_t);
-extern long lx_lchown16(uintptr_t, uintptr_t, uintptr_t);
-extern long lx_chown(uintptr_t, uintptr_t, uintptr_t);
-extern long lx_fchown(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_rename(uintptr_t, uintptr_t);
 extern long lx_utime(uintptr_t, uintptr_t);
 extern long lx_llseek(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
@@ -324,7 +314,6 @@ extern long lx_inotify_add_watch(int, const char *, uint32_t);
 extern long lx_inotify_init(void);
 extern long lx_inotify_init1(int);
 extern long lx_inotify_rm_watch(int, int);
-extern long lx_lchown(const char *, uid_t, gid_t);
 extern long lx_mincore(caddr_t, size_t, char *);
 extern long lx_munmap(void *, size_t);
 extern long lx_nanosleep(const struct timespec *, struct timespec *);
@@ -347,22 +336,6 @@ extern long lx_utimes(const char *, const struct timeval *);
 
 #endif	/* !defined(_ASM) */
 
-
-#if defined(_LP64)
-/*
- * Linux vsyscall addresses:
- */
-#define	LX_VSYS_gettimeofday	(uintptr_t)0xffffffffff600000
-#define	LX_VSYS_time		(uintptr_t)0xffffffffff600400
-#define	LX_VSYS_getcpu		(uintptr_t)0xffffffffff600800
-
-/*
- * System call numbers for vsyscall revectoring:
- */
-#define	LX_SYS_gettimeofday	96
-#define	LX_SYS_time		201
-#define	LX_SYS_getcpu		309
-#endif
 
 #if defined(_LP64)
 #define	LX_SYS_clone		56
