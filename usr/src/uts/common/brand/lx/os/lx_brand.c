@@ -1321,6 +1321,18 @@ lx_copy_procdata(proc_t *child, proc_t *parent)
 	*cpd = *ppd;
 
 	child->p_brand_data = cpd;
+
+	cpd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_cur = LX_RLIM64_INFINITY;
+	cpd->l_fake_limits[LX_RLFAKE_LOCKS].rlim_max = LX_RLIM64_INFINITY;
+
+	cpd->l_fake_limits[LX_RLFAKE_NICE].rlim_cur = 20;
+	cpd->l_fake_limits[LX_RLFAKE_NICE].rlim_max = 20;
+
+	cpd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_cur = LX_RLIM64_INFINITY;
+	cpd->l_fake_limits[LX_RLFAKE_RTPRIO].rlim_max = LX_RLIM64_INFINITY;
+
+	cpd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_cur = LX_RLIM64_INFINITY;
+	cpd->l_fake_limits[LX_RLFAKE_RTTIME].rlim_max = LX_RLIM64_INFINITY;
 }
 
 #if defined(_LP64)
@@ -1730,7 +1742,19 @@ lx_native_exec(uint8_t osabi, const char **interp)
 	if (osabi != ELFOSABI_SOLARIS)
 		return (B_FALSE);
 
-	*interp = "/native";
+	/*
+	 * If the process root matches the zone root, prepend /native to the
+	 * interpreter path for native executables.  Absolute precision from
+	 * VN_CMP is not necessary since any change of process root is likely
+	 * to make native binaries inaccessible via /native.
+	 *
+	 * Processes which chroot directly into /native will be able to
+	 * function as expected with no need for the prefix.
+	 */
+	if (VN_CMP(curproc->p_user.u_rdir, curproc->p_zone->zone_rootvp)) {
+		*interp = "/native";
+	}
+
 	return (B_TRUE);
 }
 
