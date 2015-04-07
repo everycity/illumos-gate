@@ -216,6 +216,8 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 	    &junk, &dtrphdr, NULL, bssbase, brkbase, voffset, &minaddr,
 	    len, &execsz, brksize)) {
 		uprintf("%s: Cannot map %s\n", exec_file, args->pathname);
+		if (uphdr != NULL && uphdr->p_flags == 0)
+			kmem_free(uphdr, sizeof (Phdr));
 		kmem_free(phdrbase, phdrsize);
 		return (error);
 	}
@@ -315,6 +317,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	int		hasauxv = 0;
 	int		hasdy = 0;
 	int		branded = 0;
+	int		dynuphdr = 0;
 
 	struct proc *p = ttoproc(curthread);
 	struct user *up = PTOU(p);
@@ -605,6 +608,14 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	    &stphdr, &dtrphdr, dataphdrp, &bssbase, &brkbase, &voffset, NULL,
 	    len, execsz, &brksize)) != 0)
 		goto bad;
+
+	if (uphdr != NULL) {
+		/*
+		 * Our uphdr has been dynamically allocated if (and only if)
+		 * its program header flags are clear.
+		 */
+		dynuphdr = (uphdr->p_flags == 0);
+	}
 
 	if (uphdr != NULL && dyphdr == NULL)
 		goto bad;
@@ -981,7 +992,7 @@ bad:
 	if (error == 0)
 		error = ENOEXEC;
 out:
-	if (uphdr != NULL && uphdr->p_flags == 0)
+	if (dynuphdr)
 		kmem_free(uphdr, sizeof (Phdr));
 	if (phdrbase != NULL)
 		kmem_free(phdrbase, phdrsize);

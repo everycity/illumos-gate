@@ -345,8 +345,6 @@ proc_exit(int why, int what)
 	refstr_t *cwd;
 	hrtime_t hrutime, hrstime;
 	int evaporate;
-	brand_t *orig_brand = NULL;
-	void *brand_data = NULL;
 
 	/*
 	 * Stop and discard the process's lwps except for the current one,
@@ -365,27 +363,6 @@ proc_exit(int why, int what)
 		 */
 		(void) task_cpu_time_incr(p->p_task, p->p_ttime);
 		p->p_ttime = 0;
-	}
-	mutex_exit(&p->p_lock);
-
-	DTRACE_PROC(lwp__exit);
-	DTRACE_PROC1(exit, int, why);
-
-	/*
-	 * Will perform any brand specific proc exit processing. Since this
-	 * is always the last lwp, will also perform lwp_exit and free
-	 * brand_data, except in the case that the brand has a b_exit_with_sig
-	 * handler. In this case we free the brand_data later within this
-	 * function.
-	 */
-	mutex_enter(&p->p_lock);
-	if (PROC_IS_BRANDED(p)) {
-		orig_brand = p->p_brand;
-		if (p->p_brand_data != NULL && orig_brand->b_data_size > 0) {
-			brand_data = p->p_brand_data;
-		}
-		lwp_detach_brand_hdlrs(lwp);
-		brand_clearbrand(p, B_FALSE);
 	}
 	mutex_exit(&p->p_lock);
 
@@ -438,6 +415,32 @@ proc_exit(int why, int what)
 		 * processing.
 		 */
 		z->zone_proc_initpid = -1;
+	}
+
+	/*
+	 * Delay firing probes (and performing brand cleanup) until after the
+	 * zone_proc_initpid check. Cases which result in zone shutdown or
+	 * restart via zone_kadmin eventually result in a call back to
+	 * proc_exit.
+	 */
+	DTRACE_PROC(lwp__exit);
+	DTRACE_PROC1(exit, int, why);
+
+	/*
+	 * Will perform any brand specific proc exit processing. Since this
+	 * is always the last lwp, will also perform lwp exit/free and proc
+	 * exit. Brand data will be freed when the process is reaped.
+	 */
+	if (PROC_IS_BRANDED(p)) {
+		BROP(p)->b_lwpexit(lwp);
+		BROP(p)->b_proc_exit(p);
+		/*
+		 * To ensure that b_proc_exit has access to brand-specific data
+		 * contained by the one remaining lwp, call the freelwp hook as
+		 * the last part of this clean-up process.
+		 */
+		BROP(p)->b_freelwp(lwp);
+		lwp_detach_brand_hdlrs(lwp);
 	}
 
 	lwp_pcb_exit();
@@ -887,20 +890,16 @@ proc_exit(int why, int what)
 	if (!evaporate) {
 		/*
 		 * The brand specific code only happens when the brand has a
-		 * function to call in place of sigcld, the data itself still
-		 * existed, and the parent of the exiting process is not the
-		 * global zone init. If the parent is the global zone init,
-		 * then the process was reparented, and we don't want brand
-		 * code delivering possibly strange signals to init. Also, init
-		 * is not branded, so any brand specific exit data will not be
-		 * picked up by init anyway.
-		 * It is assumed by this code that any brand where
-		 * b_exit_with_sig == NULL, will free its own brand_data rather
-		 * than letting this piece of code free it.
+		 * function to call in place of sigcld and the parent of the
+		 * exiting process is not the global zone init. If the parent
+		 * is the global zone init, then the process was reparented,
+		 * and we don't want brand code delivering possibly strange
+		 * signals to init. Also, init is not branded, so any brand
+		 * specific exit data will not be picked up by init anyway.
 		 */
-		if (orig_brand != NULL &&
-		    orig_brand->b_ops->b_exit_with_sig != NULL &&
-		    brand_data != NULL && p->p_ppid != 1) {
+		if (PROC_IS_BRANDED(p) &&
+		    BROP(p)->b_exit_with_sig != NULL &&
+		    p->p_ppid != 1) {
 			/*
 			 * The code for _fini that could unload the brand_t
 			 * blocks until the count of zones using the module
@@ -927,16 +926,10 @@ proc_exit(int why, int what)
 			 * this mechanism must wait in _fini as described
 			 * above.
 			 */
-			orig_brand->b_ops->b_exit_with_sig(p,
-			    sqp, brand_data);
+			BROP(p)->b_exit_with_sig(p, sqp);
 		} else {
 			p->p_pidflag &= ~CLDPEND;
 			sigcld(p, sqp);
-		}
-		if (brand_data != NULL) {
-			kmem_free(brand_data, orig_brand->b_data_size);
-			brand_data = NULL;
-			orig_brand = NULL;
 		}
 
 	} else {
@@ -1352,6 +1345,14 @@ freeproc(proc_t *p)
 		siginfofree(p->p_killsqp);
 		p->p_killsqp = NULL;
 	}
+
+	/* Clear any remaining brand data */
+	if (PROC_IS_BRANDED(p)) {
+		mutex_enter(&p->p_lock);
+		brand_clearbrand(p);
+		mutex_exit(&p->p_lock);
+	}
+
 
 	prfree(p);	/* inform /proc */
 

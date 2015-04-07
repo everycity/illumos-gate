@@ -256,6 +256,8 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 	 */
 	lwp->lwp_errno = 0;
 
+	lx_check_strict_failure(lwpd);
+
 	/*
 	 * We want complete control of the registers on return from this
 	 * emulated Linux system call:
@@ -573,7 +575,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"umount2",	NULL,			0,		2}, /* 52 */
 	{"lock",	NULL,			NOSYS_OBSOLETE,	0}, /* 53 */
 	{"ioctl",	lx_ioctl,		0,		3}, /* 54 */
-	{"fcntl",	NULL,			0,		3}, /* 55 */
+	{"fcntl",	lx_fcntl,		0,		3}, /* 55 */
 	{"mpx",		NULL,			NOSYS_OBSOLETE,	0}, /* 56 */
 	{"setpgid",	NULL,			0,		2}, /* 57 */
 	{"ulimit",	NULL,			NOSYS_OBSOLETE,	0}, /* 58 */
@@ -739,14 +741,14 @@ lx_sysent_t lx_sysent32[] = {
 	{"mincore",	NULL,			0,		3}, /* 218 */
 	{"madvise",	NULL,			0,		3}, /* 219 */
 	{"getdents64",	NULL,			0,		3}, /* 220 */
-	{"fcntl64",	NULL,			0,		3}, /* 221 */
+	{"fcntl64",	lx_fcntl64,		0,		3}, /* 221 */
 	{"tux",		NULL,			NOSYS_NO_EQUIV,	0}, /* 222 */
 	{"security",	NULL,			NOSYS_NO_EQUIV,	0}, /* 223 */
 	{"gettid",	lx_gettid,		0,		0}, /* 224 */
 	{"readahead",	NULL,			NOSYS_NO_EQUIV,	0}, /* 225 */
-	{"setxattr",	NULL,			NOSYS_NO_EQUIV,	0}, /* 226 */
-	{"lsetxattr",	NULL,			NOSYS_NO_EQUIV,	0}, /* 227 */
-	{"fsetxattr",	NULL,			NOSYS_NO_EQUIV,	0}, /* 228 */
+	{"setxattr",	lx_xattr,		0,		5}, /* 226 */
+	{"lsetxattr",	lx_xattr,		0,		5}, /* 227 */
+	{"fsetxattr",	lx_xattr,		0,		5}, /* 228 */
 	{"getxattr",	lx_xattr,		0,		4}, /* 229 */
 	{"lgetxattr",	lx_xattr,		0,		4}, /* 230 */
 	{"fgetxattr",	lx_xattr,		0,		4}, /* 231 */
@@ -877,7 +879,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"sched_getattr", NULL,			NOSYS_NULL,	0}, /* 352 */
 	{"renameat2",	NULL,			NOSYS_NULL,	0}, /* 353 */
 	{"seccomp",	NULL,			NOSYS_NULL,	0}, /* 354 */
-	{"getrandom",	NULL,			NOSYS_NULL,	0}, /* 355 */
+	{"getrandom",	lx_getrandom,		0,		3}, /* 355 */
 	{"memfd_create", NULL,			NOSYS_NULL,	0}, /* 356 */
 	{"bpf",		NULL,			NOSYS_NULL,	0}, /* 357 */
 	{"execveat",	NULL,			NOSYS_NULL,	0}, /* 358 */
@@ -961,7 +963,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"msgsnd",	NULL,			0,		4}, /* 69 */
 	{"msgrcv",	NULL,			0,		5}, /* 70 */
 	{"msgctl",	NULL,			0,		3}, /* 71 */
-	{"fcntl",	NULL,			0,		3}, /* 72 */
+	{"fcntl",	lx_fcntl64,		0,		3}, /* 72 */
 	{"flock",	NULL,			0,		2}, /* 73 */
 	{"fsync",	NULL,			0,		1}, /* 74 */
 	{"fdatasync",	NULL,			0,		1}, /* 75 */
@@ -1077,9 +1079,9 @@ lx_sysent_t lx_sysent64[] = {
 	{"security",	NULL,			NOSYS_NO_EQUIV,	0}, /* 185 */
 	{"gettid",	lx_gettid,		0,		0}, /* 186 */
 	{"readahead",	NULL,			NOSYS_NO_EQUIV,	0}, /* 187 */
-	{"setxattr",	NULL,			NOSYS_NO_EQUIV,	0}, /* 188 */
-	{"lsetxattr",	NULL,			NOSYS_NO_EQUIV,	0}, /* 189 */
-	{"fsetxattr",	NULL,			NOSYS_NO_EQUIV,	0}, /* 190 */
+	{"setxattr",	lx_xattr,		0,		5}, /* 188 */
+	{"lsetxattr",	lx_xattr,		0,		5}, /* 189 */
+	{"fsetxattr",	lx_xattr,		0,		5}, /* 190 */
 	{"getxattr",	lx_xattr,		0,		4}, /* 191 */
 	{"lgetxattr",	lx_xattr,		0,		4}, /* 192 */
 	{"fgetxattr",	lx_xattr,		0,		4}, /* 193 */
@@ -1207,7 +1209,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"sched_getattr", NULL,			NOSYS_NULL,	0}, /* 315 */
 	{"renameat2", NULL,			NOSYS_NULL,	0}, /* 316 */
 	{"seccomp",	NULL,			NOSYS_NULL,	0}, /* 317 */
-	{"getrandom",	NULL,			NOSYS_NULL,	0}, /* 318 */
+	{"getrandom",	lx_getrandom,		0,		3}, /* 318 */
 	{"memfd_create", NULL,			NOSYS_NULL,	0}, /* 319 */
 	{"kexec_file_load", NULL,		NOSYS_NULL,	0}, /* 320 */
 	{"bpf",		NULL,			NOSYS_NULL,	0}, /* 321 */

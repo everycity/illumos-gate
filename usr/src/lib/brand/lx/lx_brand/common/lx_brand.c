@@ -129,7 +129,6 @@ long lx_fsb;
 long lx_fs;
 #endif
 int lx_install = 0;		/* install mode enabled if non-zero */
-int lx_strict = 0;		/* "strict" mode enabled if non-zero */
 int lx_verbose = 0;		/* verbose mode enabled if non-zero */
 int lx_debug_enabled = 0;	/* debugging output enabled if non-zero */
 
@@ -317,13 +316,6 @@ lx_unsupported(char *msg, ...)
 	va_start(ap, msg);
 	i_lx_msg(STDERR_FILENO, msg, ap);
 	va_end(ap);
-
-	/*
-	 * If the user doesn't trust the application to responsibly
-	 * handle ENOTSUP, we kill the application.
-	 */
-	if (lx_strict)
-		(void) kill(getpid(), SIGSYS);
 }
 
 int lx_init(int argc, char *argv[], char *envp[]);
@@ -597,7 +589,7 @@ lx_init(int argc, char *argv[], char *envp[])
 	 * system call?
 	 */
 	if (getenv("LX_STRICT") != NULL) {
-		lx_strict = 1;
+		reg.lxbr_flags |= LX_PROC_STRICT_MODE;
 		lx_debug("STRICT mode enabled.\n");
 	}
 
@@ -998,7 +990,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_msgsnd,			/*  69: msgsnd */
 	lx_msgrcv,			/*  70: msgrcv */
 	lx_msgctl,			/*  71: msgctl */
-	lx_fcntl64,			/*  72: fcntl */
+	NULL,				/*  72: fcntl */
 	lx_flock,			/*  73: flock */
 	lx_fsync,			/*  74: fsync */
 	lx_fdatasync,			/*  75: fdatasync */
@@ -1312,7 +1304,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_umount2,			/*  52: umount2 */
 	NULL,				/*  53: lock */
 	NULL,				/*  54: ioctl */
-	lx_fcntl,			/*  55: fcntl */
+	NULL,				/*  55: fcntl */
 	NULL,				/*  56: mpx */
 	lx_setpgid,			/*  57: setpgid */
 	NULL,				/*  58: ulimit */
@@ -1478,7 +1470,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_mincore,			/* 218: mincore */
 	lx_madvise,			/* 219: madvise */
 	lx_getdents64,			/* 220: getdents64 */
-	lx_fcntl64,			/* 221: fcntl64 */
+	NULL,				/* 221: fcntl64 */
 	NULL,				/* 222: tux */
 	NULL,				/* 223: security */
 	NULL,				/* 224: gettid */
