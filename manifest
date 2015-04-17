@@ -603,8 +603,6 @@ f kernel/drv/amd64/fp 0755 root sys
 f kernel/drv/amd64/heci 0755 root sys
 f kernel/drv/amd64/hid 0755 root sys
 f kernel/drv/amd64/hubd 0755 root sys
-f kernel/drv/amd64/hwahc 0755 root sys
-f kernel/drv/amd64/hwarc 0755 root sys
 f kernel/drv/amd64/hxge 0755 root sys
 f kernel/drv/amd64/i8042 0755 root sys
 f kernel/drv/amd64/icmp 0755 root sys
@@ -980,7 +978,6 @@ f kernel/misc/amd64/gsqueue 0755 root sys
 f kernel/misc/amd64/hidparser 0755 root sys
 f kernel/misc/amd64/hook 0755 root sys
 f kernel/misc/amd64/hpcsvc 0755 root sys
-f kernel/misc/amd64/hwa1480_fw 0755 root sys
 f kernel/misc/amd64/idm 0755 root sys
 f kernel/misc/amd64/idmap 0755 root sys
 f kernel/misc/amd64/iommulib 0755 root sys
@@ -1719,7 +1716,6 @@ f lib/svc/method/svc-tnd 0555 root sys
 f lib/svc/method/svc-utmpd 0555 root bin
 f lib/svc/method/svc-varpd 0555 root sys
 f lib/svc/method/svc-vrrp 0555 root sys
-f lib/svc/method/svc-wusb 0555 root sys
 f lib/svc/method/svc-zones 0555 root sys
 f lib/svc/method/system-log 0555 root bin
 f lib/svc/method/vtdaemon 0555 root bin
@@ -1876,7 +1872,6 @@ f sbin/uadmin 0555 root sys
 f sbin/umount 0555 root bin
 f sbin/umountall 0555 root sys
 f sbin/uname 0555 root bin
-f sbin/wusbadm 0555 root bin
 f sbin/zfs 0555 root bin
 f sbin/zonename 0555 root bin
 f sbin/zpool 0555 root bin
@@ -1963,7 +1958,6 @@ f usr/bin/basename 0555 root bin
 f usr/bin/batch 0555 root bin
 f usr/bin/bc 0555 root bin
 f usr/bin/bdiff 0755 root bin
-f usr/bin/bfs 0555 root bin
 h usr/bin/bg=usr/bin/alias
 f usr/bin/busstat 0555 root bin
 f usr/bin/cal 0555 root bin
@@ -4364,8 +4358,6 @@ d usr/include/sys/usb/clients/audio 0755 root bin
 f usr/include/sys/usb/clients/audio/usb_audio.h 0644 root bin
 d usr/include/sys/usb/clients/hid 0755 root bin
 f usr/include/sys/usb/clients/hid/hid.h 0644 root bin
-d usr/include/sys/usb/clients/hwarc 0755 root bin
-f usr/include/sys/usb/clients/hwarc/hwarc.h 0644 root bin
 d usr/include/sys/usb/clients/mass_storage 0755 root bin
 f usr/include/sys/usb/clients/mass_storage/usb_bulkonly.h 0644 root bin
 f usr/include/sys/usb/clients/mass_storage/usb_cbi.h 0644 root bin
@@ -4394,11 +4386,6 @@ f usr/include/sys/utrap.h 0644 root bin
 f usr/include/sys/utsname.h 0644 root bin
 f usr/include/sys/utssys.h 0644 root bin
 f usr/include/sys/uuid.h 0644 root bin
-d usr/include/sys/uwb 0755 root bin
-f usr/include/sys/uwb/uwb.h 0644 root bin
-d usr/include/sys/uwb/uwba 0755 root bin
-f usr/include/sys/uwb/uwba/uwba.h 0644 root bin
-f usr/include/sys/uwb/uwbai.h 0644 root bin
 f usr/include/sys/va_impl.h 0644 root bin
 f usr/include/sys/va_list.h 0644 root bin
 f usr/include/sys/var.h 0644 root bin
@@ -10107,7 +10094,6 @@ f usr/lib/vtdaemon 0555 root bin
 f usr/lib/vtinfo 0555 root bin
 f usr/lib/vtxlock 0555 root bin
 f usr/lib/watchmalloc.so.1 0755 root bin
-s usr/lib/wusbd=../../sbin/wusbadm
 d usr/lib/zfs 0755 root bin
 f usr/lib/zfs/availdevs 0555 root bin
 d usr/lib/zones 0755 root bin
@@ -10552,7 +10538,6 @@ f usr/sbin/volcopy 0555 root bin
 f usr/sbin/vrrpadm 0555 root bin
 f usr/sbin/wall 2555 root tty
 h usr/sbin/whodo=usr/lib/isaexec
-s usr/sbin/wusbadm=../../sbin/wusbadm
 f usr/sbin/ypalias 0555 root bin
 f usr/sbin/ypinit 0555 root bin
 f usr/sbin/yppoll 0555 root bin
@@ -11441,7 +11426,6 @@ f usr/share/man/man1/basename.1 0444 root bin
 s usr/share/man/man1/batch.1=at.1
 f usr/share/man/man1/bc.1 0444 root bin
 f usr/share/man/man1/bdiff.1 0444 root bin
-f usr/share/man/man1/bfs.1 0444 root bin
 s usr/share/man/man1/bg.1=jobs.1
 f usr/share/man/man1/cal.1 0444 root bin
 f usr/share/man/man1/calendar.1 0444 root bin
@@ -12227,7 +12211,6 @@ f usr/share/man/man1m/volcopy_ufs.1m 0444 root bin
 f usr/share/man/man1m/wall.1m 0444 root bin
 f usr/share/man/man1m/whodo.1m 0444 root bin
 f usr/share/man/man1m/wracct.1m 0444 root bin
-f usr/share/man/man1m/wusbadm.1m 0444 root bin
 f usr/share/man/man1m/ypinit.1m 0444 root bin
 f usr/share/man/man1m/yppoll.1m 0444 root bin
 f usr/share/man/man1m/ypset.1m 0444 root bin
@@ -12293,6 +12276,7 @@ s usr/share/man/man2/fchown.2=chown.2
 s usr/share/man/man2/fchownat.2=chown.2
 s usr/share/man/man2/fchroot.2=chroot.2
 f usr/share/man/man2/fcntl.2 0444 root bin
+s usr/share/man/man2/fgetlabel.2=getlabel.2
 f usr/share/man/man2/fork.2 0444 root bin
 s usr/share/man/man2/fork1.2=fork.2
 s usr/share/man/man2/forkall.2=fork.2
@@ -12316,6 +12300,7 @@ s usr/share/man/man2/getgid.2=getuid.2
 f usr/share/man/man2/getgroups.2 0444 root bin
 f usr/share/man/man2/getisax.2 0444 root bin
 f usr/share/man/man2/getitimer.2 0444 root bin
+f usr/share/man/man2/getlabel.2 0444 root bin
 f usr/share/man/man2/getmsg.2 0444 root bin
 f usr/share/man/man2/getpflags.2 0444 root bin
 s usr/share/man/man2/getpgid.2=getpid.2
@@ -15724,7 +15709,6 @@ f usr/share/man/man3lib/libproject.3lib 0444 root bin
 f usr/share/man/man3lib/libpthread.3lib 0444 root bin
 f usr/share/man/man3lib/libresolv.3lib 0444 root bin
 f usr/share/man/man3lib/librpcsvc.3lib 0444 root bin
-f usr/share/man/man3lib/librsm.3lib 0444 root bin
 f usr/share/man/man3lib/librt.3lib 0444 root bin
 f usr/share/man/man3lib/librtld_db.3lib 0444 root bin
 f usr/share/man/man3lib/libsasl.3lib 0444 root bin
@@ -18148,6 +18132,7 @@ f usr/share/man/man4/nscd.conf.4 0444 root bin
 f usr/share/man/man4/nsmbrc.4 0444 root bin
 f usr/share/man/man4/nss.4 0444 root bin
 f usr/share/man/man4/nsswitch.conf.4 0444 root bin
+f usr/share/man/man4/overlay_files.4 0444 root bin
 f usr/share/man/man4/packingrules.4 0444 root bin
 f usr/share/man/man4/pam.conf.4 0444 root bin
 f usr/share/man/man4/passwd.4 0444 root bin
@@ -18318,6 +18303,7 @@ f usr/share/man/man5/mm.5 0444 root bin
 f usr/share/man/man5/ms.5 0444 root bin
 f usr/share/man/man5/mutex.5 0444 root bin
 f usr/share/man/man5/nfssec.5 0444 root bin
+f usr/share/man/man5/overlay.5 0444 root bin
 f usr/share/man/man5/pam_allow.5 0444 root bin
 f usr/share/man/man5/pam_authtok_check.5 0444 root bin
 f usr/share/man/man5/pam_authtok_get.5 0444 root bin
@@ -18412,9 +18398,6 @@ f usr/share/man/man7d/hci1394.7d 0444 root bin
 f usr/share/man/man7d/heci.7d 0444 root bin
 f usr/share/man/man7d/hid.7d 0444 root bin
 f usr/share/man/man7d/hubd.7d 0444 root bin
-s usr/share/man/man7d/hwa1480_fw.7d=wusb_df.7d
-f usr/share/man/man7d/hwahc.7d 0444 root bin
-f usr/share/man/man7d/hwarc.7d 0444 root bin
 f usr/share/man/man7d/hxge.7d 0444 root bin
 f usr/share/man/man7d/ieee1394.7d 0444 root bin
 f usr/share/man/man7d/igb.7d 0444 root bin
@@ -18497,15 +18480,11 @@ f usr/share/man/man7d/usbftdi.7d 0444 root bin
 f usr/share/man/man7d/usbsacm.7d 0444 root bin
 f usr/share/man/man7d/usbsksp.7d 0444 root bin
 f usr/share/man/man7d/usbsprl.7d 0444 root bin
-s usr/share/man/man7d/uwb.7d=uwba.7d
-f usr/share/man/man7d/uwba.7d 0444 root bin
 f usr/share/man/man7d/virtualkm.7d 0444 root bin
 f usr/share/man/man7d/vni.7d 0444 root bin
 f usr/share/man/man7d/vr.7d 0444 root bin
 f usr/share/man/man7d/vnd.7d 0444 root bin
 f usr/share/man/man7d/wscons.7d 0444 root bin
-f usr/share/man/man7d/wusb_ca.7d 0444 root bin
-f usr/share/man/man7d/wusb_df.7d 0444 root bin
 f usr/share/man/man7d/xge.7d 0444 root bin
 f usr/share/man/man7d/yge.7d 0444 root bin
 f usr/share/man/man7d/zcons.7d 0444 root bin
@@ -18591,6 +18570,7 @@ s usr/share/man/man7p/RARP.7p=rarp.7p
 s usr/share/man/man7p/SCTP.7p=sctp.7p
 s usr/share/man/man7p/TCP.7p=tcp.7p
 s usr/share/man/man7p/UDP.7p=udp.7p
+s usr/share/man/man7p/VXLAN.7p=vxlan.7p
 f usr/share/man/man7p/arp.7p 0444 root bin
 f usr/share/man/man7p/dlpi.7p 0444 root bin
 f usr/share/man/man7p/icmp.7p 0444 root bin
@@ -18613,6 +18593,7 @@ f usr/share/man/man7p/sip.7p 0444 root bin
 f usr/share/man/man7p/slp.7p 0444 root bin
 f usr/share/man/man7p/tcp.7p 0444 root bin
 f usr/share/man/man7p/udp.7p 0444 root bin
+f usr/share/man/man7p/vxlan.7p 0444 root bin
 d usr/share/man/man9 0755 root bin
 s usr/share/man/man9/Intro.9=../man9e/Intro.9e
 s usr/share/man/man9/intro.9=../man9e/Intro.9e

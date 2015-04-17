@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
- * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
  * Copyright (c) 2014 by Saso Kiselkov. All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
@@ -274,7 +274,7 @@ typedef struct arc_state {
 	 * total amount of data in this state; this includes: evictable,
 	 * non-evictable, ARC_BUFC_DATA, and ARC_BUFC_METADATA.
 	 */
-	uint64_t arcs_size;
+	refcount_t arcs_size;
 } arc_state_t;
 
 /* The 6 states: */
@@ -865,6 +865,16 @@ uint64_t zfs_crc64_table[256];
 #define	L2ARC_FEED_SECS		1		/* caching interval secs */
 #define	L2ARC_FEED_MIN_MS	200		/* min caching interval ms */
 
+/*
+ * Used to distinguish headers that are being process by
+ * l2arc_write_buffers(), but have yet to be assigned to a l2arc disk
+ * address. This can happen when the header is added to the l2arc's list
+ * of buffers to write in the first stage of l2arc_write_buffers(), but
+ * has not yet been written out which happens in the second stage of
+ * l2arc_write_buffers().
+ */
+#define	L2ARC_ADDR_UNSET	((uint64_t)(-1))
+
 #define	l2arc_writes_sent	ARCSTAT(arcstat_l2_writes_sent)
 #define	l2arc_writes_done	ARCSTAT(arcstat_l2_writes_done)
 
@@ -888,12 +898,12 @@ struct l2arc_dev {
 	uint64_t		l2ad_hand;	/* next write location */
 	uint64_t		l2ad_start;	/* first addr on device */
 	uint64_t		l2ad_end;	/* last addr on device */
-	uint64_t		l2ad_evict;	/* last addr eviction reached */
 	boolean_t		l2ad_first;	/* first sweep through */
 	boolean_t		l2ad_writing;	/* currently writing */
 	kmutex_t		l2ad_mtx;	/* lock for buffer list */
 	list_t			l2ad_buflist;	/* buffer list */
 	list_node_t		l2ad_node;	/* device list node */
+	refcount_t		l2ad_alloc;	/* allocated bytes */
 };
 
 static list_t L2ARC_dev_list;			/* device list */
@@ -1266,6 +1276,7 @@ arc_hdr_realloc(arc_buf_hdr_t *hdr, kmem_cache_t *old, kmem_cache_t *new)
 	buf_hash_remove(hdr);
 
 	bcopy(hdr, nhdr, HDR_L2ONLY_SIZE);
+
 	if (new == hdr_full_cache) {
 		nhdr->b_flags |= ARC_FLAG_HAS_L1HDR;
 		/*
@@ -1321,6 +1332,20 @@ arc_hdr_realloc(arc_buf_hdr_t *hdr, kmem_cache_t *old, kmem_cache_t *new)
 	list_remove(&dev->l2ad_buflist, hdr);
 
 	mutex_exit(&dev->l2ad_mtx);
+
+	/*
+	 * Since we're using the pointer address as the tag when
+	 * incrementing and decrementing the l2ad_alloc refcount, we
+	 * must remove the old pointer (that we're about to destroy) and
+	 * add the new pointer to the refcount. Otherwise we'd remove
+	 * the wrong pointer address when calling arc_hdr_destroy() later.
+	 */
+
+	(void) refcount_remove_many(&dev->l2ad_alloc,
+	    hdr->b_l2hdr.b_asize, hdr);
+
+	(void) refcount_add_many(&dev->l2ad_alloc,
+	    nhdr->b_l2hdr.b_asize, nhdr);
 
 	buf_discard_identity(hdr);
 	hdr->b_freeze_cksum = NULL;
@@ -1650,12 +1675,73 @@ arc_change_state(arc_state_t *new_state, arc_buf_hdr_t *hdr,
 		buf_hash_remove(hdr);
 
 	/* adjust state sizes (ignore arc_l2c_only) */
-	if (to_delta && new_state != arc_l2c_only)
-		atomic_add_64(&new_state->arcs_size, to_delta);
-	if (from_delta && old_state != arc_l2c_only) {
-		ASSERT3U(old_state->arcs_size, >=, from_delta);
-		atomic_add_64(&old_state->arcs_size, -from_delta);
+
+	if (to_delta && new_state != arc_l2c_only) {
+		ASSERT(HDR_HAS_L1HDR(hdr));
+		if (GHOST_STATE(new_state)) {
+			ASSERT0(datacnt);
+
+			/*
+			 * We moving a header to a ghost state, we first
+			 * remove all arc buffers. Thus, we'll have a
+			 * datacnt of zero, and no arc buffer to use for
+			 * the reference. As a result, we use the arc
+			 * header pointer for the reference.
+			 */
+			(void) refcount_add_many(&new_state->arcs_size,
+			    hdr->b_size, hdr);
+		} else {
+			ASSERT3U(datacnt, !=, 0);
+
+			/*
+			 * Each individual buffer holds a unique reference,
+			 * thus we must remove each of these references one
+			 * at a time.
+			 */
+			for (arc_buf_t *buf = hdr->b_l1hdr.b_buf; buf != NULL;
+			    buf = buf->b_next) {
+				(void) refcount_add_many(&new_state->arcs_size,
+				    hdr->b_size, buf);
+			}
+		}
 	}
+
+	if (from_delta && old_state != arc_l2c_only) {
+		ASSERT(HDR_HAS_L1HDR(hdr));
+		if (GHOST_STATE(old_state)) {
+			/*
+			 * When moving a header off of a ghost state,
+			 * there's the possibility for datacnt to be
+			 * non-zero. This is because we first add the
+			 * arc buffer to the header prior to changing
+			 * the header's state. Since we used the header
+			 * for the reference when putting the header on
+			 * the ghost state, we must balance that and use
+			 * the header when removing off the ghost state
+			 * (even though datacnt is non zero).
+			 */
+
+			IMPLY(datacnt == 0, new_state == arc_anon ||
+			    new_state == arc_l2c_only);
+
+			(void) refcount_remove_many(&old_state->arcs_size,
+			    hdr->b_size, hdr);
+		} else {
+			ASSERT3P(datacnt, !=, 0);
+
+			/*
+			 * Each individual buffer holds a unique reference,
+			 * thus we must remove each of these references one
+			 * at a time.
+			 */
+			for (arc_buf_t *buf = hdr->b_l1hdr.b_buf; buf != NULL;
+			    buf = buf->b_next) {
+				(void) refcount_remove_many(
+				    &old_state->arcs_size, hdr->b_size, buf);
+			}
+		}
+	}
+
 	if (HDR_HAS_L1HDR(hdr))
 		hdr->b_l1hdr.b_state = new_state;
 
@@ -2012,8 +2098,8 @@ arc_buf_destroy(arc_buf_t *buf, boolean_t remove)
 			ASSERT3U(*cnt, >=, size);
 			atomic_add_64(cnt, -size);
 		}
-		ASSERT3U(state->arcs_size, >=, size);
-		atomic_add_64(&state->arcs_size, -size);
+
+		(void) refcount_remove_many(&state->arcs_size, size, buf);
 		buf->b_data = NULL;
 
 		/*
@@ -2048,6 +2134,57 @@ arc_buf_destroy(arc_buf_t *buf, boolean_t remove)
 }
 
 static void
+arc_hdr_l2hdr_destroy(arc_buf_hdr_t *hdr)
+{
+	l2arc_buf_hdr_t *l2hdr = &hdr->b_l2hdr;
+	l2arc_dev_t *dev = l2hdr->b_dev;
+
+	ASSERT(MUTEX_HELD(&dev->l2ad_mtx));
+	ASSERT(HDR_HAS_L2HDR(hdr));
+
+	list_remove(&dev->l2ad_buflist, hdr);
+
+	/*
+	 * We don't want to leak the b_tmp_cdata buffer that was
+	 * allocated in l2arc_write_buffers()
+	 */
+	arc_buf_l2_cdata_free(hdr);
+
+	/*
+	 * If the l2hdr's b_daddr is equal to L2ARC_ADDR_UNSET, then
+	 * this header is being processed by l2arc_write_buffers() (i.e.
+	 * it's in the first stage of l2arc_write_buffers()).
+	 * Re-affirming that truth here, just to serve as a reminder. If
+	 * b_daddr does not equal L2ARC_ADDR_UNSET, then the header may or
+	 * may not have its HDR_L2_WRITING flag set. (the write may have
+	 * completed, in which case HDR_L2_WRITING will be false and the
+	 * b_daddr field will point to the address of the buffer on disk).
+	 */
+	IMPLY(l2hdr->b_daddr == L2ARC_ADDR_UNSET, HDR_L2_WRITING(hdr));
+
+	/*
+	 * If b_daddr is equal to L2ARC_ADDR_UNSET, we're racing with
+	 * l2arc_write_buffers(). Since we've just removed this header
+	 * from the l2arc buffer list, this header will never reach the
+	 * second stage of l2arc_write_buffers(), which increments the
+	 * accounting stats for this header. Thus, we must be careful
+	 * not to decrement them for this header either.
+	 */
+	if (l2hdr->b_daddr != L2ARC_ADDR_UNSET) {
+		ARCSTAT_INCR(arcstat_l2_asize, -l2hdr->b_asize);
+		ARCSTAT_INCR(arcstat_l2_size, -hdr->b_size);
+
+		vdev_space_update(dev->l2ad_vdev,
+		    -l2hdr->b_asize, 0, 0);
+
+		(void) refcount_remove_many(&dev->l2ad_alloc,
+		    l2hdr->b_asize, hdr);
+	}
+
+	hdr->b_flags &= ~ARC_FLAG_HAS_L2HDR;
+}
+
+static void
 arc_hdr_destroy(arc_buf_hdr_t *hdr)
 {
 	if (HDR_HAS_L1HDR(hdr)) {
@@ -2060,29 +2197,26 @@ arc_hdr_destroy(arc_buf_hdr_t *hdr)
 	ASSERT(!HDR_IN_HASH_TABLE(hdr));
 
 	if (HDR_HAS_L2HDR(hdr)) {
-		l2arc_buf_hdr_t *l2hdr = &hdr->b_l2hdr;
-		boolean_t buflist_held = MUTEX_HELD(&l2hdr->b_dev->l2ad_mtx);
-
-		if (!buflist_held) {
-			mutex_enter(&l2hdr->b_dev->l2ad_mtx);
-			l2hdr = &hdr->b_l2hdr;
-		}
-
-		list_remove(&l2hdr->b_dev->l2ad_buflist, hdr);
-
-		/*
-		 * We don't want to leak the b_tmp_cdata buffer that was
-		 * allocated in l2arc_write_buffers()
-		 */
-		arc_buf_l2_cdata_free(hdr);
-
-		ARCSTAT_INCR(arcstat_l2_size, -hdr->b_size);
-		ARCSTAT_INCR(arcstat_l2_asize, -l2hdr->b_asize);
+		l2arc_dev_t *dev = hdr->b_l2hdr.b_dev;
+		boolean_t buflist_held = MUTEX_HELD(&dev->l2ad_mtx);
 
 		if (!buflist_held)
-			mutex_exit(&l2hdr->b_dev->l2ad_mtx);
+			mutex_enter(&dev->l2ad_mtx);
 
-		hdr->b_flags &= ~ARC_FLAG_HAS_L2HDR;
+		/*
+		 * Even though we checked this conditional above, we
+		 * need to check this again now that we have the
+		 * l2ad_mtx. This is because we could be racing with
+		 * another thread calling l2arc_evict() which might have
+		 * destroyed this header's L2 portion as we were waiting
+		 * to acquire the l2ad_mtx. If that happens, we don't
+		 * want to re-destroy the header's L2 portion.
+		 */
+		if (HDR_HAS_L2HDR(hdr))
+			arc_hdr_l2hdr_destroy(hdr);
+
+		if (!buflist_held)
+			mutex_exit(&dev->l2ad_mtx);
 	}
 
 	if (!BUF_EMPTY(hdr))
@@ -2685,7 +2819,8 @@ arc_adjust_meta(void)
 	 * evict some from the MRU here, and some from the MFU below.
 	 */
 	target = MIN((int64_t)(arc_meta_used - arc_meta_limit),
-	    (int64_t)(arc_anon->arcs_size + arc_mru->arcs_size - arc_p));
+	    (int64_t)(refcount_count(&arc_anon->arcs_size) +
+	    refcount_count(&arc_mru->arcs_size) - arc_p));
 
 	total_evicted += arc_adjust_impl(arc_mru, 0, target, ARC_BUFC_METADATA);
 
@@ -2695,7 +2830,7 @@ arc_adjust_meta(void)
 	 * space alloted to the MFU (which is defined as arc_c - arc_p).
 	 */
 	target = MIN((int64_t)(arc_meta_used - arc_meta_limit),
-	    (int64_t)(arc_mfu->arcs_size - (arc_c - arc_p)));
+	    (int64_t)(refcount_count(&arc_mfu->arcs_size) - (arc_c - arc_p)));
 
 	total_evicted += arc_adjust_impl(arc_mfu, 0, target, ARC_BUFC_METADATA);
 
@@ -2804,8 +2939,8 @@ arc_adjust(void)
 	 * arc_p here, and then evict more from the MFU below.
 	 */
 	target = MIN((int64_t)(arc_size - arc_c),
-	    (int64_t)(arc_anon->arcs_size + arc_mru->arcs_size + arc_meta_used -
-	    arc_p));
+	    (int64_t)(refcount_count(&arc_anon->arcs_size) +
+	    refcount_count(&arc_mru->arcs_size) + arc_meta_used - arc_p));
 
 	/*
 	 * If we're below arc_meta_min, always prefer to evict data.
@@ -2889,7 +3024,8 @@ arc_adjust(void)
 	 * cache. The following logic enforces these limits on the ghost
 	 * caches, and evicts from them as needed.
 	 */
-	target = arc_mru->arcs_size + arc_mru_ghost->arcs_size - arc_c;
+	target = refcount_count(&arc_mru->arcs_size) +
+	    refcount_count(&arc_mru_ghost->arcs_size) - arc_c;
 
 	bytes = arc_adjust_impl(arc_mru_ghost, 0, target, ARC_BUFC_DATA);
 	total_evicted += bytes;
@@ -2907,7 +3043,8 @@ arc_adjust(void)
 	 *	mru + mfu + mru ghost + mfu ghost <= 2 * arc_c
 	 *		    mru ghost + mfu ghost <= arc_c
 	 */
-	target = arc_mru_ghost->arcs_size + arc_mfu_ghost->arcs_size - arc_c;
+	target = refcount_count(&arc_mru_ghost->arcs_size) +
+	    refcount_count(&arc_mfu_ghost->arcs_size) - arc_c;
 
 	bytes = arc_adjust_impl(arc_mfu_ghost, 0, target, ARC_BUFC_DATA);
 	total_evicted += bytes;
@@ -3352,6 +3489,8 @@ arc_adapt(int bytes, arc_state_t *state)
 {
 	int mult;
 	uint64_t arc_p_min = (arc_c >> arc_p_min_shift);
+	int64_t mrug_size = refcount_count(&arc_mru_ghost->arcs_size);
+	int64_t mfug_size = refcount_count(&arc_mfu_ghost->arcs_size);
 
 	if (state == arc_l2c_only)
 		return;
@@ -3366,16 +3505,14 @@ arc_adapt(int bytes, arc_state_t *state)
 	 *	  target size of the MRU list.
 	 */
 	if (state == arc_mru_ghost) {
-		mult = ((arc_mru_ghost->arcs_size >= arc_mfu_ghost->arcs_size) ?
-		    1 : (arc_mfu_ghost->arcs_size/arc_mru_ghost->arcs_size));
+		mult = (mrug_size >= mfug_size) ? 1 : (mfug_size / mrug_size);
 		mult = MIN(mult, 10); /* avoid wild arc_p adjustment */
 
 		arc_p = MIN(arc_c - arc_p_min, arc_p + bytes * mult);
 	} else if (state == arc_mfu_ghost) {
 		uint64_t delta;
 
-		mult = ((arc_mfu_ghost->arcs_size >= arc_mru_ghost->arcs_size) ?
-		    1 : (arc_mru_ghost->arcs_size/arc_mfu_ghost->arcs_size));
+		mult = (mfug_size >= mrug_size) ? 1 : (mrug_size / mfug_size);
 		mult = MIN(mult, 10);
 
 		delta = MIN(bytes * mult, arc_p);
@@ -3491,8 +3628,9 @@ arc_get_data_buf(arc_buf_t *buf)
 	 */
 	if (!GHOST_STATE(buf->b_hdr->b_l1hdr.b_state)) {
 		arc_buf_hdr_t *hdr = buf->b_hdr;
+		arc_state_t *state = hdr->b_l1hdr.b_state;
 
-		atomic_add_64(&hdr->b_l1hdr.b_state->arcs_size, size);
+		(void) refcount_add_many(&state->arcs_size, size, buf);
 
 		/*
 		 * If this is reached via arc_read, the link is
@@ -3513,7 +3651,8 @@ arc_get_data_buf(arc_buf_t *buf)
 		 * data, and we have outgrown arc_p, update arc_p
 		 */
 		if (arc_size < arc_c && hdr->b_l1hdr.b_state == arc_anon &&
-		    arc_anon->arcs_size + arc_mru->arcs_size > arc_p)
+		    (refcount_count(&arc_anon->arcs_size) +
+		    refcount_count(&arc_mru->arcs_size) > arc_p))
 			arc_p = MIN(arc_c, arc_p + size);
 	}
 }
@@ -4328,21 +4467,20 @@ arc_release(arc_buf_t *buf, void *tag)
 	ASSERT(refcount_count(&hdr->b_l1hdr.b_refcnt) > 0);
 
 	if (HDR_HAS_L2HDR(hdr)) {
-		ARCSTAT_INCR(arcstat_l2_asize, -hdr->b_l2hdr.b_asize);
-		ARCSTAT_INCR(arcstat_l2_size, -hdr->b_size);
-
 		mutex_enter(&hdr->b_l2hdr.b_dev->l2ad_mtx);
-		list_remove(&hdr->b_l2hdr.b_dev->l2ad_buflist, hdr);
 
 		/*
-		 * We don't want to leak the b_tmp_cdata buffer that was
-		 * allocated in l2arc_write_buffers()
+		 * We have to recheck this conditional again now that
+		 * we're holding the l2ad_mtx to prevent a race with
+		 * another thread which might be concurrently calling
+		 * l2arc_evict(). In that case, l2arc_evict() might have
+		 * destroyed the header's L2 portion as we were waiting
+		 * to acquire the l2ad_mtx.
 		 */
-		arc_buf_l2_cdata_free(hdr);
+		if (HDR_HAS_L2HDR(hdr))
+			arc_hdr_l2hdr_destroy(hdr);
 
 		mutex_exit(&hdr->b_l2hdr.b_dev->l2ad_mtx);
-
-		hdr->b_flags &= ~ARC_FLAG_HAS_L2HDR;
 	}
 
 	/*
@@ -4369,8 +4507,10 @@ arc_release(arc_buf_t *buf, void *tag)
 		buf->b_next = NULL;
 
 		ASSERT3P(state, !=, arc_l2c_only);
-		ASSERT3U(state->arcs_size, >=, hdr->b_size);
-		atomic_add_64(&state->arcs_size, -hdr->b_size);
+
+		(void) refcount_remove_many(
+		    &state->arcs_size, hdr->b_size, buf);
+
 		if (refcount_is_zero(&hdr->b_l1hdr.b_refcnt)) {
 			ASSERT3P(state, !=, arc_l2c_only);
 			uint64_t *size = &state->arcs_lsize[type];
@@ -4411,7 +4551,7 @@ arc_release(arc_buf_t *buf, void *tag)
 		(void) refcount_add(&nhdr->b_l1hdr.b_refcnt, tag);
 		buf->b_hdr = nhdr;
 		mutex_exit(&buf->b_evict_lock);
-		atomic_add_64(&arc_anon->arcs_size, blksz);
+		(void) refcount_add_many(&arc_anon->arcs_size, blksz, buf);
 	} else {
 		mutex_exit(&buf->b_evict_lock);
 		ASSERT(refcount_count(&hdr->b_l1hdr.b_refcnt) == 1);
@@ -4676,7 +4816,8 @@ arc_tempreserve_space(uint64_t reserve, uint64_t txg)
 	 * network delays from blocking transactions that are ready to be
 	 * assigned to a txg.
 	 */
-	anon_size = MAX((int64_t)(arc_anon->arcs_size - arc_loaned_bytes), 0);
+	anon_size = MAX((int64_t)(refcount_count(&arc_anon->arcs_size) -
+	    arc_loaned_bytes), 0);
 
 	/*
 	 * Writes will, almost always, require additional memory allocations
@@ -4713,7 +4854,7 @@ static void
 arc_kstat_update_state(arc_state_t *state, kstat_named_t *size,
     kstat_named_t *evict_data, kstat_named_t *evict_metadata)
 {
-	size->value.ui64 = state->arcs_size;
+	size->value.ui64 = refcount_count(&state->arcs_size);
 	evict_data->value.ui64 = state->arcs_lsize[ARC_BUFC_DATA];
 	evict_metadata->value.ui64 = state->arcs_lsize[ARC_BUFC_METADATA];
 }
@@ -4930,6 +5071,13 @@ arc_init(void)
 	    offsetof(arc_buf_hdr_t, b_l1hdr.b_arc_node),
 	    zfs_arc_num_sublists_per_state, arc_state_multilist_index_func);
 
+	refcount_create(&arc_anon->arcs_size);
+	refcount_create(&arc_mru->arcs_size);
+	refcount_create(&arc_mru_ghost->arcs_size);
+	refcount_create(&arc_mfu->arcs_size);
+	refcount_create(&arc_mfu_ghost->arcs_size);
+	refcount_create(&arc_l2c_only->arcs_size);
+
 	buf_init();
 
 	arc_reclaim_thread_exit = FALSE;
@@ -5014,6 +5162,13 @@ arc_fini(void)
 
 	mutex_destroy(&arc_user_evicts_lock);
 	cv_destroy(&arc_user_evicts_cv);
+
+	refcount_destroy(&arc_anon->arcs_size);
+	refcount_destroy(&arc_mru->arcs_size);
+	refcount_destroy(&arc_mru_ghost->arcs_size);
+	refcount_destroy(&arc_mfu->arcs_size);
+	refcount_destroy(&arc_mfu_ghost->arcs_size);
+	refcount_destroy(&arc_l2c_only->arcs_size);
 
 	multilist_destroy(&arc_mru->arcs_list[ARC_BUFC_METADATA]);
 	multilist_destroy(&arc_mru_ghost->arcs_list[ARC_BUFC_METADATA]);
@@ -5416,6 +5571,10 @@ top:
 
 			ARCSTAT_INCR(arcstat_l2_asize, -hdr->b_l2hdr.b_asize);
 			ARCSTAT_INCR(arcstat_l2_size, -hdr->b_size);
+
+			bytes_dropped += hdr->b_l2hdr.b_asize;
+			(void) refcount_remove_many(&dev->l2ad_alloc,
+			    hdr->b_l2hdr.b_asize, hdr);
 		}
 
 		/*
@@ -5574,7 +5733,6 @@ l2arc_evict(l2arc_dev_t *dev, uint64_t distance, boolean_t all)
 	arc_buf_hdr_t *hdr, *hdr_prev;
 	kmutex_t *hash_lock;
 	uint64_t taddr;
-	int64_t bytes_evicted = 0;
 
 	buflist = &dev->l2ad_buflist;
 
@@ -5665,22 +5823,15 @@ top:
 				hdr->b_flags |= ARC_FLAG_L2_EVICTED;
 			}
 
-			/* Tell ARC this no longer exists in L2ARC. */
-			ARCSTAT_INCR(arcstat_l2_asize, -hdr->b_l2hdr.b_asize);
-			ARCSTAT_INCR(arcstat_l2_size, -hdr->b_size);
-			hdr->b_flags &= ~ARC_FLAG_HAS_L2HDR;
-			list_remove(buflist, hdr);
-
 			/* Ensure this header has finished being written */
 			ASSERT(!HDR_L2_WRITING(hdr));
 			ASSERT3P(hdr->b_l1hdr.b_tmp_cdata, ==, NULL);
+
+			arc_hdr_l2hdr_destroy(hdr);
 		}
 		mutex_exit(hash_lock);
 	}
 	mutex_exit(&dev->l2ad_mtx);
-
-	vdev_space_update(dev->l2ad_vdev, -bytes_evicted, 0, 0);
-	dev->l2ad_evict = taddr;
 }
 
 /*
@@ -5820,6 +5971,29 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 			hdr->b_l2hdr.b_asize = hdr->b_size;
 			hdr->b_l1hdr.b_tmp_cdata = hdr->b_l1hdr.b_buf->b_data;
 
+			/*
+			 * Explicitly set the b_daddr field to a known
+			 * value which means "invalid address". This
+			 * enables us to differentiate which stage of
+			 * l2arc_write_buffers() the particular header
+			 * is in (e.g. this loop, or the one below).
+			 * ARC_FLAG_L2_WRITING is not enough to make
+			 * this distinction, and we need to know in
+			 * order to do proper l2arc vdev accounting in
+			 * arc_release() and arc_hdr_destroy().
+			 *
+			 * Note, we can't use a new flag to distinguish
+			 * the two stages because we don't hold the
+			 * header's hash_lock below, in the second stage
+			 * of this function. Thus, we can't simply
+			 * change the b_flags field to denote that the
+			 * IO has been sent. We can change the b_daddr
+			 * field of the L2 portion, though, since we'll
+			 * be holding the l2ad_mtx; which is why we're
+			 * using it to denote the header's state change.
+			 */
+			hdr->b_l2hdr.b_daddr = L2ARC_ADDR_UNSET;
+
 			buf_sz = hdr->b_size;
 			hdr->b_flags |= ARC_FLAG_HAS_L2HDR;
 
@@ -5899,6 +6073,13 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 		buf_data = hdr->b_l1hdr.b_tmp_cdata;
 		buf_sz = hdr->b_l2hdr.b_asize;
 
+		/*
+		 * We need to do this regardless if buf_sz is zero or
+		 * not, otherwise, when this l2hdr is evicted we'll
+		 * remove a reference that was never added.
+		 */
+		(void) refcount_add_many(&dev->l2ad_alloc, buf_sz, hdr);
+
 		/* Compression may have squashed the buffer to zero length. */
 		if (buf_sz != 0) {
 			uint64_t buf_p_sz;
@@ -5913,6 +6094,7 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 			(void) zio_nowait(wzio);
 
 			write_asize += buf_sz;
+
 			/*
 			 * Keep the clock hand suitably device-aligned.
 			 */
@@ -5937,7 +6119,6 @@ l2arc_write_buffers(spa_t *spa, l2arc_dev_t *dev, uint64_t target_sz,
 	 */
 	if (dev->l2ad_hand >= (dev->l2ad_end - target_sz)) {
 		dev->l2ad_hand = dev->l2ad_start;
-		dev->l2ad_evict = dev->l2ad_start;
 		dev->l2ad_first = B_FALSE;
 	}
 
@@ -6257,7 +6438,6 @@ l2arc_add_vdev(spa_t *spa, vdev_t *vd)
 	adddev->l2ad_start = VDEV_LABEL_START_SIZE;
 	adddev->l2ad_end = VDEV_LABEL_START_SIZE + vdev_get_min_asize(vd);
 	adddev->l2ad_hand = adddev->l2ad_start;
-	adddev->l2ad_evict = adddev->l2ad_start;
 	adddev->l2ad_first = B_TRUE;
 	adddev->l2ad_writing = B_FALSE;
 
@@ -6270,6 +6450,7 @@ l2arc_add_vdev(spa_t *spa, vdev_t *vd)
 	    offsetof(arc_buf_hdr_t, b_l2hdr.b_l2node));
 
 	vdev_space_update(vd, 0, 0, adddev->l2ad_end - adddev->l2ad_hand);
+	refcount_create(&adddev->l2ad_alloc);
 
 	/*
 	 * Add device to global list
@@ -6315,6 +6496,7 @@ l2arc_remove_vdev(vdev_t *vd)
 	l2arc_evict(remdev, 0, B_TRUE);
 	list_destroy(&remdev->l2ad_buflist);
 	mutex_destroy(&remdev->l2ad_mtx);
+	refcount_destroy(&remdev->l2ad_alloc);
 	kmem_free(remdev, sizeof (l2arc_dev_t));
 }
 
