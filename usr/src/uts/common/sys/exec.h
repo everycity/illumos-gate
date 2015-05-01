@@ -246,7 +246,7 @@ extern int elfexec(vnode_t *, execa_t *, uarg_t *, intpdata_t *, int,
     long *, int, caddr_t, cred_t *, int *);
 extern int mapexec_brand(vnode_t *, uarg_t *, Ehdr *, Addr *,
     intptr_t *, caddr_t, char **, caddr_t *, caddr_t *, size_t *,
-    uintptr_t *, uintptr_t *);
+    uintptr_t *);
 #endif /* !_ELF32_COMPAT */
 
 #if defined(_LP64)
@@ -254,7 +254,7 @@ extern int elf32exec(vnode_t *, execa_t *, uarg_t *, intpdata_t *, int,
     long *, int, caddr_t, cred_t *, int *);
 extern int mapexec32_brand(vnode_t *, uarg_t *, Elf32_Ehdr *, Elf32_Addr *,
     intptr_t *, caddr_t, char **, caddr_t *, caddr_t *, size_t *,
-    uintptr_t *, uintptr_t *);
+    uintptr_t *);
 #endif  /* _LP64 */
 
 /*

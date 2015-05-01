@@ -1500,7 +1500,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	if (args->to_model == DATAMODEL_NATIVE) {
 		error = mapexec_brand(vp, args, &ehdr, &uphdr_vaddr,
 		    &voffset, exec_file, &interp, &env.ex_bssbase,
-		    &env.ex_brkbase, &env.ex_brksize, NULL, NULL);
+		    &env.ex_brkbase, &env.ex_brksize, NULL);
 	}
 #if defined(_LP64)
 	else {
@@ -1509,7 +1509,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 
 		error = mapexec32_brand(vp, args, &ehdr32, &uphdr_vaddr32,
 		    &voffset, exec_file, &interp, &env.ex_bssbase,
-		    &env.ex_brkbase, &env.ex_brksize, NULL, NULL);
+		    &env.ex_brkbase, &env.ex_brksize, NULL);
 
 		Ehdr32to64(&ehdr32, &ehdr);
 
@@ -1572,7 +1572,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 		if (args->to_model == DATAMODEL_NATIVE) {
 			error = mapexec_brand(nvp, args, &ehdr,
 			    &uphdr_vaddr, &voffset, exec_file, NULL, NULL,
-			    NULL, NULL, NULL, &ldaddr);
+			    NULL, NULL, NULL);
 		}
 #if defined(_LP64)
 		else {
@@ -1581,7 +1581,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 
 			error = mapexec32_brand(nvp, args, &ehdr32,
 			    &uphdr_vaddr32, &voffset, exec_file, NULL, NULL,
-			    NULL, NULL, NULL, &ldaddr);
+			    NULL, NULL, NULL);
 
 			Ehdr32to64(&ehdr32, &ehdr);
 
