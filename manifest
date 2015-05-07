@@ -4563,6 +4563,7 @@ d usr/kernel/fs/amd64 0755 root sys
 f usr/kernel/fs/amd64/fdfs 0755 root sys
 f usr/kernel/fs/amd64/lx_afs 0755 root sys
 f usr/kernel/fs/amd64/lx_proc 0755 root sys
+f usr/kernel/fs/amd64/lx_sysfs 0755 root sys
 f usr/kernel/fs/amd64/pcfs 0755 root sys
 f usr/kernel/fs/amd64/smbfs 0755 root sys
 d usr/kernel/kmdb 0755 root sys
@@ -5054,6 +5055,7 @@ f usr/lib/brand/lx/lx_boot_zone_debian 0755 root root
 f usr/lib/brand/lx/lx_boot_zone_redhat 0755 root root
 f usr/lib/brand/lx/lx_boot_zone_busybox 0755 root root
 f usr/lib/brand/lx/lx_boot_zone_ubuntu 0755 root root
+f usr/lib/brand/lx/lxinit 0755 root root
 f usr/lib/brand/lx/lx_isaexec_wrapper 0755 root root
 f usr/lib/brand/lx/lx_librtld_db.so.1 0755 root root
 f usr/lib/brand/lx/lx_lockd 0755 root root
