@@ -2754,10 +2754,13 @@ lxpr_read_net_unix(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		mutex_enter(&so->so_lock);
 		sti = _SOTOTPI(so);
 
-		if (sti->sti_laddr_sa != NULL)
+		if (sti->sti_laddr_sa != NULL &&
+		    sti->sti_laddr_len > 0) {
 			name = sti->sti_laddr_sa->sa_data;
-		else if (sti->sti_faddr_sa != NULL)
+		} else if (sti->sti_faddr_sa != NULL &&
+		    sti->sti_faddr_len > 0) {
 			name = sti->sti_faddr_sa->sa_data;
+		}
 
 		/*
 		 * Derived from enum values in Linux kernel source:
@@ -4582,13 +4585,13 @@ lxpr_readdir_common(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp,
 			dirent->d_name[2] = '\0';
 			reclen = DIRENT64_RECLEN(2);
 
-		} else if (dirindex < dirtablen) {
+		} else if (dirindex >= 0 && dirindex < dirtablen) {
 			int slen = strlen(dirtab[dirindex].d_name);
 
 			dirent->d_ino = lxpr_inode(dirtab[dirindex].d_type,
 			    lxpnp->lxpr_pid, 0);
 
-			ASSERT(slen < LXPNSIZ);
+			VERIFY(slen < LXPNSIZ);
 			(void) strcpy(dirent->d_name, dirtab[dirindex].d_name);
 			reclen = DIRENT64_RECLEN(slen);
 
