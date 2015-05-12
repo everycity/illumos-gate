@@ -139,7 +139,7 @@ static void lxpr_read_cpuinfo(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_diskstats(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_isdir(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_fd(lxpr_node_t *, lxpr_uiobuf_t *);
-static void lxpr_read_kmsg(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_kmsg(lxpr_node_t *, lxpr_uiobuf_t *, ldi_handle_t);
 static void lxpr_read_loadavg(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_meminfo(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_mounts(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -541,7 +541,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_empty,		/* /proc/interrupts	*/
 	lxpr_read_empty,		/* /proc/ioports	*/
 	lxpr_read_empty,		/* /proc/kcore		*/
-	lxpr_read_kmsg,			/* /proc/kmsg		*/
+	lxpr_read_invalid,		/* /proc/kmsg -- see lxpr_read() */
 	lxpr_read_loadavg,		/* /proc/loadavg	*/
 	lxpr_read_meminfo,		/* /proc/meminfo	*/
 	lxpr_read_empty,		/* /proc/modules	*/
@@ -806,6 +806,7 @@ lxpr_read(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
 
 	if (type == LXPR_KMSG) {
 		ldi_ident_t	li = VTOLXPM(vp)->lxprm_li;
+		ldi_handle_t	ldih;
 		struct strioctl	str;
 		int		rv;
 
@@ -813,8 +814,8 @@ lxpr_read(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
 		 * Open the zone's console device using the layered driver
 		 * interface.
 		 */
-		if ((error = ldi_open_by_name("/dev/log", FREAD, cr,
-		    &lxpnp->lxpr_cons_ldih, li)) != 0)
+		if ((error =
+		    ldi_open_by_name("/dev/log", FREAD, cr, &ldih, li)) != 0)
 			return (error);
 
 		/*
@@ -825,16 +826,16 @@ lxpr_read(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
 		str.ic_timout = 0;
 		str.ic_len = 0;
 		str.ic_dp = NULL;
-		if ((error = ldi_ioctl(lxpnp->lxpr_cons_ldih, I_STR,
+		if ((error = ldi_ioctl(ldih, I_STR,
 		    (intptr_t)&str, FKIOCTL, cr, &rv)) != 0)
 			return (error);
-	}
 
-	lxpr_read_function[type](lxpnp, uiobuf);
+		lxpr_read_kmsg(lxpnp, uiobuf, ldih);
 
-	if (type == LXPR_KMSG) {
-		if ((error = ldi_close(lxpnp->lxpr_cons_ldih, FREAD, cr)) != 0)
+		if ((error = ldi_close(ldih, FREAD, cr)) != 0)
 			return (error);
+	} else {
+		lxpr_read_function[type](lxpnp, uiobuf);
 	}
 
 	error = lxpr_uiobuf_flush(uiobuf);
@@ -1340,41 +1341,6 @@ lxpr_read_pid_statm(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 }
 
 /*
- * Derived from procfs prgetxmap32
- */
-static size_t
-get_locked(proc_t *p)
-{
-	struct as *as = p->p_as;
-	struct seg *seg;
-	uint_t nlocked = 0;
-
-	ASSERT(as != &kas && AS_READ_HELD(as, &as->a_lock));
-
-	if ((seg = AS_SEGFIRST(as)) == NULL)
-		return (0);
-
-	do {
-		char *parr;
-		uint64_t npages;
-		uint64_t pagenum;
-
-		npages = ((uintptr_t)seg->s_size) >> PAGESHIFT;
-		parr = kmem_zalloc(npages, KM_SLEEP);
-
-		SEGOP_INCORE(seg, seg->s_base, seg->s_size, parr);
-
-		for (pagenum = 0; pagenum < npages; pagenum++) {
-			if (parr[pagenum] & SEG_PAGE_LOCKED)
-				nlocked++;
-		}
-		kmem_free(parr, npages);
-	} while ((seg = AS_SEGNEXT(as, seg)) != NULL);
-
-	return (nlocked);
-}
-
-/*
  * Look for either the main thread (lookup_id is 0) or the specified thread.
  * If we're looking for the main thread but the proc does not have one, we
  * fallback to using prchoose to get any thread available.
@@ -1454,9 +1420,6 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	struct as *as;
 	char *status;
 	pid_t pid, ppid;
-	size_t vsize;
-	size_t nlocked;
-	size_t rss;
 	k_sigset_t current, ignore, handle;
 	int    i, lx_sig;
 	pid_t real_pid;
@@ -1571,13 +1534,15 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 
 	as = p->p_as;
 	if ((p->p_stat != SZOMB) && !(p->p_flag & SSYS) && (as != &kas)) {
+		size_t vsize, nlocked, rss;
+
 		mutex_exit(&p->p_lock);
 		AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
 		vsize = as->a_resvsize;
 		rss = rm_asrss(as);
-		nlocked = get_locked(p);
 		AS_LOCK_EXIT(as, &as->a_lock);
 		mutex_enter(&p->p_lock);
+		nlocked = p->p_locked_mem;
 
 		lxpr_uiobuf_printf(uiobuf,
 		    "\n"
@@ -1589,7 +1554,7 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 		    "VmExe:\t%8lu kB\n"
 		    "VmLib:\t%8lu kB",
 		    btok(vsize),
-		    ptok(nlocked),
+		    btok(nlocked),
 		    ptok(rss),
 		    0l,
 		    btok(p->p_stksize),
@@ -2827,9 +2792,8 @@ lxpr_read_net_unix(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 #define	LX_KMSG_PRI	"<0>"
 
 static void
-lxpr_read_kmsg(lxpr_node_t *lxpnp, struct lxpr_uiobuf *uiobuf)
+lxpr_read_kmsg(lxpr_node_t *lxpnp, struct lxpr_uiobuf *uiobuf, ldi_handle_t lh)
 {
-	ldi_handle_t	lh = lxpnp->lxpr_cons_ldih;
 	mblk_t		*mp;
 	timestruc_t	to;
 	timestruc_t	*tp = NULL;
@@ -4695,7 +4659,7 @@ lxpr_readdir_procdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 		 * Stop when entire proc table has been examined.
 		 */
 		i = (uoffset / LXPR_SDSIZE) - 2 - PROCDIRFILES;
-		if (i >= v.v_proc) {
+		if (i < 0 || i >= v.v_proc) {
 			/* Run out of table entries */
 			if (eofp) {
 				*eofp = 1;
@@ -4899,7 +4863,7 @@ lxpr_readdir_taskdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 		 * Stop at the end of the thread list
 		 */
 		i = (uoffset / LXPR_SDSIZE) - 2;
-		if (i >= tiddirsize) {
+		if (i < 0 || i >= tiddirsize) {
 			if (eofp) {
 				*eofp = 1;
 			}
@@ -5071,7 +5035,7 @@ lxpr_readdir_fddir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 		 * Stop at the end of the fd list
 		 */
 		fd = (uoffset / LXPR_SDSIZE) - 2;
-		if (fd >= fddirsize) {
+		if (fd < 0 || fd >= fddirsize) {
 			if (eofp) {
 				*eofp = 1;
 			}
