@@ -172,7 +172,7 @@ dtrace_safe_phdr(Phdr *phdrp, struct uarg *args, uintptr_t base)
 int
 mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
     intptr_t *voffset, caddr_t exec_file, char **interpp, caddr_t *bssbase,
-    caddr_t *brkbase, size_t *brksize, uintptr_t *lddatap)
+    caddr_t *brkbase, size_t *brksize, uintptr_t *lddatap, uintptr_t *minaddrp)
 {
 	size_t		len;
 	struct vattr	vat;
@@ -191,6 +191,9 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 
 	if (lddatap != NULL)
 		*lddatap = NULL;
+
+	if (minaddrp != NULL)
+		*minaddrp = NULL;
 
 	if (error = execpermissions(vp, &vat, args)) {
 		uprintf("%s: Cannot execute %s\n", exec_file, args->pathname);
@@ -222,6 +225,9 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 		kmem_free(phdrbase, phdrsize);
 		return (error);
 	}
+
+	if (minaddrp != NULL)
+		*minaddrp = minaddr;
 
 	/*
 	 * If the executable requires an interpreter, determine its name.
