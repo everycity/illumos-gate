@@ -34,7 +34,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <alloca.h>
 #include <signal.h>
 #include <strings.h>
 #include <sys/param.h>
@@ -64,37 +63,52 @@ lx_select(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	struct timeval tv, *tvp = NULL;
 	int fd_set_len = howmany(nfds, 8);
 	int r;
+	int res;
 	hrtime_t start = NULL, end;
 
 	lx_debug("\tselect(%d, 0x%p, 0x%p, 0x%p, 0x%p)", p1, p2, p3, p4, p5);
 
 	if (nfds > 0) {
 		if (p2 != NULL) {
-			rfdsp = alloca(fd_set_len);
-			if (rfdsp == NULL)
-				return (-ENOMEM);
-			if (uucopy((void *)p2, rfdsp, fd_set_len) != 0)
-				return (-errno);
+			rfdsp = malloc(fd_set_len);
+			if (rfdsp == NULL) {
+				res = -ENOMEM;
+				goto err;
+			}
+			if (uucopy((void *)p2, rfdsp, fd_set_len) != 0) {
+				res = -errno;
+				goto err;
+			}
 		}
 		if (p3 != NULL) {
-			wfdsp = alloca(fd_set_len);
-			if (wfdsp == NULL)
-				return (-ENOMEM);
-			if (uucopy((void *)p3, wfdsp, fd_set_len) != 0)
-				return (-errno);
+			wfdsp = malloc(fd_set_len);
+			if (wfdsp == NULL) {
+				res = -ENOMEM;
+				goto err;
+			}
+			if (uucopy((void *)p3, wfdsp, fd_set_len) != 0) {
+				res = -errno;
+				goto err;
+			}
 		}
 		if (p4 != NULL) {
-			efdsp = alloca(fd_set_len);
-			if (efdsp == NULL)
-				return (-ENOMEM);
-			if (uucopy((void *)p4, efdsp, fd_set_len) != 0)
-				return (-errno);
+			efdsp = malloc(fd_set_len);
+			if (efdsp == NULL) {
+				res = -ENOMEM;
+				goto err;
+			}
+			if (uucopy((void *)p4, efdsp, fd_set_len) != 0) {
+				res = -errno;
+				goto err;
+			}
 		}
 	}
 	if (p5 != NULL) {
 		tvp = &tv;
-		if (uucopy((void *)p5, &tv, sizeof (tv)) != 0)
-			return (-errno);
+		if (uucopy((void *)p5, &tv, sizeof (tv)) != 0) {
+			res = -errno;
+			goto err;
+		}
 		start = gethrtime();
 	}
 
@@ -106,8 +120,10 @@ lx_select(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	else
 		r = select(nfds, rfdsp, wfdsp, efdsp, tvp);
 #endif
-	if (r < 0)
-		return (-errno);
+	if (r < 0) {
+		res = -errno;
+		goto err;
+	}
 
 	if (tvp != NULL) {
 		long long tv_total;
@@ -128,26 +144,44 @@ lx_select(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 			tv.tv_usec = tv_total % MICROSEC;
 		}
 
-		if (uucopy(&tv, (void *)p5, sizeof (tv)) != 0)
-			return (-errno);
+		if (uucopy(&tv, (void *)p5, sizeof (tv)) != 0) {
+			res = -errno;
+			goto err;
+		}
 	}
 
-	if ((rfdsp != NULL) && (uucopy(rfdsp, (void *)p2, fd_set_len) != 0))
-		return (-errno);
-	if ((wfdsp != NULL) && (uucopy(wfdsp, (void *)p3, fd_set_len) != 0))
-		return (-errno);
-	if ((efdsp != NULL) && (uucopy(efdsp, (void *)p4, fd_set_len) != 0))
-		return (-errno);
+	if ((rfdsp != NULL) && (uucopy(rfdsp, (void *)p2, fd_set_len) != 0)) {
+		res = -errno;
+		goto err;
+	}
+	if ((wfdsp != NULL) && (uucopy(wfdsp, (void *)p3, fd_set_len) != 0)) {
+		res = -errno;
+		goto err;
+	}
+	if ((efdsp != NULL) && (uucopy(efdsp, (void *)p4, fd_set_len) != 0)) {
+		res = -errno;
+		goto err;
+	}
 
-	return (r);
+	res = r;
+
+err:
+	if (rfdsp != NULL)
+		free(rfdsp);
+	if (wfdsp != NULL)
+		free(wfdsp);
+	if (efdsp != NULL)
+		free(efdsp);
+	return (res);
 }
 
 long
 lx_poll(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 {
-	struct pollfd	*lfds, *sfds;
+	struct pollfd	*lfds = NULL;
+	struct pollfd	*sfds = NULL;
 	nfds_t		nfds = (nfds_t)p2;
-	int		fds_size, i, rval, revents;
+	int		fds_size, i, rval, revents, res;
 
 	/*
 	 * Little emulation is needed if nfds == 0.
@@ -165,19 +199,25 @@ lx_poll(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 	 * structures are identical.  Copy in the linux poll structure.
 	 */
 	fds_size = sizeof (struct pollfd) * nfds;
-	lfds = (struct pollfd *)alloca(fds_size);
-	if (lfds == NULL)
-		return (-ENOMEM);
-	if (uucopy((void *)p1, lfds, fds_size) != 0)
-		return (-errno);
+	lfds = (struct pollfd *)malloc(fds_size);
+	if (lfds == NULL) {
+		res = -ENOMEM;
+		goto err;
+	}
+	if (uucopy((void *)p1, lfds, fds_size) != 0) {
+		res = -errno;
+		goto err;
+	}
 
 	/*
 	 * The poll system call modifies the poll structures passed in
 	 * so we'll need to make an extra copy of them.
 	 */
-	sfds = (struct pollfd *)alloca(fds_size);
-	if (sfds == NULL)
-		return (-ENOMEM);
+	sfds = (struct pollfd *)malloc(fds_size);
+	if (sfds == NULL) {
+		res = -ENOMEM;
+		goto err;
+	}
 
 	/* Convert the Linux events bitmask into the Illumos equivalent. */
 	for (i = 0; i < nfds; i++) {
@@ -188,7 +228,8 @@ lx_poll(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 		if (lfds[i].events & ~LX_POLL_SUPPORTED_EVENTS) {
 			lx_unsupported("unsupported poll events requested: "
 			    "events=0x%x", lfds[i].events);
-			return (-ENOTSUP);
+			res = -ENOTSUP;
+			goto err;
 		}
 
 		sfds[i].fd = lfds[i].fd;
@@ -204,8 +245,10 @@ lx_poll(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 
 	lx_debug("\tpoll(0x%p, %u, %d)", sfds, nfds, (int)p3);
 
-	if ((rval = poll(sfds, nfds, (int)p3)) < 0)
-		return (-errno);
+	if ((rval = poll(sfds, nfds, (int)p3)) < 0) {
+		res = -errno;
+		goto err;
+	}
 
 	/* Convert the Illumos revents bitmask into the Linux equivalent */
 	for (i = 0; i < nfds; i++) {
@@ -231,10 +274,19 @@ lx_poll(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 	}
 
 	/* Copy out the results */
-	if (uucopy(lfds, (void *)p1, fds_size) != 0)
-		return (-errno);
+	if (uucopy(lfds, (void *)p1, fds_size) != 0) {
+		res = -errno;
+		goto err;
+	}
 
-	return (rval);
+	res = rval;
+
+err:
+	if (lfds != NULL)
+		free(lfds);
+	if (sfds != NULL)
+		free(sfds);
+	return (res);
 }
 
 long
