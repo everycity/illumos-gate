@@ -27,6 +27,7 @@
  * Copyright (c) 2013 Martin Matuska. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 RackTop Systems.
  */
 
 #include <ctype.h>
@@ -1506,7 +1507,10 @@ zfs_prop_set(zfs_handle_t *zhp, const char *propname, const char *propval)
 	int ret = -1;
 	char errbuf[1024];
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
-	nvlist_t *nvl = NULL;
+	nvlist_t *nvl = NULL, *realprops;
+	zfs_prop_t prop;
+	boolean_t do_prefix = B_TRUE;
+	int added_resv = 0;
 
 	(void) snprintf(errbuf, sizeof (errbuf),
 	    dgettext(TEXT_DOMAIN, "cannot set property for '%s'"),
@@ -3146,7 +3150,7 @@ zfs_create_ancestors(libzfs_handle_t *hdl, const char *path)
 {
 	int prefix;
 	char *path_copy;
-	int rc;
+	int rc = 0;
 
 	if (check_parents(hdl, path, NULL, B_TRUE, &prefix) != 0)
 		return (-1);
@@ -3766,7 +3770,7 @@ zfs_rollback(zfs_handle_t *zhp, zfs_handle_t *snap, boolean_t force)
 	rollback_data_t cb = { 0 };
 	int err;
 	boolean_t restore_resv = 0;
-	uint64_t old_volsize, new_volsize;
+	uint64_t old_volsize = 0, new_volsize;
 	zfs_prop_t resv_prop;
 
 	assert(zhp->zfs_type == ZFS_TYPE_FILESYSTEM ||
@@ -3838,7 +3842,7 @@ int
 zfs_rename(zfs_handle_t *zhp, const char *target, boolean_t recursive,
     boolean_t force_unmount)
 {
-	int ret;
+	int ret = -1;
 	zfs_cmd_t zc = { 0 };
 	char *delim;
 	prop_changelist_t *cl = NULL;

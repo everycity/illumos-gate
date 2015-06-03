@@ -22,8 +22,9 @@
 /*
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
- * Copyright 2015 RackTop Systems.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 RackTop Systems.
  */
 
 /*
@@ -438,12 +439,12 @@ get_configs(libzfs_handle_t *hdl, pool_list_t *pl, boolean_t active_ok)
 	pool_entry_t *pe;
 	vdev_entry_t *ve;
 	config_entry_t *ce;
-	nvlist_t *ret = NULL, *config = NULL, *tmp, *nvtop, *nvroot;
+	nvlist_t *ret = NULL, *config = NULL, *tmp = NULL, *nvtop, *nvroot;
 	nvlist_t **spares, **l2cache;
 	uint_t i, nspares, nl2cache;
 	boolean_t config_seen;
 	uint64_t best_txg;
-	char *name, *hostname;
+	char *name, *hostname = NULL;
 	uint64_t guid;
 	uint_t children = 0;
 	nvlist_t **child = NULL;
@@ -911,62 +912,58 @@ zpool_read_label(int fd, nvlist_t **config)
 	return (0);
 }
 
-typedef struct rdsk_node {
-	char *rn_name;
-	int rn_dfd;
-	libzfs_handle_t *rn_hdl;
-	nvlist_t *rn_config;
-	avl_tree_t *rn_avl;
-	avl_node_t rn_node;
-	boolean_t rn_nozpool;
-} rdsk_node_t;
+typedef struct slice_node {
+	char *sn_name;
+	nvlist_t *sn_config;
+	boolean_t sn_nozpool;
+	int sn_partno;
+	struct disk_node *sn_disk;
+	struct slice_node *sn_next;
+} slice_node_t;
 
-static int
-slice_cache_compare(const void *arg1, const void *arg2)
+typedef struct disk_node {
+	char *dn_name;
+	int dn_dfd;
+	libzfs_handle_t *dn_hdl;
+	nvlist_t *dn_config;
+	struct slice_node *dn_slices;
+	struct disk_node *dn_next;
+} disk_node_t;
+
+#ifdef	sparc
+#define	WHOLE_DISK	"s2"
+#else
+#define	WHOLE_DISK	"p0"
+#endif
+
+/*
+ * This function splits the slice from the device name.  Currently it supports
+ * VTOC slices (s[0-16]) and DOS/FDISK partitions (p[0-4]).  If this function
+ * is updated to support other slice types then the check_slices function will
+ * also need to be updated.
+ */
+static boolean_t
+get_disk_slice(libzfs_handle_t *hdl, char *disk, char **slice, int *partno)
 {
-	const char  *nm1 = ((rdsk_node_t *)arg1)->rn_name;
-	const char  *nm2 = ((rdsk_node_t *)arg2)->rn_name;
-	char *nm1slice, *nm2slice;
-	int rv;
+	char *p;
 
-	/*
-	 * slices zero and two are the most likely to provide results,
-	 * so put those first
-	 */
-	nm1slice = strstr(nm1, "s0");
-	nm2slice = strstr(nm2, "s0");
-	if (nm1slice && !nm2slice) {
-		return (-1);
-	}
-	if (!nm1slice && nm2slice) {
-		return (1);
-	}
-	nm1slice = strstr(nm1, "s2");
-	nm2slice = strstr(nm2, "s2");
-	if (nm1slice && !nm2slice) {
-		return (-1);
-	}
-	if (!nm1slice && nm2slice) {
-		return (1);
-	}
+	if ((p = strrchr(disk, 's')) == NULL &&
+	    (p = strrchr(disk, 'p')) == NULL)
+		return (B_FALSE);
 
-	rv = strcmp(nm1, nm2);
-	if (rv == 0)
-		return (0);
-	return (rv > 0 ? 1 : -1);
+	if (!isdigit(p[1]))
+		return (B_FALSE);
+
+	*slice = zfs_strdup(hdl, p);
+	*partno = atoi(p + 1);
+
+	p = '\0';
+	return (B_TRUE);
 }
 
 static void
-check_one_slice(avl_tree_t *r, char *diskname, uint_t partno,
-    diskaddr_t size, uint_t blksz)
+check_one_slice(slice_node_t *slice, diskaddr_t size, uint_t blksz)
 {
-	rdsk_node_t tmpnode;
-	rdsk_node_t *node;
-	char sname[MAXNAMELEN];
-
-	tmpnode.rn_name = &sname[0];
-	(void) snprintf(tmpnode.rn_name, MAXNAMELEN, "%s%u",
-	    diskname, partno);
 	/*
 	 * protect against division by zero for disk labels that
 	 * contain a bogus sector size
@@ -974,61 +971,36 @@ check_one_slice(avl_tree_t *r, char *diskname, uint_t partno,
 	if (blksz == 0)
 		blksz = DEV_BSIZE;
 	/* too small to contain a zpool? */
-	if ((size < (SPA_MINDEVSIZE / blksz)) &&
-	    (node = avl_find(r, &tmpnode, NULL)))
-		node->rn_nozpool = B_TRUE;
+	if (size < (SPA_MINDEVSIZE / blksz))
+		slice->sn_nozpool = B_TRUE;
 }
 
 static void
-nozpool_all_slices(avl_tree_t *r, const char *sname)
-{
-	char diskname[MAXNAMELEN];
-	char *ptr;
-	int i;
-
-	(void) strncpy(diskname, sname, MAXNAMELEN);
-	if (((ptr = strrchr(diskname, 's')) == NULL) &&
-	    ((ptr = strrchr(diskname, 'p')) == NULL))
-		return;
-	ptr[0] = 's';
-	ptr[1] = '\0';
-	for (i = 0; i < NDKMAP; i++)
-		check_one_slice(r, diskname, i, 0, 1);
-	ptr[0] = 'p';
-	for (i = 0; i <= FD_NUMPART; i++)
-		check_one_slice(r, diskname, i, 0, 1);
-}
-
-static void
-check_slices(avl_tree_t *r, int fd, const char *sname)
+check_slices(slice_node_t *slices, int fd)
 {
 	struct extvtoc vtoc;
 	struct dk_gpt *gpt;
-	char diskname[MAXNAMELEN];
-	char *ptr;
-	int i;
-
-	(void) strncpy(diskname, sname, MAXNAMELEN);
-	if ((ptr = strrchr(diskname, 's')) == NULL || !isdigit(ptr[1]))
-		return;
-	ptr[1] = '\0';
+	slice_node_t *slice;
+	diskaddr_t size;
 
 	if (read_extvtoc(fd, &vtoc) >= 0) {
-		for (i = 0; i < NDKMAP; i++)
-			check_one_slice(r, diskname, i,
-			    vtoc.v_part[i].p_size, vtoc.v_sectorsz);
+		for (slice = slices; slice; slice = slice->sn_next) {
+			if (slice->sn_name[0] == 'p')
+				continue;
+			size = vtoc.v_part[slice->sn_partno].p_size;
+			check_one_slice(slice, size, vtoc.v_sectorsz);
+		}
 	} else if (efi_alloc_and_read(fd, &gpt) >= 0) {
-		/*
-		 * on x86 we'll still have leftover links that point
-		 * to slices s[9-15], so use NDKMAP instead
-		 */
-		for (i = 0; i < NDKMAP; i++)
-			check_one_slice(r, diskname, i,
-			    gpt->efi_parts[i].p_size, gpt->efi_lbasize);
-		/* nodes p[1-4] are never used with EFI labels */
-		ptr[0] = 'p';
-		for (i = 1; i <= FD_NUMPART; i++)
-			check_one_slice(r, diskname, i, 0, 1);
+		for (slice = slices; slice; slice = slice->sn_next) {
+			/* nodes p[1-4] are never used with EFI labels */
+			if (slice->sn_name[0] == 'p') {
+				if (slice->sn_partno > 0)
+					slice->sn_nozpool = B_TRUE;
+				continue;
+			}
+			size = gpt->efi_parts[slice->sn_partno].p_size;
+			check_one_slice(slice, size, gpt->efi_lbasize);
+		}
 		efi_free(gpt);
 	}
 }
@@ -1036,17 +1008,29 @@ check_slices(avl_tree_t *r, int fd, const char *sname)
 static void
 zpool_open_func(void *arg)
 {
-	rdsk_node_t *rn = arg;
+	disk_node_t *disk = arg;
 	struct stat64 statbuf;
+	slice_node_t *slice;
 	nvlist_t *config;
+	char *devname;
 	int fd;
 
-	if (rn->rn_nozpool)
+	/*
+	 * If the disk has no slices we open it directly, otherwise we try
+	 * to open the whole disk slice.
+	 */
+	if (disk->dn_slices == NULL)
+		devname = strdup(disk->dn_name);
+	else
+		(void) asprintf(&devname, "%s" WHOLE_DISK, disk->dn_name);
+
+	if (devname == NULL) {
+		(void) no_memory(disk->dn_hdl);
 		return;
-	if ((fd = openat64(rn->rn_dfd, rn->rn_name, O_RDONLY)) < 0) {
-		/* symlink to a device that's no longer there */
-		if (errno == ENOENT)
-			nozpool_all_slices(rn->rn_avl, rn->rn_name);
+	}
+
+	if ((fd = openat64(disk->dn_dfd, devname, O_RDONLY)) < 0) {
+		free(devname);
 		return;
 	}
 	/*
@@ -1058,29 +1042,77 @@ zpool_open_func(void *arg)
 	    !S_ISCHR(statbuf.st_mode) &&
 	    !S_ISBLK(statbuf.st_mode))) {
 		(void) close(fd);
+		free(devname);
 		return;
 	}
 	/* this file is too small to hold a zpool */
-	if (S_ISREG(statbuf.st_mode) &&
-	    statbuf.st_size < SPA_MINDEVSIZE) {
+	if (S_ISREG(statbuf.st_mode) && statbuf.st_size < SPA_MINDEVSIZE) {
 		(void) close(fd);
+		free(devname);
 		return;
-	} else if (!S_ISREG(statbuf.st_mode)) {
+	} else if (!S_ISREG(statbuf.st_mode) && disk->dn_slices != NULL) {
 		/*
 		 * Try to read the disk label first so we don't have to
 		 * open a bunch of minor nodes that can't have a zpool.
 		 */
-		check_slices(rn->rn_avl, fd, rn->rn_name);
+		check_slices(disk->dn_slices, fd);
 	}
 
-	if ((zpool_read_label(fd, &config)) != 0) {
+	/*
+	 * If we're working with the device directly (it has no slices)
+	 * then we can just read the config and we're done.
+	 */
+	if (disk->dn_slices == NULL) {
+		if (zpool_read_label(fd, &config) != 0) {
+			(void) no_memory(disk->dn_hdl);
+			(void) close(fd);
+			free(devname);
+			return;
+		}
+		disk->dn_config = config;
 		(void) close(fd);
-		(void) no_memory(rn->rn_hdl);
+		free(devname);
 		return;
 	}
-	(void) close(fd);
 
-	rn->rn_config = config;
+	(void) close(fd);
+	free(devname);
+
+	/*
+	 * Go through and read the label off each slice.  The check_slices
+	 * function has already performed some basic checks and set the
+	 * sn_nozpool flag on any slices which just can't contain a zpool.
+	 */
+	for (slice = disk->dn_slices; slice; slice = slice->sn_next) {
+		if (slice->sn_nozpool == B_TRUE)
+			continue;
+
+
+		(void) asprintf(&devname, "%s%s", disk->dn_name,
+		    slice->sn_name);
+
+		if (devname == NULL) {
+			(void) no_memory(disk->dn_hdl);
+			free(devname);
+			return;
+		}
+
+		if ((fd = openat64(disk->dn_dfd, devname, O_RDONLY)) < 0) {
+			free(devname);
+			continue;
+		}
+
+		if ((zpool_read_label(fd, &config)) != 0) {
+			(void) no_memory(disk->dn_hdl);
+			(void) close(fd);
+			free(devname);
+			return;
+		}
+
+		slice->sn_config = config;
+		(void) close(fd);
+		free(devname);
+	}
 }
 
 /*
@@ -1137,8 +1169,6 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 	vdev_entry_t *ve, *venext;
 	config_entry_t *ce, *cenext;
 	name_entry_t *ne, *nenext;
-	avl_tree_t slice_cache;
-	rdsk_node_t *slice;
 	void *cookie;
 
 	if (dirs == 0) {
@@ -1155,8 +1185,8 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 		tpool_t *t;
 		char *rdsk;
 		int dfd;
-		boolean_t config_failed = B_FALSE;
-		DIR *dirp;
+		disk_node_t *disks = NULL, *curdisk = NULL;
+		slice_node_t *curslice = NULL;
 
 		/* use realpath to normalize the path */
 		if (realpath(dir[i], path) == 0) {
@@ -1190,49 +1220,102 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 			goto error;
 		}
 
-		avl_create(&slice_cache, slice_cache_compare,
-		    sizeof (rdsk_node_t), offsetof(rdsk_node_t, rn_node));
 		/*
 		 * This is not MT-safe, but we have no MT consumers of libzfs
 		 */
 		while ((dp = readdir64(dirp)) != NULL) {
-			const char *name = dp->d_name;
-			if (name[0] == '.' &&
-			    (name[1] == 0 || (name[1] == '.' && name[2] == 0)))
+			boolean_t isslice;
+			char *name, *sname;
+			int partno;
+
+			if (dp->d_name[0] == '.' && (dp->d_name[1] == '\0' ||
+			    (dp->d_name[1] == '.' && dp->d_name[2] == '\0')))
 				continue;
 
-			slice = zfs_alloc(hdl, sizeof (rdsk_node_t));
-			slice->rn_name = zfs_strdup(hdl, name);
-			slice->rn_avl = &slice_cache;
-			slice->rn_dfd = dfd;
-			slice->rn_hdl = hdl;
-			slice->rn_nozpool = B_FALSE;
-			avl_add(&slice_cache, slice);
+			name = zfs_strdup(hdl, dp->d_name);
+
+			/*
+			 * We create a new disk node every time we encounter
+			 * a disk with no slices or the disk name changes.
+			 */
+			isslice = get_disk_slice(hdl, name, &sname, &partno);
+			if (isslice == B_FALSE || curdisk == NULL ||
+			    strcmp(curdisk->dn_name, name) != 0) {
+				disk_node_t *newdisk;
+
+				newdisk = zfs_alloc(hdl, sizeof (disk_node_t));
+				newdisk->dn_name = name;
+				newdisk->dn_dfd = dfd;
+				newdisk->dn_hdl = hdl;
+
+				if (curdisk != NULL)
+					curdisk->dn_next = newdisk;
+				else
+					disks = newdisk;
+
+				curdisk = newdisk;
+				curslice = NULL;
+			}
+
+			assert(curdisk != NULL);
+
+			/*
+			 * Add a new slice node to the current disk node.
+			 * We do this for all slices including zero slices.
+			 */
+			if (isslice == B_TRUE) {
+				slice_node_t *newslice;
+
+				newslice = zfs_alloc(hdl,
+				    sizeof (slice_node_t));
+				newslice->sn_name = sname;
+				newslice->sn_partno = partno;
+				newslice->sn_disk = curdisk;
+
+				if (curslice != NULL)
+					curslice->sn_next = newslice;
+				else
+					curdisk->dn_slices = newslice;
+
+				curslice = newslice;
+			}
 		}
 		/*
 		 * create a thread pool to do all of this in parallel;
-		 * rn_nozpool is not protected, so this is racy in that
-		 * multiple tasks could decide that the same slice can
-		 * not hold a zpool, which is benign.  Also choose
-		 * double the number of processors; we hold a lot of
-		 * locks in the kernel, so going beyond this doesn't
-		 * buy us much.
+		 * choose double the number of processors; we hold a lot
+		 * of locks in the kernel, so going beyond this doesn't
+		 * buy us much.  Each disk (and any slices it might have)
+		 * is handled inside a single thread.
 		 */
 		t = tpool_create(1, 2 * sysconf(_SC_NPROCESSORS_ONLN),
 		    0, NULL);
-		for (slice = avl_first(&slice_cache); slice;
-		    (slice = avl_walk(&slice_cache, slice,
-		    AVL_AFTER)))
-			(void) tpool_dispatch(t, zpool_open_func, slice);
+		for (curdisk = disks; curdisk; curdisk = curdisk->dn_next)
+			(void) tpool_dispatch(t, zpool_open_func, curdisk);
 		tpool_wait(t);
 		tpool_destroy(t);
 
-		cookie = NULL;
-		while ((slice = avl_destroy_nodes(&slice_cache,
-		    &cookie)) != NULL) {
-			if (slice->rn_config != NULL && !config_failed) {
-				nvlist_t *config = slice->rn_config;
+		curdisk = disks;
+		while (curdisk != NULL) {
+			nvlist_t *config;
+			disk_node_t *prevdisk;
+
+			/*
+			 * If the device has slices we examine the config on
+			 * each of those.  If not we use the config directly
+			 * from the device instead.
+			 */
+			curslice = curdisk->dn_slices;
+
+			if (curslice != NULL)
+				config = curslice->sn_config;
+			else
+				config = curdisk->dn_config;
+
+			do {
 				boolean_t matched = B_TRUE;
+
+				if (config == NULL)
+					goto next;
 
 				if (iarg->poolname != NULL) {
 					char *pname;
@@ -1249,23 +1332,52 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 					    &this_guid) == 0 &&
 					    iarg->guid == this_guid;
 				}
+
 				if (!matched) {
 					nvlist_free(config);
-				} else {
-					/*
-					 * use the non-raw path for the config
-					 */
-					(void) strlcpy(end, slice->rn_name,
-					    pathleft);
-					if (add_config(hdl, &pools, path,
-					    config) != 0)
-						config_failed = B_TRUE;
+					goto next;
 				}
-			}
-			free(slice->rn_name);
-			free(slice);
+
+				/* use the non-raw path for the config */
+				if (curslice != NULL)
+					(void) snprintf(end, pathleft, "%s%s",
+					    curdisk->dn_name,
+					    curslice->sn_name);
+				else
+					(void) strlcpy(end, curdisk->dn_name,
+					    pathleft);
+				if (add_config(hdl, &pools, path, config) != 0)
+					goto error;
+
+next:
+				/*
+				 * If we're looking at slices free this one
+				 * and go move onto the next.
+				 */
+				if (curslice != NULL) {
+					slice_node_t *prevslice;
+
+					prevslice = curslice;
+					curslice = curslice->sn_next;
+
+					free(prevslice->sn_name);
+					free(prevslice);
+
+					if (curslice != NULL) {
+						config = curslice->sn_config;
+					}
+				}
+			} while (curslice != NULL);
+
+			/*
+			 * Free this disk and move onto the next one.
+			 */
+			prevdisk = curdisk;
+			curdisk = curdisk->dn_next;
+
+			free(prevdisk->dn_name);
+			free(prevdisk);
 		}
-		avl_destroy(&slice_cache);
 
 		(void) closedir(dirp);
 
