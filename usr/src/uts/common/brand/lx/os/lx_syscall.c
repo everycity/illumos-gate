@@ -389,9 +389,12 @@ lx_syscall_enter(void)
 		/*
 		 * Call the in-kernel handler for this Linux system call:
 		 */
+		lwpd->br_eosys = NORMALRETURN;
 		ret = s->sy_callc(args[0], args[1], args[2], args[3], args[4],
 		    args[5]);
-		lx_syscall_return(lwp, syscall_num, ret);
+		if (lwpd->br_eosys == NORMALRETURN) {
+			lx_syscall_return(lwp, syscall_num, ret);
+		}
 		return (0);
 	}
 
@@ -622,7 +625,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"statfs",	NULL,			0,		2}, /* 99 */
 	{"fstatfs",	NULL,			0,		2}, /* 100 */
 	{"ioperm",	NULL,			NOSYS_NO_EQUIV,	0}, /* 101 */
-	{"socketcall",	NULL,			0,		2}, /* 102 */
+	{"socketcall",	lx_socketcall,		0,		2}, /* 102 */
 	{"syslog",	NULL,			0,		3}, /* 103 */
 	{"setitimer",	NULL,			0,		3}, /* 104 */
 	{"getitimer",	NULL,			0,		2}, /* 105 */
@@ -692,7 +695,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"nfsservctl",	NULL,			NOSYS_KERNEL,	0}, /* 169 */
 	{"setresgid16",	lx_setresgid16,		0,		3}, /* 170 */
 	{"getresgid16",	NULL,			0,		3}, /* 171 */
-	{"prctl",	NULL,			0,		5}, /* 172 */
+	{"prctl",	lx_prctl,		0,		5}, /* 172 */
 	{"rt_sigreturn", NULL,			0,		0}, /* 173 */
 	{"rt_sigaction", NULL,			0,		4}, /* 174 */
 	{"rt_sigprocmask", NULL,		0,		4}, /* 175 */
@@ -845,13 +848,13 @@ lx_sysent_t lx_sysent32[] = {
 	{"getcpu",	lx_getcpu,		0,		3}, /* 318 */
 	{"epoll_pwait",	NULL,			0,		5}, /* 319 */
 	{"utimensat",	NULL,			0,		4}, /* 320 */
-	{"signalfd",	NULL,			NOSYS_NULL,	0}, /* 321 */
+	{"signalfd",	NULL,			0,		3}, /* 321 */
 	{"timerfd_create", NULL,		0,		2}, /* 322 */
 	{"eventfd",	NULL,			0,		1}, /* 323 */
-	{"fallocate",	NULL,			NOSYS_NULL,	0}, /* 324 */
+	{"fallocate",	lx_fallocate32,		LX_SYS_EBPARG6,	6}, /* 324 */
 	{"timerfd_settime", NULL,		0,		4}, /* 325 */
 	{"timerfd_gettime", NULL,		0,		2}, /* 326 */
-	{"signalfd4",	NULL,			NOSYS_NULL,	0}, /* 327 */
+	{"signalfd4",	NULL,			0,		4}, /* 327 */
 	{"eventfd2",	NULL,			0,		2}, /* 328 */
 	{"epoll_create1", NULL,			0,		1}, /* 329 */
 	{"dup3",	NULL,			0,		3}, /* 330 */
@@ -868,7 +871,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"name_to_handle_at", NULL,		NOSYS_NULL,	0}, /* 341 */
 	{"open_by_handle_at", NULL,		NOSYS_NULL,	0}, /* 342 */
 	{"clock_adjtime", NULL,			NOSYS_NULL,	0}, /* 343 */
-	{"syncfs",	NULL,			NOSYS_NULL,	0}, /* 344 */
+	{"syncfs",	lx_syncfs,		0,		1}, /* 344 */
 	{"sendmmsg",	NULL,			NOSYS_NULL,	0}, /* 345 */
 	{"setns",	NULL,			NOSYS_NULL,	0}, /* 346 */
 	{"process_vm_readv", NULL,		NOSYS_NULL,	0}, /* 347 */
@@ -933,12 +936,12 @@ lx_sysent_t lx_sysent64[] = {
 	{"getpid",	lx_getpid,		0,		0}, /* 39 */
 	{"sendfile",	NULL,			0,		4}, /* 40 */
 	{"socket",	NULL,			0,		3}, /* 41 */
-	{"connect",	NULL,			0,		3}, /* 42 */
+	{"connect",	lx_connect,		0,		3}, /* 42 */
 	{"accept",	NULL,			0,		3}, /* 43 */
-	{"sendto",	NULL,			0,		6}, /* 44 */
-	{"recvfrom",	NULL,			0,		6}, /* 45 */
-	{"sendmsg",	NULL,			0,		3}, /* 46 */
-	{"recvmsg",	NULL,			0,		3}, /* 47 */
+	{"sendto",	lx_sendto,		0,		6}, /* 44 */
+	{"recvfrom",	lx_recvfrom,		0,		6}, /* 45 */
+	{"sendmsg",	lx_sendmsg,		0,		3}, /* 46 */
+	{"recvmsg",	lx_recvmsg,		0,		3}, /* 47 */
 	{"shutdown",	NULL,			0,		2}, /* 48 */
 	{"bind",	NULL,			0,		3}, /* 49 */
 	{"listen",	NULL,			0,		2}, /* 50 */
@@ -1048,7 +1051,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"modify_ldt",	lx_modify_ldt,		0,		3}, /* 154 */
 	{"pivot_root",	NULL,			NOSYS_KERNEL,	0}, /* 155 */
 	{"sysctl",	NULL,			0,		1}, /* 156 */
-	{"prctl",	NULL,			0,		5}, /* 157 */
+	{"prctl",	lx_prctl,		0,		5}, /* 157 */
 	{"arch_prctl",	lx_arch_prctl,		0,		2}, /* 158 */
 	{"adjtimex",	NULL,			0,		1}, /* 159 */
 	{"setrlimit",	lx_setrlimit,		0,		2}, /* 160 */
@@ -1173,14 +1176,14 @@ lx_sysent_t lx_sysent64[] = {
 	{"move_pages",	NULL,			NOSYS_NULL,	0}, /* 279 */
 	{"utimensat",	NULL,			0,		4}, /* 280 */
 	{"epoll_pwait",	NULL,			0,		5}, /* 281 */
-	{"signalfd",	NULL,			NOSYS_NULL,	0}, /* 282 */
+	{"signalfd",	NULL,			0,		3}, /* 282 */
 	{"timerfd_create", NULL,		0,		2}, /* 283 */
 	{"eventfd",	NULL,			0,		1}, /* 284 */
-	{"fallocate",	NULL,			NOSYS_NULL,	0}, /* 285 */
+	{"fallocate",	lx_fallocate,		0,		4}, /* 285 */
 	{"timerfd_settime", NULL,		0,		4}, /* 286 */
 	{"timerfd_gettime", NULL,		0,		2}, /* 287 */
 	{"accept4",	NULL,			0,		4}, /* 288 */
-	{"signalfd4",	NULL,			NOSYS_NULL,	0}, /* 289 */
+	{"signalfd4",	NULL,			0,		4}, /* 289 */
 	{"eventfd2",	NULL,			0,		2}, /* 290 */
 	{"epoll_create1", NULL,			0,		1}, /* 291 */
 	{"dup3",	NULL,			0,		3}, /* 292 */
@@ -1197,7 +1200,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"name_to_handle_at", NULL,		NOSYS_NULL,	0}, /* 303 */
 	{"open_by_handle_at", NULL,		NOSYS_NULL,	0}, /* 304 */
 	{"clock_adjtime", NULL,			NOSYS_NULL,	0}, /* 305 */
-	{"syncfs",	NULL,			NOSYS_NULL,	0}, /* 306 */
+	{"syncfs",	lx_syncfs,		0,		1}, /* 306 */
 	{"sendmmsg",	NULL,			NOSYS_NULL,	0}, /* 307 */
 	{"setns",	NULL,			NOSYS_NULL,	0}, /* 309 */
 	{"getcpu",	lx_getcpu,		0,		3}, /* 309 */

@@ -172,19 +172,18 @@ struct brand_ops {
 	    struct cred *cred, int *brand_action);
 	void	(*b_sigset_native_to_brand)(sigset_t *);
 	void	(*b_sigset_brand_to_native)(sigset_t *);
-	void	(*b_psig_to_proc)(proc_t *, kthread_t *, int);
+	void	(*b_sigfd_translate)(k_siginfo_t *);
 	int	b_nsig;
 	void	(*b_exit_with_sig)(proc_t *, sigqueue_t *);
 	boolean_t (*b_wait_filter)(proc_t *, proc_t *);
 	boolean_t (*b_native_exec)(uint8_t, const char **);
-	void (*b_ptrace_exectrap)(proc_t *);
 	uint32_t (*b_map32limit)(proc_t *);
 	void	(*b_stop_notify)(proc_t *, klwp_t *, ushort_t, ushort_t);
 	int	(*b_waitid_helper)(idtype_t, id_t, k_siginfo_t *, int,
 	    boolean_t *, int *);
 	int	(*b_sigcld_repost)(proc_t *, sigqueue_t *);
 	int	(*b_issig_stop)(proc_t *, klwp_t *);
-	boolean_t (*b_sig_ignorable)(proc_t *, int);
+	boolean_t (*b_sig_ignorable)(proc_t *, klwp_t *, int);
 	void	(*b_savecontext)(ucontext_t *);
 #if defined(_SYSCALL32_IMPL)
 	void	(*b_savecontext32)(ucontext32_t *);
@@ -236,8 +235,8 @@ extern brand_t	*brand_register_zone(struct brand_attr *);
 extern brand_t	*brand_find_name(char *);
 extern void	brand_unregister_zone(brand_t *);
 extern int	brand_zone_count(brand_t *);
-extern void	brand_setbrand(proc_t *);
-extern void	brand_clearbrand(proc_t *);
+extern int	brand_setbrand(proc_t *, boolean_t);
+extern void	brand_clearbrand(proc_t *, boolean_t);
 
 /*
  * The following functions can be shared among kernel brand modules which

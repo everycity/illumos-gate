@@ -61,6 +61,7 @@
 #include <sys/dtrace.h>
 #include <sys/sdt.h>
 #include <sys/brand.h>
+#include <sys/signalfd.h>
 
 const k_sigset_t nullsmask = {0, 0, 0};
 
@@ -94,6 +95,13 @@ const k_sigset_t holdvfork =
 
 static	int	isjobstop(int);
 static	void	post_sigcld(proc_t *, sigqueue_t *);
+
+
+/*
+ * signalfd helper functions which are set when the signalfd driver loads.
+ */
+void (*sigfd_fork_helper)(struct proc *, struct proc *);
+void (*sigfd_exit_helper)();
 
 /*
  * Internal variables for counting number of user thread stop requests posted.
@@ -147,12 +155,12 @@ signal_is_blocked(kthread_t *t, int sig)
  * forbidden by any process branding.
  */
 static int
-sig_ignorable(proc_t *p, int sig)
+sig_ignorable(proc_t *p, klwp_t *lwp, int sig)
 {
 	return (sigismember(&p->p_ignore, sig) &&	/* sig in ignore mask */
 	    !(PROC_IS_BRANDED(p) &&			/* allowed by brand */
 	    BROP(p)->b_sig_ignorable != NULL &&
-	    BROP(p)->b_sig_ignorable(p, sig) == B_FALSE));
+	    BROP(p)->b_sig_ignorable(p, lwp, sig) == B_FALSE));
 
 }
 
@@ -168,12 +176,13 @@ sig_ignorable(proc_t *p, int sig)
  *	the signal is not being accepted via sigwait()
  */
 static int
-sig_discardable(proc_t *p, int sig)
+sig_discardable(proc_t *p, kthread_t *tp, int sig)
 {
 	kthread_t *t = p->p_tlist;
+	klwp_t *lwp = (tp == NULL) ? NULL : tp->t_lwp;
 
 	return (t == NULL ||		/* if zombie or ... */
-	    (sig_ignorable(p, sig) &&		/* signal is ignored */
+	    (sig_ignorable(p, lwp, sig) &&		/* signal is ignored */
 	    t->t_forw == t &&			/* and single-threaded */
 	    !tracing(p, sig) &&			/* and no /proc tracing */
 	    !signal_is_blocked(t, sig) &&	/* and signal not blocked */
@@ -306,7 +315,7 @@ sigtoproc(proc_t *p, kthread_t *t, int sig)
 		}
 	}
 
-	if (sig_discardable(p, sig)) {
+	if (sig_discardable(p, t, sig)) {
 		DTRACE_PROC3(signal__discard, kthread_t *, p->p_tlist,
 		    proc_t *, p, int, sig);
 		return;
@@ -323,6 +332,11 @@ sigtoproc(proc_t *p, kthread_t *t, int sig)
 		(void) eat_signal(t, sig);
 		thread_unlock(t);
 		DTRACE_PROC2(signal__send, kthread_t *, t, int, sig);
+		if (p->p_sigfd != NULL && ((sigfd_proc_state_t *)
+		    (p->p_sigfd))->sigfd_pollwake_cb != NULL)
+			(*((sigfd_proc_state_t *)(p->p_sigfd))->
+			    sigfd_pollwake_cb)(p, sig);
+
 	} else if ((tt = p->p_tlist) != NULL) {
 		/*
 		 * Make sure that some lwp that already exists
@@ -361,6 +375,10 @@ sigtoproc(proc_t *p, kthread_t *t, int sig)
 		}
 
 		DTRACE_PROC2(signal__send, kthread_t *, tt, int, sig);
+		if (p->p_sigfd != NULL && ((sigfd_proc_state_t *)
+		    (p->p_sigfd))->sigfd_pollwake_cb != NULL)
+			(*((sigfd_proc_state_t *)(p->p_sigfd))->
+			    sigfd_pollwake_cb)(p, sig);
 	}
 }
 
@@ -497,7 +515,7 @@ issig_justlooking(void)
 			if (sigismember(&set, sig) &&
 			    (tracing(p, sig) ||
 			    sigismember(&t->t_sigwait, sig) ||
-			    !sig_ignorable(p, sig))) {
+			    !sig_ignorable(p, lwp, sig))) {
 				/*
 				 * Don't promote a signal that will stop
 				 * the process when lwp_nostop is set.
@@ -671,7 +689,7 @@ issig_forreal(void)
 			lwp->lwp_cursig = 0;
 			lwp->lwp_extsig = 0;
 			if (sigismember(&t->t_sigwait, sig) ||
-			    (!sig_ignorable(p, sig) &&
+			    (!sig_ignorable(p, lwp, sig) &&
 			    !isjobstop(sig))) {
 				if (p->p_flag & (SEXITLWPS|SKILLED)) {
 					sig = SIGKILL;
@@ -723,7 +741,7 @@ issig_forreal(void)
 				toproc = 0;
 				if (tracing(p, sig) ||
 				    sigismember(&t->t_sigwait, sig) ||
-				    !sig_ignorable(p, sig)) {
+				    !sig_ignorable(p, lwp, sig)) {
 					if (sigismember(&t->t_extsig, sig))
 						ext = 1;
 					break;
@@ -737,7 +755,7 @@ issig_forreal(void)
 				toproc = 1;
 				if (tracing(p, sig) ||
 				    sigismember(&t->t_sigwait, sig) ||
-				    !sig_ignorable(p, sig)) {
+				    !sig_ignorable(p, lwp, sig)) {
 					if (sigismember(&p->p_extsig, sig))
 						ext = 1;
 					break;
@@ -1359,7 +1377,7 @@ psig(void)
 	 * this signal from pending to current (we dropped p->p_lock).
 	 * This can happen only in a multi-threaded process.
 	 */
-	if (sig_ignorable(p, sig) ||
+	if (sig_ignorable(p, lwp, sig) ||
 	    (func == SIG_DFL && sigismember(&stopdefault, sig))) {
 		lwp->lwp_cursig = 0;
 		lwp->lwp_extsig = 0;
@@ -1460,9 +1478,6 @@ psig(void)
 
 		DTRACE_PROC3(signal__handle, int, sig, k_siginfo_t *,
 		    sip, void (*)(void), func);
-
-		if (PROC_IS_BRANDED(p) && BROP(p)->b_psig_to_proc)
-			BROP(p)->b_psig_to_proc(p, t, sig);
 
 		lwp->lwp_cursig = 0;
 		lwp->lwp_extsig = 0;
@@ -2162,7 +2177,7 @@ sigaddqa(proc_t *p, kthread_t *t, sigqueue_t *sigqp)
 	ASSERT(MUTEX_HELD(&p->p_lock));
 	ASSERT(sig >= 1 && sig < NSIG);
 
-	if (sig_discardable(p, sig))
+	if (sig_discardable(p, t, sig))
 		siginfofree(sigqp);
 	else
 		sigaddqins(p, t, sigqp);
@@ -2188,7 +2203,7 @@ sigaddq(proc_t *p, kthread_t *t, k_siginfo_t *infop, int km_flags)
 	 * blocking the signal (it *could* change it's mind while
 	 * the signal is pending) then don't bother creating one.
 	 */
-	if (!sig_discardable(p, sig) &&
+	if (!sig_discardable(p, t, sig) &&
 	    (sigismember(&p->p_siginfo, sig) ||
 	    (curproc->p_ct_process != p->p_ct_process) ||
 	    (sig == SIGCLD && SI_FROMKERNEL(infop))) &&

@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -201,10 +201,8 @@
  * enforced in user space.
  */
 
-#include <sys/strsubr.h>
 #include <sys/cmn_err.h>
 #include <sys/priv.h>
-#include <sys/socketvar.h>
 #include <sys/zone.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -303,7 +301,6 @@ smb_server_g_init(void)
 	smb_mbc_init();		/* smb_mbc_cache */
 	smb_net_init();		/* smb_txr_cache */
 	smb_node_init();	/* smb_node_cache, lists */
-	smb_sign_g_init();
 
 	smb_cache_request = kmem_cache_create("smb_request_cache",
 	    sizeof (smb_request_t), 8, NULL, NULL, NULL, NULL, NULL, 0);
@@ -401,14 +398,11 @@ smb_server_create(void)
 	sv->sv_magic = SMB_SERVER_MAGIC;
 	sv->sv_state = SMB_SERVER_STATE_CREATED;
 	sv->sv_zid = zid;
-	sv->sv_pid = curproc->p_pid;
+	sv->sv_pid = ddi_get_pid();
 
 	mutex_init(&sv->sv_mutex, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&sv->sv_cv, NULL, CV_DEFAULT, NULL);
 	cv_init(&sv->sp_info.sp_cv, NULL, CV_DEFAULT, NULL);
-
-	smb_llist_constructor(&sv->sv_opipe_list, sizeof (smb_opipe_t),
-	    offsetof(smb_opipe_t, p_lnd));
 
 	smb_llist_constructor(&sv->sv_event_list, sizeof (smb_event_t),
 	    offsetof(smb_event_t, se_lnd));
@@ -429,7 +423,6 @@ smb_server_create(void)
 
 	smb_kdoor_init(sv);
 	smb_kshare_init(sv);
-	smb_opipe_door_init(sv);
 	smb_server_kstat_init(sv);
 
 	smb_threshold_init(&sv->sv_ssetup_ct, SMB_SSETUP_CMD,
@@ -505,10 +498,8 @@ smb_server_delete(void)
 	smb_server_listener_destroy(&sv->sv_tcp_daemon);
 	rw_destroy(&sv->sv_cfg_lock);
 	smb_server_kstat_fini(sv);
-	smb_opipe_door_fini(sv);
 	smb_kshare_fini(sv);
 	smb_kdoor_fini(sv);
-	smb_llist_destructor(&sv->sv_opipe_list);
 	smb_llist_destructor(&sv->sv_event_list);
 
 	kmem_free(sv->sv_disp_stats,
@@ -592,6 +583,10 @@ smb_server_start(smb_ioc_start_t *ioc)
 		if ((rc = smb_kshare_start(sv)) != 0)
 			break;
 
+		/*
+		 * NB: the proc passed here has to be a "system" one.
+		 * Normally that's p0, or the NGZ eqivalent.
+		 */
 		sv->sv_worker_pool = taskq_create_proc("smb_workers",
 		    sv->sv_cfg.skc_maxworkers, smbsrv_worker_pri,
 		    sv->sv_cfg.skc_maxworkers, INT_MAX,
@@ -609,6 +604,7 @@ smb_server_start(smb_ioc_start_t *ioc)
 			break;
 		}
 
+#ifdef	_KERNEL
 		ASSERT(sv->sv_lmshrd == NULL);
 		sv->sv_lmshrd = smb_kshare_door_init(ioc->lmshrd);
 		if (sv->sv_lmshrd == NULL)
@@ -617,10 +613,11 @@ smb_server_start(smb_ioc_start_t *ioc)
 			cmn_err(CE_WARN, "Cannot open smbd door");
 			break;
 		}
-		if (rc = smb_opipe_door_open(sv, ioc->opipe)) {
-			cmn_err(CE_WARN, "Cannot open opipe door");
-			break;
-		}
+#else	/* _KERNEL */
+		/* Fake kernel does not use the kshare_door */
+		fksmb_kdoor_open(sv, ioc->udoor_func);
+#endif	/* _KERNEL */
+
 		if (rc = smb_thread_start(&sv->si_thread_timers))
 			break;
 
@@ -631,12 +628,11 @@ smb_server_start(smb_ioc_start_t *ioc)
 			family = AF_INET6;
 		smb_server_listener_init(sv, &sv->sv_tcp_daemon,
 		    "smb_tcp_listener", IPPORT_SMB, family);
-		rc = smb_server_listener_start(&sv->sv_nbt_daemon);
-		if (rc != 0)
-			break;
 		rc = smb_server_listener_start(&sv->sv_tcp_daemon);
 		if (rc != 0)
 			break;
+		if (sv->sv_cfg.skc_netbios_enable)
+			(void) smb_server_listener_start(&sv->sv_nbt_daemon);
 
 		sv->sv_state = SMB_SERVER_STATE_RUNNING;
 		sv->sv_start_time = gethrtime();
@@ -990,7 +986,7 @@ smb_server_sharevp(smb_server_t *sv, const char *shr_path, vnode_t **vp)
 	return (0);
 }
 
-
+#ifdef	_KERNEL
 /*
  * This is a special interface that will be utilized by ZFS to cause a share to
  * be added/removed.
@@ -1021,6 +1017,7 @@ smb_server_share(void *arg, boolean_t add_share)
 
 	return (rc);
 }
+#endif	/* _KERNEL */
 
 int
 smb_server_unshare(const char *sharename)
@@ -1221,7 +1218,11 @@ smb_server_timers(smb_thread_t *thread, void *arg)
 
 	ASSERT(sv != NULL);
 
-	while (smb_thread_continue_timedwait(thread, 1 /* Seconds */)) {
+	/*
+	 * This just kills old inactive sessions.  No urgency.
+	 * The session code expects one call per minute.
+	 */
+	while (smb_thread_continue_timedwait(thread, 60 /* Seconds */)) {
 		smb_session_timers(&sv->sv_nbt_daemon.ld_session_list);
 		smb_session_timers(&sv->sv_tcp_daemon.ld_session_list);
 	}
@@ -1401,10 +1402,12 @@ smb_server_shutdown(smb_server_t *sv)
 	smb_threshold_wake_all(&sv->sv_tcon_ct);
 	smb_threshold_wake_all(&sv->sv_opipe_ct);
 
-	smb_opipe_door_close(sv);
 	smb_kdoor_close(sv);
+#ifdef	_KERNEL
 	smb_kshare_door_fini(sv->sv_lmshrd);
+#endif	/* _KERNEL */
 	sv->sv_lmshrd = NULL;
+
 	smb_export_stop(sv);
 
 	if (sv->sv_session != NULL) {
@@ -1481,6 +1484,13 @@ smb_server_listener_init(
 static void
 smb_server_listener_destroy(smb_listener_daemon_t *ld)
 {
+	/*
+	 * Note that if startup fails early, we can legitimately
+	 * get here with an all-zeros object.
+	 */
+	if (ld->ld_magic == 0)
+		return;
+
 	SMB_LISTENER_VALID(ld);
 	ASSERT(ld->ld_so == NULL);
 	smb_thread_destroy(&ld->ld_thread);
@@ -1902,6 +1912,7 @@ smb_server_store_cfg(smb_server_t *sv, smb_ioc_cfg_t *ioc)
 	sv->sv_cfg.skc_ipv6_enable = ioc->ipv6_enable;
 	sv->sv_cfg.skc_print_enable = ioc->print_enable;
 	sv->sv_cfg.skc_traverse_mounts = ioc->traverse_mounts;
+	sv->sv_cfg.skc_netbios_enable = ioc->netbios_enable;
 	sv->sv_cfg.skc_execflags = ioc->exec_flags;
 	sv->sv_cfg.skc_version = ioc->version;
 	(void) strlcpy(sv->sv_cfg.skc_nbdomain, ioc->nbdomain,

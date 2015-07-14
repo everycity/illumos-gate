@@ -107,7 +107,9 @@ extern "C" {
 typedef enum lxpr_nodetype {
 	LXPR_PROCDIR,		/* /proc		*/
 	LXPR_PIDDIR,		/* /proc/<pid>		*/
+	LXPR_PID_CGROUP,	/* /proc/<pid>/cgroup	*/
 	LXPR_PID_CMDLINE,	/* /proc/<pid>/cmdline	*/
+	LXPR_PID_COMM,		/* /proc/<pid>/comm	*/
 	LXPR_PID_CPU,		/* /proc/<pid>/cpu	*/
 	LXPR_PID_CURDIR,	/* /proc/<pid>/cwd	*/
 	LXPR_PID_ENV,		/* /proc/<pid>/environ	*/
@@ -116,6 +118,7 @@ typedef enum lxpr_nodetype {
 	LXPR_PID_MAPS,		/* /proc/<pid>/maps	*/
 	LXPR_PID_MEM,		/* /proc/<pid>/mem	*/
 	LXPR_PID_MOUNTINFO,	/* /proc/<pid>/mountinfo */
+	LXPR_PID_OOM_SCR_ADJ,	/* /proc/<pid>/oom_score_adj	*/
 	LXPR_PID_ROOTDIR,	/* /proc/<pid>/root	*/
 	LXPR_PID_STAT,		/* /proc/<pid>/stat	*/
 	LXPR_PID_STATM,		/* /proc/<pid>/statm	*/
@@ -124,7 +127,9 @@ typedef enum lxpr_nodetype {
 	LXPR_PID_TASK_IDDIR,	/* /proc/<pid>/task/<tid>		*/
 	LXPR_PID_FDDIR,		/* /proc/<pid>/fd	*/
 	LXPR_PID_FD_FD,		/* /proc/<pid>/fd/nn	*/
+	LXPR_PID_TID_CGROUP,	/* /proc/<pid>/task/<tid>/cgroup	*/
 	LXPR_PID_TID_CMDLINE,	/* /proc/<pid>/task/<tid>/cmdline	*/
+	LXPR_PID_TID_COMM,	/* /proc/<pid>/task/<tid>/comm		*/
 	LXPR_PID_TID_CPU,	/* /proc/<pid>/task/<tid>/cpu		*/
 	LXPR_PID_TID_CURDIR,	/* /proc/<pid>/task/<tid>/cwd		*/
 	LXPR_PID_TID_ENV,	/* /proc/<pid>/task/<tid>/environ	*/
@@ -133,6 +138,7 @@ typedef enum lxpr_nodetype {
 	LXPR_PID_TID_MAPS,	/* /proc/<pid>/task/<tid>/maps		*/
 	LXPR_PID_TID_MEM,	/* /proc/<pid>/task/<tid>/mem		*/
 	LXPR_PID_TID_MOUNTINFO,	/* /proc/<pid>/task/<tid>/mountinfo	*/
+	LXPR_PID_TID_OOM_SCR_ADJ, /* /proc/<pid>/task/<tid>/oom_score_adj */
 	LXPR_PID_TID_ROOTDIR,	/* /proc/<pid>/task/<tid>/root		*/
 	LXPR_PID_TID_STAT,	/* /proc/<pid>/task/<tid>/stat		*/
 	LXPR_PID_TID_STATM,	/* /proc/<pid>/task/<tid>/statm		*/
@@ -191,9 +197,14 @@ typedef enum lxpr_nodetype {
 	LXPR_SYS_KERNEL_HOSTNAME,	/* /proc/sys/kernel/hostname */
 	LXPR_SYS_KERNEL_MSGMNI,	/* /proc/sys/kernel/msgmni */
 	LXPR_SYS_KERNEL_NGROUPS_MAX,	/* /proc/sys/kernel/ngroups_max */
+	LXPR_SYS_KERNEL_OSREL,	/* /proc/sys/kernel/osrelease */
 	LXPR_SYS_KERNEL_PID_MAX,	/* /proc/sys/kernel/pid_max */
+	LXPR_SYS_KERNEL_RANDDIR,	/* /proc/sys/kernel/random */
+	LXPR_SYS_KERNEL_RAND_BOOTID, /* /proc/sys/kernel/random/boot_id */
 	LXPR_SYS_KERNEL_SHMMAX,	/* /proc/sys/kernel/shmmax */
 	LXPR_SYS_KERNEL_THREADS_MAX,	/* /proc/sys/kernel/threads-max */
+	LXPR_SYS_VMDIR,		/* /proc/sys/vm */
+	LXPR_SYS_KERNEL_VM_NHUGEP, /* /proc/sys/vm/nr_hugepages */
 	LXPR_UPTIME,		/* /proc/uptime		*/
 	LXPR_VERSION,		/* /proc/version	*/
 	LXPR_NFILES		/* number of lx /proc file types */

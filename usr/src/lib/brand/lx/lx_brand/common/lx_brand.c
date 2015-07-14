@@ -956,12 +956,12 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/*  39: getpid */
 	lx_sendfile64,			/*  40: sendfile */
 	lx_socket,			/*  41: socket */
-	lx_connect,			/*  42: connect */
+	NULL,				/*  42: connect */
 	lx_accept,			/*  43: accept */
-	lx_sendto,			/*  44: sendto */
-	lx_recvfrom,			/*  45: recvfrom */
-	lx_sendmsg,			/*  46: sendmsg */
-	lx_recvmsg,			/*  47: recvmsg */
+	NULL,				/*  44: sendto */
+	NULL,				/*  45: recvfrom */
+	NULL,				/*  46: sendmsg */
+	NULL,				/*  47: recvmsg */
 	lx_shutdown,			/*  48: shutdown */
 	lx_bind,			/*  49: bind */
 	lx_listen,			/*  50: listen */
@@ -1071,7 +1071,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/* 154: modify_ldt */
 	NULL,				/* 155: pivot_root */
 	lx_sysctl,			/* 156: sysctl */
-	lx_prctl,			/* 157: prctl */
+	NULL,				/* 157: prctl */
 	NULL,				/* 158: arch_prctl */
 	lx_adjtimex,			/* 159: adjtimex */
 	NULL,				/* 160: setrlimit */
@@ -1196,14 +1196,14 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/* 279: move_pages */
 	lx_utimensat,			/* 280: utimensat */
 	lx_epoll_pwait,			/* 281: epoll_pwait */
-	NULL,				/* 282: signalfd */
+	lx_signalfd,			/* 282: signalfd */
 	lx_timerfd_create,		/* 283: timerfd_create */
 	lx_eventfd,			/* 284: eventfd */
 	NULL,				/* 285: fallocate */
 	lx_timerfd_settime,		/* 286: timerfd_settime */
 	lx_timerfd_gettime,		/* 287: timerfd_gettime */
 	lx_accept4,			/* 288: accept4 */
-	NULL,				/* 289: signalfd4 */
+	lx_signalfd4,			/* 289: signalfd4 */
 	lx_eventfd2,			/* 290: eventfd2 */
 	lx_epoll_create1,		/* 291: epoll_create1 */
 	lx_dup3,			/* 292: dup3 */
@@ -1417,7 +1417,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/* 169: nfsservctl */
 	NULL,				/* 170: setresgid16 */
 	lx_getresgid16,			/* 171: getresgid16 */
-	lx_prctl,			/* 172: prctl */
+	NULL,				/* 172: prctl */
 	lx_rt_sigreturn,		/* 173: rt_sigreturn */
 	lx_rt_sigaction,		/* 174: rt_sigaction */
 	lx_rt_sigprocmask,		/* 175: rt_sigprocmask */
@@ -1566,13 +1566,13 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/* 318: getcpu */
 	lx_epoll_pwait,			/* 319: epoll_pwait */
 	lx_utimensat,			/* 320: utimensat */
-	NULL,				/* 321: signalfd */
+	lx_signalfd,			/* 321: signalfd */
 	lx_timerfd_create,		/* 322: timerfd_create */
 	lx_eventfd,			/* 323: eventfd */
 	NULL,				/* 324: fallocate */
 	lx_timerfd_settime,		/* 325: timerfd_settime */
 	lx_timerfd_gettime,		/* 326: timerfd_gettime */
-	NULL,				/* 327: signalfd4 */
+	lx_signalfd4,			/* 327: signalfd4 */
 	lx_eventfd2,			/* 328: eventfd2 */
 	lx_epoll_create1,		/* 329: epoll_create1 */
 	lx_dup3,			/* 330: dup3 */

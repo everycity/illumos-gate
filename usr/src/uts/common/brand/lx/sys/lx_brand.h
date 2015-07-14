@@ -371,8 +371,11 @@ typedef lx_elf_data32_t lx_elf_data_t;
 #endif
 
 typedef enum lx_proc_flags {
-	LX_PROC_INSTALL_MODE = 0x01,
-	LX_PROC_STRICT_MODE = 0x02
+	/* flags configurable via brandsys() and members of LX_PROC_ALL */
+	LX_PROC_INSTALL_MODE	= 0x01,
+	LX_PROC_STRICT_MODE	= 0x02,
+	/* internal flags */
+	LX_PROC_CHILD_DEATHSIG	= 0x04
 } lx_proc_flags_t;
 
 #define	LX_PROC_ALL	(LX_PROC_INSTALL_MODE | LX_PROC_STRICT_MODE)
@@ -398,8 +401,10 @@ typedef struct lx_proc_data {
 	pid_t l_ppid;		/* pid of originating parent proc */
 	uint64_t l_ptrace;	/* process being observed with ptrace */
 	lx_elf_data_t l_elf_data; /* ELF data for linux executable */
-	int l_signal;		/* signal to deliver to parent when this */
-				/* thread group dies */
+	/* signal to deliver to parent when this thread group dies */
+	int l_signal;
+	/* native signal to deliver to process when parent dies */
+	int l_parent_deathsig;
 	lx_proc_flags_t l_flags;
 
 	lx_rlimit64_t l_fake_limits[LX_RLFAKE_NLIMITS];
@@ -418,6 +423,9 @@ typedef ulong_t lx_affmask_t[LX_AFF_ULONGS];
 
 /* Max. length of kernel version string */
 #define	LX_VERS_MAX	16
+
+/* Length of proc boot_id string */
+#define	LX_BOOTID_LEN	37
 
 /*
  * Flag values for uc_brand_data[0] in the ucontext_t:
@@ -443,17 +451,17 @@ typedef enum lx_accord_flags {
 /*
  * Flags values for "br_ptrace_flags" in the LWP-specific data.
  */
-typedef enum lx_ptrace_state {
-	LX_PTRACE_SYSCALL = 0x01,
-	LX_PTRACE_EXITING = 0x02,
-	LX_PTRACE_STOPPING = 0x04,
-	LX_PTRACE_INHERIT = 0x08,
-	LX_PTRACE_STOPPED = 0x10,
-	LX_PTRACE_PARENT_WAIT = 0x20,
-	LX_PTRACE_CLDPEND = 0x40,
-	LX_PTRACE_CLONING = 0x80,
-	LX_PTRACE_WAITPEND = 0x100
-} lx_ptrace_state_t;
+typedef enum lx_ptrace_flags {
+	LX_PTF_SYSCALL = 0x01,
+	LX_PTF_EXITING = 0x02,
+	LX_PTF_STOPPING = 0x04,
+	LX_PTF_INHERIT = 0x08,
+	LX_PTF_STOPPED = 0x10,
+	LX_PTF_PARENT_WAIT = 0x20,
+	LX_PTF_CLDPEND = 0x40,
+	LX_PTF_CLONING = 0x80,
+	LX_PTF_WAITPEND = 0x100
+} lx_ptrace_flags_t;
 
 /*
  * A ptrace(2) accord represents the relationship between a tracer LWP and the
@@ -545,7 +553,7 @@ struct lx_lwp_data {
 	boolean_t br_waitid_emulate;
 	int br_waitid_flags;
 
-	lx_ptrace_state_t br_ptrace_flags; /* ptrace state for this LWP */
+	lx_ptrace_flags_t br_ptrace_flags; /* ptrace flags for this LWP */
 	lx_ptrace_options_t br_ptrace_options; /* PTRACE_SETOPTIONS options */
 	lx_ptrace_options_t br_ptrace_clone_option; /* current clone(2) type */
 
@@ -558,6 +566,12 @@ struct lx_lwp_data {
 	ushort_t br_ptrace_whatstop;	/* stop sub-reason */
 
 	int32_t br_ptrace_stopsig;	/* stop signal, 0 for no signal */
+	/*
+	 * Track the last (native) signal number processed by a ptrace.
+	 * This allows the tracee to properly handle ignored signals after
+	 * the tracer has been notified and the tracee restarted.
+	 */
+	int32_t br_ptrace_donesig;
 	uintptr_t br_ptrace_stopucp;	/* usermode ucontext_t pointer */
 
 	uint_t	br_ptrace_event;
@@ -592,9 +606,23 @@ struct lx_lwp_data {
 	boolean_t br_strict_failure;
 
 	/*
+	 * Some syscalls emulated in-kernel still call back out to the
+	 * userspace emulation for certain functions.  When that is the case,
+	 * the syscall_return logic must be bypassed at the end of the
+	 * in-kernel syscall code.  The NORMALRETURN and JUSTRETURN constants
+	 * are used to choose the behavior.
+	 */
+	char br_eosys;
+
+	/*
 	 * Hold a pre-allocated lx_pid structure to be used during lx_initlwp.
 	 */
 	struct lx_pid *br_lpid;
+
+	/*
+	 * ID of the cgroup this thread belongs to.
+	 */
+	uint_t br_cgroupid;
 };
 
 /*
@@ -607,6 +635,7 @@ struct lx_lwp_data {
 typedef struct lx_zone_data {
 	char lxzd_kernel_version[LX_VERS_MAX];
 	ksocket_t lxzd_ioctl_sock;
+	char lxzd_bootid[LX_BOOTID_LEN];	/* procfs boot_id */
 } lx_zone_data_t;
 
 #define	BR_CPU_BOUND	0x0001
@@ -639,6 +668,7 @@ typedef struct lx_zone_data {
 #endif
 
 extern char *lx_get_zone_kern_version(zone_t *);
+extern int lx_kern_version_cmp(zone_t *, const char *);
 
 extern void lx_lwp_set_native_stack_current(lx_lwp_data_t *, uintptr_t);
 extern void lx_divert(klwp_t *, uintptr_t);

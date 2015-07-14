@@ -583,12 +583,9 @@ smb_dispatch_request(struct smb_request *sr)
 	    sr->smb_mid);
 	sr->first_smb_com = sr->smb_com;
 
-	/*
-	 * Verify SMB signature if signing is enabled, dialect is NT LM 0.12,
-	 * signing was negotiated and authentication has occurred.
-	 */
-	if (session->signing.flags & SMB_SIGNING_ENABLED) {
-		if (smb_sign_check_request(sr) != 0) {
+	if ((session->signing.flags & SMB_SIGNING_CHECK) != 0) {
+		if ((sr->smb_flg2 & SMB_FLAGS2_SMB_SECURITY_SIGNATURE) == 0 ||
+		    smb_sign_check_request(sr) != 0) {
 			smbsr_error(sr, NT_STATUS_ACCESS_DENIED,
 			    ERRDOS, ERROR_ACCESS_DENIED);
 			disconnect = B_TRUE;
@@ -973,6 +970,8 @@ static const struct {
 	{ EROFS,	ERRHRD, ERRnowrite, NT_STATUS_ACCESS_DENIED },
 	{ ESTALE,	ERRDOS, ERRbadfid, NT_STATUS_INVALID_HANDLE },
 	{ EBADF,	ERRDOS, ERRbadfid, NT_STATUS_INVALID_HANDLE },
+	{ ENOTSOCK,	ERRDOS, ERRbadfid, NT_STATUS_INVALID_HANDLE },
+	{ EPIPE,	ERRDOS, ERROR_BROKEN_PIPE, NT_STATUS_PIPE_BROKEN },
 	{ EEXIST,	ERRDOS, ERRfilexists, NT_STATUS_OBJECT_NAME_COLLISION },
 	{ ENXIO,	ERRSRV, ERRinvdevice, NT_STATUS_BAD_DEVICE_TYPE },
 	{ ESRCH,	ERRDOS, ERROR_FILE_NOT_FOUND,

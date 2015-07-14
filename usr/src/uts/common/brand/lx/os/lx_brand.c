@@ -170,6 +170,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <lx_signum.h>
+#include <util/sscanf.h>
 
 int	lx_debug = 0;
 
@@ -195,6 +196,8 @@ extern int lx_sched_affinity(int, uintptr_t, int, uintptr_t, int64_t *);
 
 extern void lx_ioctl_init();
 extern void lx_ioctl_fini();
+extern void lx_socket_init();
+extern void lx_socket_fini();
 
 lx_systrace_f *lx_systrace_entry_ptr;
 lx_systrace_f *lx_systrace_return_ptr;
@@ -252,12 +255,11 @@ struct brand_ops lx_brops = {
 	lx_elfexec,			/* b_elfexec */
 	NULL,				/* b_sigset_native_to_brand */
 	NULL,				/* b_sigset_brand_to_native */
-	NULL,				/* b_psig_to_proc */
+	lx_sigfd_translate,		/* b_sigfd_translate */
 	NSIG,				/* b_nsig */
 	lx_exit_with_sig,		/* b_exit_with_sig */
 	lx_wait_filter,			/* b_wait_filter */
 	lx_native_exec,			/* b_native_exec */
-	NULL,				/* b_ptrace_exectrap */
 	lx_map32limit,			/* b_map32limit */
 	lx_stop_notify,			/* b_stop_notify */
 	lx_waitid_helper,		/* b_waitid_helper */
@@ -308,8 +310,31 @@ static struct modlinkage modlinkage = {
 void
 lx_proc_exit(proc_t *p)
 {
-	VERIFY(p->p_brand == &lx_brand);
-	VERIFY(p->p_brand_data != NULL);
+	lx_proc_data_t *lxpd;
+	proc_t *cp;
+
+	mutex_enter(&p->p_lock);
+	VERIFY(lxpd = ptolxproc(p));
+	if ((lxpd->l_flags & LX_PROC_CHILD_DEATHSIG) == 0) {
+		mutex_exit(&p->p_lock);
+		return;
+	}
+	mutex_exit(&p->p_lock);
+
+	/* Check for children which desire notification of parental death. */
+	mutex_enter(&pidlock);
+	for (cp = p->p_child; cp != NULL; cp = cp->p_sibling) {
+		mutex_enter(&cp->p_lock);
+		if ((lxpd = ptolxproc(cp)) == NULL) {
+			mutex_exit(&cp->p_lock);
+			continue;
+		}
+		if (lxpd->l_parent_deathsig != 0) {
+			sigtoproc(p, NULL, lxpd->l_parent_deathsig);
+		}
+		mutex_exit(&cp->p_lock);
+	}
+	mutex_exit(&pidlock);
 }
 
 void
@@ -877,7 +902,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		    (void *)&lx_brand, (void *)reg.lxbr_handler, (void *)p);
 		pd = p->p_brand_data;
 		pd->l_handler = (uintptr_t)reg.lxbr_handler;
-		pd->l_flags = reg.lxbr_flags;
+		pd->l_flags = reg.lxbr_flags & LX_PROC_ALL;
 
 		return (0);
 
@@ -1288,6 +1313,34 @@ lx_set_kern_version(zone_t *zone, char *vers)
 	lx_zone_data_t *lxzd = (lx_zone_data_t *)zone->zone_brand_data;
 
 	(void) strlcpy(lxzd->lxzd_kernel_version, vers, LX_VERS_MAX);
+}
+
+/*
+ * Compare linux kernel version to the one set for the zone.
+ * Returns greater than 0 if zone version is higher, less than 0 if the zone
+ * version is lower, and 0 if the version are equal.
+ */
+int
+lx_kern_version_cmp(zone_t *zone, const char *vers)
+{
+	int zvers[3] = {0, 0, 0};
+	int cvers[3] = {0, 0, 0};
+	int i;
+
+	VERIFY(zone->zone_brand == &lx_brand);
+
+	(void) sscanf(ztolxzd(zone)->lxzd_kernel_version, "%d.%d.%d", &zvers[0],
+	    &zvers[1], &zvers[2]);
+	(void) sscanf(vers, "%d.%d.%d", &cvers[0], &cvers[1], &cvers[2]);
+
+	for (i = 0; i < 3; i++) {
+		if (zvers[i] > cvers[i]) {
+			return (1);
+		} else if (zvers[i] < cvers[i]) {
+			return (-1);
+		}
+	}
+	return (0);
 }
 
 /*
@@ -1796,17 +1849,11 @@ _init(void)
 	int err = 0;
 
 	lx_syscall_init();
-
-	/* pid/tid conversion hash tables */
 	lx_pid_init();
-
-	/* for lx_ioctl() */
 	lx_ioctl_init();
-
-	/* for lx_futex() */
 	lx_futex_init();
-
 	lx_ptrace_init();
+	lx_socket_init();
 
 	err = mod_install(&modlinkage);
 	if (err != 0) {
@@ -1849,9 +1896,11 @@ _fini(void)
 	lx_ptrace_fini();
 	lx_pid_fini();
 	lx_ioctl_fini();
+	lx_socket_fini();
 
-	if ((err = lx_futex_fini()) != 0)
+	if ((err = lx_futex_fini()) != 0) {
 		goto done;
+	}
 	futex_done = 1;
 
 	err = mod_remove(&modlinkage);
@@ -1862,11 +1911,14 @@ done:
 		 * If we can't unload the module, then we have to get it
 		 * back into a sane state.
 		 */
+		lx_ptrace_init();
 		lx_pid_init();
+		lx_ioctl_init();
+		lx_socket_init();
 
-		if (futex_done)
+		if (futex_done) {
 			lx_futex_init();
-
+		}
 	}
 
 	return (err);

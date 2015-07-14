@@ -20,6 +20,7 @@
 extern "C" {
 #endif
 
+#include <sys/siginfo.h>
 #include <sys/lx_brand.h>
 
 #ifdef _KERNEL
@@ -42,6 +43,11 @@ extern greg_t lx_fixsegreg(greg_t, model_t);
 extern uintptr_t lx_fsbase(klwp_t *, uintptr_t);
 extern void lx_exit_with_sig(proc_t *, sigqueue_t *);
 extern boolean_t lx_wait_filter(proc_t *, proc_t *);
+extern void lx_sigfd_translate(k_siginfo_t *);
+extern int stol_ksiginfo_copyout(k_siginfo_t *, void *);
+#if defined(_SYSCALL32_IMPL)
+extern int stol_ksiginfo32_copyout(k_siginfo_t *, void *);
+#endif
 
 typedef enum lx_if_action {
 	LX_IF_FROMNATIVE,
@@ -71,7 +77,7 @@ extern int lx_ptrace_stop_for_option(int, boolean_t, ulong_t, uintptr_t);
 extern int lx_ptrace_set_clone_inherit(int, boolean_t);
 extern int lx_sigcld_repost(proc_t *, sigqueue_t *);
 extern int lx_ptrace_issig_stop(proc_t *, klwp_t *);
-extern boolean_t lx_ptrace_sig_ignorable(proc_t *, int);
+extern boolean_t lx_ptrace_sig_ignorable(proc_t *, klwp_t *, int);
 
 extern int lx_helper_clone(int64_t *, int, void *, void *, void *);
 extern int lx_helper_setgroups(int, gid_t *);

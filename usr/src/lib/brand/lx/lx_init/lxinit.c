@@ -27,7 +27,7 @@
  * lxinit performs zone-specific initialization prior to handing control to the
  * guest Linux init.  This primarily consists of:
  *
- * - Starting ipmgmtd chrooted into /native
+ * - Starting ipmgmtd
  * - Configuring network interfaces
  * - Adding a default route
  */
@@ -53,6 +53,7 @@
 #include <unistd.h>
 #include <libintl.h>
 #include <locale.h>
+#include <libcmdutils.h>
 
 #include <arpa/inet.h>
 #include <net/route.h>
@@ -61,11 +62,12 @@
 #include <libinetutil.h>
 #include <sys/lx_brand.h>
 
+#include "run_command.h"
+
 static void lxi_err(char *msg, ...) __NORETURN;
 static void lxi_err(char *msg, ...);
 
-#define	CHROOT_NAME	"lx_init-chroot"
-#define	CHROOT_PREFIX	"/native"
+#define	IPMGMTD_PATH	"/lib/inet/ipmgmtd"
 
 #define	PREFIX_LOG_WARN	"lx_init warn: "
 #define	PREFIX_LOG_ERR	"lx_init err: "
@@ -199,13 +201,11 @@ lxi_net_ipmgmtd_start()
 {
 	pid_t pid;
 	int status;
-	char *cmd[] = {
-		"/lib/inet/ipmgmtd",
+	char *const argv[] = {
 		"ipmgmtd",
 		NULL
 	};
-	char *env[] = {
-		/* ipmgmtd thinks SMF is awesome */
+	char *const envp[] = {
 		"SMF_FMRI=svc:/network/ip-interface-management:default",
 		NULL
 	};
@@ -217,10 +217,19 @@ lxi_net_ipmgmtd_start()
 
 	if (pid == 0) {
 		/* child */
-		execve(cmd[0], cmd + 1, env);
+		const char *zroot = zone_get_nroot();
+		char cmd[MAXPATHLEN];
 
-		lxi_err("execve(%s) failed: %s", cmd[0],
-		    strerror(errno));
+		/*
+		 * Construct the full path to ipmgmtd, including the native
+		 * system root (e.g. "/native") if in use for this zone:
+		 */
+		(void) snprintf(cmd, sizeof (cmd), "%s%s", zroot != NULL ?
+		    zroot : "", IPMGMTD_PATH);
+
+		execve(cmd, argv, envp);
+
+		lxi_err("execve(%s) failed: %s", cmd, strerror(errno));
 		/* NOTREACHED */
 	}
 
@@ -361,7 +370,8 @@ lxi_iface_ipv6(const char *iface)
 }
 
 static int
-lxi_iface_gateway(const char *iface, const char *gwaddr)
+lxi_iface_gateway(const char *iface, const char *dst, int dstpfx,
+    const char *gwaddr)
 {
 	int idx, len, sockfd;
 	char rtbuf[RTMBUFSZ];
@@ -379,22 +389,38 @@ lxi_iface_gateway(const char *iface, const char *gwaddr)
 	rtm->rtm_type = RTM_ADD;
 	rtm->rtm_version = RTM_VERSION;
 
-	/* The destination and netmask components have already been zeroed */
+
+	/*
+	 * The destination and netmask components have already been zeroed,
+	 * which represents the default gateway.  If we were passed a more
+	 * specific destination network, use that instead.
+	 */
 	dst_sin->sin_family = AF_INET;
 	netmask_sin->sin_family = AF_INET;
+	if (dst != NULL) {
+		struct sockaddr *mask = (struct sockaddr *)netmask_sin;
 
-	dst_sin->sin_family = AF_INET;
+		if ((inet_pton(AF_INET, dst, &(dst_sin->sin_addr))) != 1 ||
+		    plen2mask(dstpfx, AF_INET, mask) != 0) {
+			lxi_warn("bad destination network %s/%d: %s", dst,
+			    dstpfx, strerror(errno));
+			return (-1);
+		}
+	}
+
 	if ((inet_pton(AF_INET, gwaddr, &(gw_sin->sin_addr))) != 1) {
 		lxi_warn("bad gateway %s: %s", gwaddr, strerror(errno));
 		return (-1);
 	}
 
-	if ((idx = if_nametoindex(iface)) == 0) {
-		lxi_warn("unable to get interface index for %s: %s\n",
-		    iface, strerror(errno));
-		return (-1);
+	if (iface != NULL) {
+		if ((idx = if_nametoindex(iface)) == 0) {
+			lxi_warn("unable to get interface index for %s: %s\n",
+			    iface, strerror(errno));
+			return (-1);
+		}
+		rtm->rtm_index = idx;
 	}
-	rtm->rtm_index = idx;
 
 	if ((sockfd = socket(PF_ROUTE, SOCK_RAW, AF_INET)) < 0) {
 		lxi_warn("socket(PF_ROUTE): %s\n", strerror(errno));
@@ -452,10 +478,123 @@ lxi_net_setup(zone_dochandle_t handle)
 		if (zone_find_attr(attrs, "primary", &primary) == 0 &&
 		    strncmp(primary, "true", MAXNAMELEN) == 0 &&
 		    zone_find_attr(attrs, "gateway", &gateway) == 0) {
-			lxi_iface_gateway(iface, gateway);
+			lxi_iface_gateway(iface, NULL, 0, gateway);
 		}
 	}
 	(void) zonecfg_endnwifent(handle);
+}
+
+static void
+lxi_net_static_route(const char *line)
+{
+	/*
+	 * Each static route line is a string of the form:
+	 *
+	 *	"10.77.77.2|10.1.1.0/24|false"
+	 *
+	 * i.e. gateway address, destination network, and whether this is
+	 * a "link local" route or a next hop route.
+	 */
+	custr_t *cu = NULL;
+	char *gw = NULL, *dst = NULL;
+	int pfx = -1;
+	int i;
+
+	if (custr_alloc(&cu) != 0) {
+		lxi_err("custr_alloc failure");
+	}
+
+	for (i = 0; line[i] != '\0'; i++) {
+		if (gw == NULL) {
+			if (line[i] == '|') {
+				if ((gw = strdup(custr_cstr(cu))) == NULL) {
+					lxi_err("strdup failure");
+				}
+				custr_reset(cu);
+			} else {
+				if (custr_appendc(cu, line[i]) != 0) {
+					lxi_err("custr_appendc failure");
+				}
+			}
+			continue;
+		}
+
+		if (dst == NULL) {
+			if (line[i] == '/') {
+				if ((dst = strdup(custr_cstr(cu))) == NULL) {
+					lxi_err("strdup failure");
+				}
+				custr_reset(cu);
+			} else {
+				if (custr_appendc(cu, line[i]) != 0) {
+					lxi_err("custr_appendc failure");
+				}
+			}
+			continue;
+		}
+
+		if (pfx == -1) {
+			if (line[i] == '|') {
+				pfx = atoi(custr_cstr(cu));
+				custr_reset(cu);
+			} else {
+				if (custr_appendc(cu, line[i]) != 0) {
+					lxi_err("custr_appendc failure");
+				}
+			}
+			continue;
+		}
+
+		if (custr_appendc(cu, line[i]) != 0) {
+			lxi_err("custr_appendc failure");
+		}
+	}
+
+	/*
+	 * We currently only support "next hop" routes, so ensure that
+	 * "linklocal" is false:
+	 */
+	if (strcmp(custr_cstr(cu), "false") != 0) {
+		lxi_warn("invalid static route: %s", line);
+	}
+
+	if (lxi_iface_gateway(NULL, dst, pfx, gw) != 0) {
+		lxi_err("failed to add route: %s/%d -> %s", dst, pfx, gw);
+	}
+
+	custr_free(cu);
+	free(gw);
+	free(dst);
+}
+
+static void
+lxi_net_static_routes(void)
+{
+	const char *cmd = "/native/usr/lib/brand/lx/routeinfo";
+	char *const argv[] = { "routeinfo", NULL };
+	char *const envp[] = { NULL };
+	int code;
+	struct stat st;
+	char errbuf[512];
+
+	if (stat(cmd, &st) != 0 || !S_ISREG(st.st_mode)) {
+		/*
+		 * This binary is (potentially) shipped from another
+		 * consolidation.  If it does not exist, then the platform does
+		 * not currently support static routes for LX-branded zones.
+		 */
+		return;
+	}
+
+	/*
+	 * Run the command, firing the callback for each line that it
+	 * outputs.  When this function returns, static route processing
+	 * is complete.
+	 */
+	if (run_command(cmd, argv, envp, errbuf, sizeof (errbuf),
+	    lxi_net_static_route, &code) != 0 || code != 0) {
+		lxi_err("failed to run \"%s\": %s", cmd, errbuf);
+	}
 }
 
 static void
@@ -467,8 +606,10 @@ lxi_config_close(zone_dochandle_t handle)
 static void
 lxi_init_exec()
 {
-	char *cmd[] = {"/sbin/init", "init", NULL};
-	char *env[] = {"container=zone", NULL};
+	const char *cmd = "/sbin/init";
+	char *const argv[] = { "init", NULL };
+	char *const envp[] = { "container=zone", NULL };
+	int e;
 
 	/*
 	 * systemd uses the 'container' env var to determine it is running
@@ -476,74 +617,41 @@ lxi_init_exec()
 	 * treats anything else as 'other' but this is enough to make it
 	 * behave better inside a zone. See 'detect_container' in systemd.
 	 */
-	execve(cmd[0], cmd + 1, env);
+	execve(cmd, argv, envp);
+	e = errno;
 
 	/*
 	 * Because stdout was closed prior to exec, it must be opened again in
 	 * the face of failure to log the error.
 	 */
 	lxi_log_open();
-	lxi_err("exec(%s) failed: %s", cmd[0], strerror(errno));
+	lxi_err("execve(%s) failed: %s", cmd, strerror(e));
 }
 
+/*ARGSUSED*/
 int
 main(int argc, char *argv[])
 {
 	zone_dochandle_t handle;
-	pid_t pid;
-	int status = 0;
-
-	if (strcmp(argv[0], CHROOT_NAME) == 0) {
-		/* we've been forked/chrooted, run setup */
-		lxi_net_ipmgmtd_start();
-		lxi_net_ipadm_open();
-
-		handle = lxi_config_open();
-		lxi_net_loopback();
-		lxi_net_setup(handle);
-		lxi_config_close(handle);
-
-		lxi_net_ipadm_close();
-		/* failures will bail before now */
-		exit(0);
-	}
 
 	lxi_log_open();
 
-	/* The config stuff needs to be chrooted to /native */
-	pid = fork();
-	if (pid < 0) {
-		lxi_err("fork() failed: %s"), strerror(errno);
-	} else if (pid == 0) {
-		const char *execname;
-		char *args[] = {
-			CHROOT_NAME, NULL
-		};
+	lxi_net_ipmgmtd_start();
+	lxi_net_ipadm_open();
 
-		if ((execname = getexecname()) == NULL) {
-			lxi_err("getexecname() failed: %s",
-			    strerror(errno));
-		}
-		execname += strlen(CHROOT_PREFIX);
+	handle = lxi_config_open();
+	lxi_net_loopback();
+	lxi_net_setup(handle);
+	lxi_config_close(handle);
 
-		if (chroot(CHROOT_PREFIX) != 0) {
-			lxi_err("chroot() failed: %s",
-			    strerror(errno));
-		}
-		execv(execname, args);
-		exit(1);
-	} else {
-		/* parent */
-		while (wait(&status) != pid) {
-			/* EMPTY */;
-		}
-		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-			lxi_err("configuration error %d", status);
-		}
-	}
+	lxi_net_static_routes();
+
+	lxi_net_ipadm_close();
 
 	lxi_log_close();
+
 	lxi_init_exec();
+
 	/* NOTREACHED */
 	return (0);
 }

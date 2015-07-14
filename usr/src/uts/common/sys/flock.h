@@ -28,7 +28,7 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2015 Joyent, Inc.
  */
 
@@ -205,7 +205,7 @@ typedef enum {
     FLK_LOCKMGR_DOWN
 } flk_lockmgr_status_t;
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * The following structure is used to hold a list of locks returned
@@ -225,8 +225,10 @@ typedef struct locklist {
 #define	FLK_QUERY_ACTIVE	0x1
 #define	FLK_QUERY_SLEEPING	0x2
 
+#if defined(_KERNEL)
 int	ofdlock(file_t *, int, struct flock64 *, int, u_offset_t);
 void	ofdcleanlock(file_t *);
+#endif
 int	reclock(struct vnode *, struct flock64 *, int, int, u_offset_t,
 		flk_callback_t *);
 int	chklock(struct vnode *, int, u_offset_t, ssize_t, int,

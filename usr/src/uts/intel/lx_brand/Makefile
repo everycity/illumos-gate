@@ -21,7 +21,7 @@
 #
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-# Copyright 2014 Joyent, Inc.  All rights reserved.
+# Copyright 2015 Joyent, Inc.
 #
 #	This makefile drives the production of the kernel component of
 #	the lx brand
@@ -57,7 +57,9 @@ ALL_TARGET	= $(BINARY)
 LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
-INC_PATH	+= -I$(UTSBASE)/common/brand/lx -I$(LX_CMN)
+INC_PATH	+= -I$(UTSBASE)/common/brand/lx -I$(LX_CMN) -I$(SRC)/common
+INC_PATH	+= -I$(UTSBASE)/common/inet/sockmods -I$(UTSBASE)/common/io/bpf
+INC_PATH	+= -I$(UTSBASE)/common/fs/sockfs
 AS_INC_PATH	+= -I$(UTSBASE)/i86pc/genassym/$(OBJS_DIR)
 
 #
@@ -65,7 +67,7 @@ AS_INC_PATH	+= -I$(UTSBASE)/i86pc/genassym/$(OBJS_DIR)
 #
 CFLAGS		+= $(CCVERBOSE)
 
-LDFLAGS		+= -dy -Nexec/elfexec -Nfs/fifofs
+LDFLAGS		+= -dy -Nexec/elfexec -Nfs/fifofs -Nfs/sockfs
 
 #
 # For now, disable these lint checks; maintainers should endeavor

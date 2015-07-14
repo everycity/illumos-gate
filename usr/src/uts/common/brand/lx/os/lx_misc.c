@@ -37,7 +37,9 @@
 #include <sys/brand.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_misc.h>
+#include <sys/lx_siginfo.h>
 #include <sys/lx_futex.h>
+#include <lx_errno.h>
 #include <sys/cmn_err.h>
 #include <sys/siginfo.h>
 #include <sys/contract/process_impl.h>
@@ -146,7 +148,7 @@ lx_cleanlwp(klwp_t *lwp, proc_t *p)
 	VERIFY(lwpd != NULL);
 
 	mutex_enter(&p->p_lock);
-	if ((lwpd->br_ptrace_flags & LX_PTRACE_EXITING) == 0) {
+	if ((lwpd->br_ptrace_flags & LX_PTF_EXITING) == 0) {
 		lx_ptrace_exit(p, lwp);
 	}
 
@@ -260,8 +262,22 @@ lx_freelwp(klwp_t *lwp)
 	struct lx_lwp_data *lwpd = lwptolxlwp(lwp);
 	proc_t *p = lwptoproc(lwp);
 
-	VERIFY(lwpd != NULL);
 	VERIFY(MUTEX_NOT_HELD(&p->p_lock));
+
+	if (lwpd == NULL) {
+		/*
+		 * There is one case where an LX branded process will possess
+		 * LWPs which lack their own brand data.  During the course of
+		 * executing native binary, the process will be preemptively
+		 * branded to allow hooks such as b_native_exec to function.
+		 * If that process possesses multiple LWPS, they will _not_ be
+		 * branded since they will exit if the exec succeeds.  It's
+		 * during this LWP exit that lx_freelwp would be called on an
+		 * unbranded LWP.  When that is the case, it is acceptable to
+		 * bypass the hook.
+		 */
+		return;
+	}
 
 	/*
 	 * It is possible for the lx_freelwp hook to be called without a prior
@@ -430,9 +446,11 @@ lx_initlwp(klwp_t *lwp, void *lwpbd)
 	/*
 	 * If the parent LWP has a ptrace(2) tracer, the new LWP may
 	 * need to inherit that same tracer.
+	 * In addition the new LPW inherits the parent LWP cgroup ID.
 	 */
 	if (plwpd != NULL) {
 		lx_ptrace_inherit_tracer(plwpd, lwpd);
+		lwpd->br_cgroupid = plwpd->br_cgroupid;
 	}
 }
 
@@ -782,3 +800,122 @@ lx_stol_hwaddr(const struct sockaddr_dl *src, struct sockaddr *dst, int *size)
 	bcopy(LLADDR(src), dst->sa_data, copy_size);
 	*size = copy_size;
 }
+
+/*
+ * Brand hook to convert native kernel siginfo signal number, errno, code, pid
+ * and si_status to Linux values. Similar to the stol_ksiginfo function but
+ * this one converts in-place, converts the pid, and does not copyout.
+ */
+void
+lx_sigfd_translate(k_siginfo_t *infop)
+{
+	infop->si_signo = lx_stol_signo(infop->si_signo, LX_SIGKILL);
+
+	infop->si_status = lx_stol_status(infop->si_status, LX_SIGKILL);
+
+	infop->si_code = lx_stol_sigcode(infop->si_code);
+
+	infop->si_errno = lx_errno(infop->si_errno, EINVAL);
+
+	if (infop->si_pid == curproc->p_zone->zone_proc_initpid) {
+		infop->si_pid = 1;
+	} else if (infop->si_pid == curproc->p_zone->zone_zsched->p_pid) {
+		infop->si_pid = 0;
+	}
+}
+
+int
+stol_ksiginfo_copyout(k_siginfo_t *sip, void *ulxsip)
+{
+	lx_siginfo_t lsi;
+
+	bzero(&lsi, sizeof (lsi));
+	lsi.lsi_signo = lx_stol_signo(sip->si_signo, SIGCLD);
+	lsi.lsi_code = lx_stol_sigcode(sip->si_code);
+	lsi.lsi_errno = lx_errno(sip->si_errno, EINVAL);
+
+	switch (lsi.lsi_signo) {
+	case LX_SIGPOLL:
+		lsi.lsi_band = sip->si_band;
+		lsi.lsi_fd = sip->si_fd;
+		break;
+
+	case LX_SIGCHLD:
+		lsi.lsi_pid = sip->si_pid;
+		if (sip->si_code <= 0 || sip->si_code == CLD_EXITED) {
+			lsi.lsi_status = sip->si_status;
+		} else {
+			lsi.lsi_status = lx_stol_status(sip->si_status,
+			    SIGKILL);
+		}
+		lsi.lsi_utime = sip->si_utime;
+		lsi.lsi_stime = sip->si_stime;
+		break;
+
+	case LX_SIGILL:
+	case LX_SIGBUS:
+	case LX_SIGFPE:
+	case LX_SIGSEGV:
+		lsi.lsi_addr = sip->si_addr;
+		break;
+
+	default:
+		lsi.lsi_pid = sip->si_pid;
+		lsi.lsi_uid = LX_UID32_TO_UID16(sip->si_uid);
+	}
+
+	if (copyout(&lsi, ulxsip, sizeof (lsi)) != 0) {
+		return (set_errno(EFAULT));
+	}
+
+	return (0);
+}
+
+#if defined(_SYSCALL32_IMPL)
+int
+stol_ksiginfo32_copyout(k_siginfo_t *sip, void *ulxsip)
+{
+	lx_siginfo32_t lsi;
+
+	bzero(&lsi, sizeof (lsi));
+	lsi.lsi_signo = lx_stol_signo(sip->si_signo, SIGCLD);
+	lsi.lsi_code = lx_stol_sigcode(sip->si_code);
+	lsi.lsi_errno = lx_errno(sip->si_errno, EINVAL);
+
+	switch (lsi.lsi_signo) {
+	case LX_SIGPOLL:
+		lsi.lsi_band = sip->si_band;
+		lsi.lsi_fd = sip->si_fd;
+		break;
+
+	case LX_SIGCHLD:
+		lsi.lsi_pid = sip->si_pid;
+		if (sip->si_code <= 0 || sip->si_code == CLD_EXITED) {
+			lsi.lsi_status = sip->si_status;
+		} else {
+			lsi.lsi_status = lx_stol_status(sip->si_status,
+			    SIGKILL);
+		}
+		lsi.lsi_utime = sip->si_utime;
+		lsi.lsi_stime = sip->si_stime;
+		break;
+
+	case LX_SIGILL:
+	case LX_SIGBUS:
+	case LX_SIGFPE:
+	case LX_SIGSEGV:
+		lsi.lsi_addr = (caddr32_t)(uintptr_t)sip->si_addr;
+		break;
+
+	default:
+		lsi.lsi_pid = sip->si_pid;
+		lsi.lsi_uid = LX_UID32_TO_UID16(sip->si_uid);
+	}
+
+	if (copyout(&lsi, ulxsip, sizeof (lsi)) != 0) {
+		return (set_errno(EFAULT));
+	}
+
+	return (0);
+}
+#endif

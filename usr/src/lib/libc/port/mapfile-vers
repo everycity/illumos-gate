@@ -2921,6 +2921,8 @@ $endif
 	msgctl64;
 	__multi_innetgr;
 	_mutex_destroy		{ FLAGS = NODYNSORT };
+	mutex_enter;
+	mutex_exit;
 	mutex_held;
 	_mutex_init		{ FLAGS = NODYNSORT };
 	_mutex_unlock		{ FLAGS = NODYNSORT };
@@ -3001,6 +3003,7 @@ $endif
 	_so_shutdown;
 	_so_socket;
 	_so_socketpair;
+	signalfd;
 	str2group;
 	str2passwd;
 	str2spwd;
