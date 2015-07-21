@@ -916,7 +916,7 @@ ndmpd_zfs_restore_recv_write(ndmpd_zfs_args_t *ndmpd_zfs_args)
 		flags.force = B_TRUE;
 
 	err = zfs_receive(ndmpd_zfs_args->nz_zlibh, ndmpd_zfs_args->nz_dataset,
-	    &flags, ndmpd_zfs_args->nz_pipe_fd[PIPE_ZFS], NULL, NULL, NULL);
+	    &flags, ndmpd_zfs_args->nz_pipe_fd[PIPE_ZFS], NULL);
 
 	if (err && !session->ns_data.dd_abort)
 		NDMPD_ZFS_LOG_ZERR(ndmpd_zfs_args, "zfs_receive: %d", err);

@@ -21,7 +21,6 @@
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
-# Copyright 2014 RackTop Systems.
 #
 
 LIBRARY= libzfs.a
@@ -75,6 +74,8 @@ CPPFLAGS +=	$(INCS) -D_LARGEFILE64_SOURCE=1 -D_REENTRANT
 
 CERRWARN +=	-_gcc=-Wno-switch
 CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-unused-function
 
 SRCS=	$(OBJS_COMMON:%.o=$(SRCDIR)/%.c)	\
 	$(OBJS_SHARED:%.o=$(SRC)/common/zfs/%.c)
