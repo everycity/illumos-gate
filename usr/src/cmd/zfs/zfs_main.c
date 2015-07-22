@@ -246,10 +246,10 @@ get_usage(zfs_help_t idx)
 	case HELP_PROMOTE:
 		return (gettext("\tpromote <clone-filesystem>\n"));
 	case HELP_RECEIVE:
-		return (gettext("\treceive [-vnFu] <filesystem|volume|"
-		    "snapshot>\n"
-		    "\treceive [-vnFu] [-o origin=<snapshot>] [-d | -e] "
-		    "<filesystem>\n"));
+		return (gettext("\treceive [-vnFu] ... [-x <property>] "
+		    "<filesystem|volume|snapshot>\n"
+		    "\treceive [-vnFu] [-o origin=<snapshot>] [-x <property>] "
+		    "[-d | -e] <filesystem>\n"));
 	case HELP_RENAME:
 		return (gettext("\trename [-f] <filesystem|volume|snapshot> "
 		    "<filesystem|volume|snapshot>\n"
@@ -476,6 +476,19 @@ usage(boolean_t requested)
 	}
 
 	exit(requested ? 0 : 2);
+}
+
+static int
+parsepropname(nvlist_t *props, char *propname)
+{
+	if (nvlist_lookup_string(props, propname, NULL) == 0) {
+		(void) fprintf(stderr, gettext("property '%s' "
+		    "specified multiple times\n"), propname);
+		return (-1);
+	}
+	if (nvlist_add_boolean(props, propname))
+		nomem();
+	return (0);
 }
 
 /*
@@ -3950,8 +3963,20 @@ zfs_do_receive(int argc, char **argv)
 			flags.isprefix = B_TRUE;
 			flags.istail = B_TRUE;
 			break;
+		case 'l':
+			if (parsepropname(limitds, optarg)) {
+				err = 1;
+				goto recverror;
+			}
+			break;
 		case 'n':
 			flags.dryrun = B_TRUE;
+			break;
+		case 'o':
+			if (parseprop(props, optarg)) {
+				err = 1;
+				goto recverror;
+			}
 			break;
 		case 'u':
 			flags.nomount = B_TRUE;
@@ -3959,6 +3984,11 @@ zfs_do_receive(int argc, char **argv)
 		case 'v':
 			flags.verbose = B_TRUE;
 			break;
+		case 'x':
+			if (parsepropname(props, optarg)) {
+				err = 1;
+				goto recverror;
+			}
 		case 'F':
 			flags.force = B_TRUE;
 			break;
