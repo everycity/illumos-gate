@@ -44,6 +44,7 @@
 #include <sys/vmsystm.h>
 #include <sys/limits.h>
 #include <sys/fcntl.h>
+#include <sys/sysmacros.h>
 #include <netpacket/packet.h>
 #include <sockcommon.h>
 #include <socktpi_impl.h>
@@ -85,28 +86,84 @@ typedef enum lx_xlate_dir {
  * and Unix networking even more so.
  */
 static const int ltos_family[LX_AF_MAX + 1] =  {
-	AF_UNSPEC, AF_UNIX, AF_INET, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_INET6, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_LX_NETLINK,
-	AF_PACKET, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED
+	AF_UNSPEC,		/* LX_AF_UNSPEC		*/
+	AF_UNIX,		/* LX_AF_UNIX		*/
+	AF_INET,		/* LX_AF_INET		*/
+	AF_NOTSUPPORTED,	/* LX_AF_AX25		*/
+	AF_NOTSUPPORTED,	/* LX_AF_IPX		*/
+	AF_NOTSUPPORTED,	/* LX_AF_APPLETALK	*/
+	AF_NOTSUPPORTED,	/* LX_AF_NETROM		*/
+	AF_NOTSUPPORTED,	/* LX_AF_BRIDGE		*/
+	AF_NOTSUPPORTED,	/* LX_AF_ATMPVC		*/
+	AF_NOTSUPPORTED,	/* LX_AF_X25		*/
+	AF_INET6,		/* LX_AF_INET6		*/
+	AF_NOTSUPPORTED,	/* LX_AF_ROSE		*/
+	AF_NOTSUPPORTED,	/* LX_AF_DECNET		*/
+	AF_NOTSUPPORTED,	/* LX_AF_NETBEUI	*/
+	AF_NOTSUPPORTED,	/* LX_AF_SECURITY	*/
+	AF_NOTSUPPORTED,	/* LX_AF_KEY		*/
+	AF_LX_NETLINK,		/* LX_AF_NETLINK	*/
+	AF_PACKET,		/* LX_AF_PACKET		*/
+	AF_NOTSUPPORTED,	/* LX_AF_ASH		*/
+	AF_NOTSUPPORTED,	/* LX_AF_ECONET		*/
+	AF_NOTSUPPORTED,	/* LX_AF_ATMSVC		*/
+	AF_NOTSUPPORTED,	/* LX_AF_RDS		*/
+	AF_NOTSUPPORTED,	/* LX_AF_SNA		*/
+	AF_NOTSUPPORTED,	/* LX_AF_IRDA		*/
+	AF_NOTSUPPORTED,	/* LX_AF_PPOX		*/
+	AF_NOTSUPPORTED,	/* LX_AF_WANPIPE	*/
+	AF_NOTSUPPORTED,	/* LX_AF_LLC		*/
+	AF_NOTSUPPORTED,	/* EMPTY		*/
+	AF_NOTSUPPORTED,	/* EMPTY		*/
+	AF_NOTSUPPORTED,	/* LX_AF_CAN		*/
+	AF_NOTSUPPORTED,	/* LX_AF_TIPC		*/
+	AF_NOTSUPPORTED,	/* LX_AF_BLUETOOTH	*/
+	AF_NOTSUPPORTED,	/* LX_AF_IUCV		*/
+	AF_NOTSUPPORTED		/* LX_AF_RXRPC		*/
+				/* LX_AF_ISDN		*/
+				/* LX_AF_PHONET		*/
+				/* LX_AF_IEEE802154	*/
+				/* LX_AF_CAIF		*/
+				/* LX_AF_ALG		*/
+				/* LX_AF_NFC		*/
+				/* LX_AF_VSOCK		*/
 };
 
-#define	LX_AF_INET6	10
-#define	LX_AF_PACKET	17
-
 static const int stol_family[LX_AF_MAX + 1] =  {
-	AF_UNSPEC, AF_UNIX, AF_INET, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_LX_NETLINK,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, LX_AF_INET6, AF_NOTSUPPORTED, AF_NOTSUPPORTED,
-	AF_NOTSUPPORTED, AF_NOTSUPPORTED, AF_NOTSUPPORTED, LX_AF_PACKET
+	AF_UNSPEC,		/* AF_UNSPEC		*/
+	AF_UNIX,		/* AF_UNIX		*/
+	AF_INET,		/* AF_INET		*/
+	AF_NOTSUPPORTED,	/* AF_IMPLINK		*/
+	AF_NOTSUPPORTED,	/* AF_PUP		*/
+	AF_NOTSUPPORTED,	/* AF_CHAOS		*/
+	AF_NOTSUPPORTED,	/* AF_NS		*/
+	AF_NOTSUPPORTED,	/* AF_NBS		*/
+	AF_NOTSUPPORTED,	/* AF_ECMA		*/
+	AF_NOTSUPPORTED,	/* AF_DATAKIT		*/
+	AF_NOTSUPPORTED,	/* AF_CCITT		*/
+	AF_NOTSUPPORTED,	/* AF_SNA		*/
+	AF_NOTSUPPORTED,	/* AF_DECNET		*/
+	AF_NOTSUPPORTED,	/* AF_DLI		*/
+	AF_NOTSUPPORTED,	/* AF_LAT		*/
+	AF_NOTSUPPORTED,	/* AF_HYLINK		*/
+	AF_NOTSUPPORTED,	/* AF_APPLETALK		*/
+	AF_NOTSUPPORTED,	/* AF_NIT		*/
+	AF_NOTSUPPORTED,	/* AF_802		*/
+	AF_NOTSUPPORTED,	/* AF_OSI		*/
+	AF_NOTSUPPORTED,	/* AF_X25		*/
+	AF_NOTSUPPORTED,	/* AF_OSINET		*/
+	AF_NOTSUPPORTED,	/* AF_GOSIP		*/
+	AF_NOTSUPPORTED,	/* AF_IPX		*/
+	AF_NOTSUPPORTED,	/* AF_ROUTE		*/
+	AF_NOTSUPPORTED,	/* AF_LINK		*/
+	LX_AF_INET6,		/* AF_INET6		*/
+	AF_NOTSUPPORTED,	/* AF_KEY		*/
+	AF_NOTSUPPORTED,	/* AF_NCA		*/
+	AF_NOTSUPPORTED,	/* AF_POLICY		*/
+	AF_NOTSUPPORTED,	/* AF_INET_OFFLOAD	*/
+	AF_NOTSUPPORTED,	/* AF_TRILL		*/
+	LX_AF_PACKET,		/* AF_PACKET		*/
+	LX_AF_NETLINK		/* AF_LX_NETLINK	*/
 };
 
 #define	LTOS_FAMILY(d) ((d) <= LX_AF_MAX ? ltos_family[(d)] : AF_INVAL)
@@ -119,9 +176,10 @@ static const int stol_family[LX_AF_MAX + 1] =  {
  * directory with .ABSK_ prefixed to their names.
  */
 #define	ABST_PRFX "/tmp/.ABSK_"
-#define	ABST_PRFX_LEN 11
+#define	ABST_PRFX_LEN (sizeof (ABST_PRFX) - 1)
 
 #define	LX_DEV_LOG			"/dev/log"
+#define	LX_DEV_LOG_LEN			(sizeof (LX_DEV_LOG) - 1)
 #define	LX_DEV_LOG_REDIRECT		"/var/run/.dev_log_redirect"
 
 typedef enum {
@@ -242,51 +300,112 @@ lx_xlate_sock_flags(int inflags, lx_xlate_dir_t dir)
 	return (outflags);
 }
 
-static void
-convert_abst_path(const struct sockaddr *inaddr, socklen_t len,
-    struct sockaddr *outaddr)
-{
-	int idx, odx;
-	struct sockaddr_un buf;
-
-	/*
-	 * len is the entire size of the sockaddr data structure, including the
-	 * sa_family, so we need to subtract this out.
-	 */
-	len -= sizeof (sa_family_t);
-
-	/* Add our abstract prefix */
-	(void) strcpy(buf.sun_path, ABST_PRFX);
-	for (idx = 1, odx = ABST_PRFX_LEN;
-	    idx < len && odx < sizeof (buf.sun_path); idx++, odx++) {
-		char c = inaddr->sa_data[idx];
-		if (c == '\0' || c == '/') {
-			buf.sun_path[odx] = '_';
-		} else {
-			buf.sun_path[odx] = c;
-		}
-	}
-
-	/*
-	 * Since abstract socket paths may not be NULL terminated, we must
-	 * explicitly NULL terminate our string. Don't overflow the buffer if
-	 * the path is exactly that size.
-	 */
-	if (odx == sizeof (buf.sun_path)) {
-		buf.sun_path[odx - 1] = '\0';
-	} else {
-		buf.sun_path[odx] = '\0';
-	}
-
-	(void) strcpy(outaddr->sa_data, buf.sun_path);
-}
-
 typedef enum lx_sun_type {
 	LX_SUN_NORMAL,
 	LX_SUN_ABSTRACT,
 	LX_SUN_DEVLOG
 } lx_sun_type_t;
 
+static void
+ltos_sockaddr_ux(const struct sockaddr *inaddr, const socklen_t inlen,
+    struct sockaddr **outaddr, socklen_t *outlen, lx_sun_type_t *sun_type)
+{
+	struct sockaddr_un buf;
+	/* Calculate size of (sun_family + any padding) in sockaddr */
+	int sizediff = (sizeof (buf) - sizeof (buf.sun_path));
+	int len = inlen - sizediff;
+
+	VERIFY(len > 0);
+	VERIFY(len <= sizeof (buf.sun_path));
+	bzero(&buf, sizeof(buf));
+
+	if (inaddr->sa_data[0] == '\0') {
+		/*
+		 * Linux supports abstract Unix sockets, which are simply
+		 * sockets that do not exist on the file system.  These sockets
+		 * are denoted by beginning the path with a NULL character. To
+		 * support these, we strip out the leading NULL character and
+		 * change the path to point to a real place in /tmp directory,
+		 * by prepending ABST_PRFX and replacing all illegal characters
+		 * with * '_'.
+		 *
+		 * Since these sockets are supposed to exist outside the
+		 * filesystem, they must be cleaned up after use.  This removal
+		 * is performed during bind().
+		 */
+		int idx, odx;
+
+		/* Add our abstract prefix */
+		(void) strcpy(buf.sun_path, ABST_PRFX);
+		for (idx = 1, odx = ABST_PRFX_LEN;
+		    idx < len && odx < sizeof (buf.sun_path);
+		    idx++, odx++) {
+			char c = inaddr->sa_data[idx];
+			if (c == '\0' || c == '/') {
+				buf.sun_path[odx] = '_';
+			} else {
+				buf.sun_path[odx] = c;
+			}
+		}
+
+		/*
+		 * Since abstract socket addresses might not be NUL terminated,
+		 * we must explicitly NUL terminate the translated path.
+		 * Care is taken not to overflow the buffer.
+		 */
+		if (odx == sizeof (buf.sun_path)) {
+			buf.sun_path[odx - 1] = '\0';
+		} else {
+			buf.sun_path[odx] = '\0';
+		}
+
+		if (sun_type != NULL) {
+			*sun_type = LX_SUN_ABSTRACT;
+		}
+	} else if (len > LX_DEV_LOG_LEN &&
+	    strcmp(inaddr->sa_data, LX_DEV_LOG) == 0) {
+		/*
+		 * In order to support /dev/log -- a Unix domain socket used
+		 * for logging that has had its path hard-coded far and wide --
+		 * we need to relocate the socket into a writable filesystem.
+		 *
+		 * Since this path should be reusable after being closed (but
+		 * not unlinked), it is implicitly cleaned up during bind().
+		 */
+
+		(void) strcpy(buf.sun_path, LX_DEV_LOG_REDIRECT);
+
+		if (sun_type != NULL) {
+			*sun_type = LX_SUN_DEVLOG;
+		}
+	} else {
+		/* Copy the address directly, minding termination */
+		(void) strncpy(buf.sun_path, inaddr->sa_data, len);
+		len = strnlen(buf.sun_path, len);
+		if (len == sizeof (buf.sun_path)) {
+			buf.sun_path[len - 1] = '\0';
+		} else {
+			VERIFY(len < sizeof (buf.sun_path));
+			buf.sun_path[len] = '\0';
+		}
+
+		if (sun_type != NULL) {
+			*sun_type = LX_SUN_NORMAL;
+		}
+	}
+	buf.sun_family = AF_UNIX;
+	*outlen = strlen(buf.sun_path) + 1 + sizediff;
+	VERIFY(*outlen <= sizeof (struct sockaddr_un));
+
+	*outaddr = kmem_alloc(*outlen, KM_SLEEP);
+	bcopy(&buf, *outaddr, *outlen);
+}
+
+/*
+ * Copy in a Linux-native socket address from userspace and convert it into
+ * illumos format.  When successful, it will allocate an appropriately sized
+ * struct to be freed by the caller.
+ */
 static long
 ltos_sockaddr_copyin(const struct sockaddr *inaddr, const socklen_t inlen,
     struct sockaddr **outaddr, socklen_t *outlen, lx_sun_type_t *sun_type)
@@ -324,63 +443,9 @@ ltos_sockaddr_copyin(const struct sockaddr *inaddr, const socklen_t inlen,
 				error = EINVAL;
 				break;
 			}
+			ltos_sockaddr_ux(laddr, inlen, outaddr, outlen,
+			    sun_type);
 
-			/*
-			 * Since the address may expand during translation,
-			 * allocate a full sockaddr_un structure for output.
-			 * Use of kmem_zalloc prevents garbage from appearing
-			 * in the output if the address is shorter than the
-			 * maximum.
-			 */
-			*outlen = sizeof (struct sockaddr_un);
-			*outaddr = kmem_zalloc(*outlen, KM_SLEEP);
-			(*outaddr)->sa_family = AF_UNIX;
-
-			if (strcmp(laddr->sa_data, LX_DEV_LOG) == 0) {
-				/*
-				 * In order to support /dev/log -- a Unix
-				 * domain socket used for logging that has had
-				 * its path hard-coded far and wide -- we need
-				 * to relocate the socket into a writable
-				 * filesystem.
-				 *
-				 * Since this path should be reusable after
-				 * being closed (but not unlinked), it is
-				 * implicitly cleaned up during bind().
-				 */
-				(void) strcpy((*outaddr)->sa_data,
-				    LX_DEV_LOG_REDIRECT);
-				if (sun_type != NULL) {
-					*sun_type = LX_SUN_DEVLOG;
-				}
-			} else if (laddr->sa_data[0] == '\0') {
-				/*
-				 * Linux supports abstract Unix sockets, which
-				 * are simply sockets that do not exist on the
-				 * file system.  These sockets are denoted by
-				 * beginning the path with a NULL character. To
-				 * support these, we strip out the leading NULL
-				 * character and change the path to point to a
-				 * real place in /tmp directory, by prepending
-				 * ABST_PRFX and replacing all illegal
-				 * characters with * '_'.
-				 *
-				 * Since these sockets are supposed to exist
-				 * outside the filesystem, they must be cleaned
-				 * up after use.  This removal is performed
-				 * during bind().
-				 */
-				convert_abst_path(laddr, inlen, *outaddr);
-				if (sun_type != NULL) {
-					*sun_type = LX_SUN_ABSTRACT;
-				}
-			} else {
-				bcopy(laddr->sa_data, (*outaddr)->sa_data,
-				    inlen - sizeof (sa_family_t));
-				if (sun_type != NULL) {
-					*sun_type = LX_SUN_NORMAL;
-				}
-			}
 			/* AF_UNIX bypasses the standard copy logic */
 			kmem_free(laddr, inlen);
 			return (0);
@@ -447,6 +512,10 @@ ltos_sockaddr_copyin(const struct sockaddr *inaddr, const socklen_t inlen,
 	return (error);
 }
 
+/*
+ * Convert an illumos-native socket address into Linux format and copy it out
+ * to userspace.
+ */
 static long
 stol_sockaddr_copyout(struct sockaddr *inaddr, socklen_t inlen,
     struct sockaddr *outaddr, socklen_t *outlen, socklen_t orig)
