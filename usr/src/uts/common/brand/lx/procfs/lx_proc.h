@@ -24,12 +24,13 @@
  * Copyright 2015 Joyent, Inc.
  */
 
+#ifndef	_LX_PROC_H
+#define	_LX_PROC_H
+
 #ifdef _LXPROC_NATIVE_H
 #error Attempted to include branded lx_proc.h after native lxproc.h
 #endif
 
-#ifndef	_LXPROC_H
-#define	_LXPROC_H
 #define	_LXPROC_BRANDED_H
 
 #ifdef	__cplusplus
@@ -107,6 +108,7 @@ extern "C" {
 typedef enum lxpr_nodetype {
 	LXPR_PROCDIR,		/* /proc		*/
 	LXPR_PIDDIR,		/* /proc/<pid>		*/
+	LXPR_PID_AUXV,		/* /proc/<pid>/auxv	*/
 	LXPR_PID_CGROUP,	/* /proc/<pid>/cgroup	*/
 	LXPR_PID_CMDLINE,	/* /proc/<pid>/cmdline	*/
 	LXPR_PID_COMM,		/* /proc/<pid>/comm	*/
@@ -127,6 +129,7 @@ typedef enum lxpr_nodetype {
 	LXPR_PID_TASK_IDDIR,	/* /proc/<pid>/task/<tid>		*/
 	LXPR_PID_FDDIR,		/* /proc/<pid>/fd	*/
 	LXPR_PID_FD_FD,		/* /proc/<pid>/fd/nn	*/
+	LXPR_PID_TID_AUXV,	/* /proc/<pid>/task/<tid>/auxv		*/
 	LXPR_PID_TID_CGROUP,	/* /proc/<pid>/task/<tid>/cgroup	*/
 	LXPR_PID_TID_CMDLINE,	/* /proc/<pid>/task/<tid>/cmdline	*/
 	LXPR_PID_TID_COMM,	/* /proc/<pid>/task/<tid>/comm		*/
@@ -194,6 +197,7 @@ typedef enum lxpr_nodetype {
 	LXPR_SYS_FS_INOTIFY_MAX_USER_INSTANCES,	/* inotify/max_user_instances */
 	LXPR_SYS_FS_INOTIFY_MAX_USER_WATCHES,	/* inotify/max_user_watches */
 	LXPR_SYS_KERNELDIR,	/* /proc/sys/kernel/	*/
+	LXPR_SYS_KERNEL_CAPLCAP,	/* /proc/sys/kernel/cap_last_cap */
 	LXPR_SYS_KERNEL_HOSTNAME,	/* /proc/sys/kernel/hostname */
 	LXPR_SYS_KERNEL_MSGMNI,	/* /proc/sys/kernel/msgmni */
 	LXPR_SYS_KERNEL_NGROUPS_MAX,	/* /proc/sys/kernel/ngroups_max */
@@ -203,9 +207,14 @@ typedef enum lxpr_nodetype {
 	LXPR_SYS_KERNEL_RAND_BOOTID, /* /proc/sys/kernel/random/boot_id */
 	LXPR_SYS_KERNEL_SHMMAX,	/* /proc/sys/kernel/shmmax */
 	LXPR_SYS_KERNEL_THREADS_MAX,	/* /proc/sys/kernel/threads-max */
-	LXPR_SYS_VMDIR,		/* /proc/sys/vm */
-	LXPR_SYS_KERNEL_VM_MINFR_KB, /* /proc/sys/vm/min_free_kbytes */
-	LXPR_SYS_KERNEL_VM_NHUGEP, /* /proc/sys/vm/nr_hugepages */
+	LXPR_SYS_NETDIR,		/* /proc/sys/net		*/
+	LXPR_SYS_NET_COREDIR,		/* /proc/sys/net/core		*/
+	LXPR_SYS_NET_CORE_SOMAXCON,	/* /proc/sys/net/core/somaxconn	*/
+	LXPR_SYS_VMDIR,			/* /proc/sys/vm			*/
+	LXPR_SYS_VM_MINFR_KB,		/* /proc/sys/vm/min_free_kbytes	*/
+	LXPR_SYS_VM_NHUGEP,		/* /proc/sys/vm/nr_hugepages	*/
+	LXPR_SYS_VM_OVERCOMMIT_MEM,	/* /proc/sys/vm/overcommit_memory */
+	LXPR_SYS_VM_SWAPPINESS,		/* /proc/sys/vm/swappiness	*/
 	LXPR_UPTIME,		/* /proc/uptime		*/
 	LXPR_VERSION,		/* /proc/version	*/
 	LXPR_NFILES		/* number of lx /proc file types */
@@ -299,4 +308,4 @@ void lxpr_unlock(proc_t *);
 #define	toupper(x)	(islower(x) ? (x) - 'a' + 'A' : (x))
 #endif
 
-#endif /* _LXPROC_H */
+#endif /* _LX_PROC_H */

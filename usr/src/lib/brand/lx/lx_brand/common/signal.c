@@ -644,6 +644,11 @@ lx_sigaltstack(uintptr_t ssp, uintptr_t oss)
 		    LX_MINSIGSTKSZ) {
 			return (-ENOMEM);
 		}
+
+		if ((ss.ss_flags & LX_SS_DISABLE) != 0) {
+			ss.ss_sp = NULL;
+			ss.ss_size = 0;
+		}
 	}
 
 	if (oss != NULL) {
@@ -1557,9 +1562,9 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 	 * getcontext() stores the register state:
 	 */
 	volatile boolean_t signal_delivered = B_FALSE;
-	volatile uintptr_t lxfp;
-	volatile uintptr_t old_tsd_sp;
-	volatile int newstack;
+	volatile uintptr_t lxfp = 0;
+	volatile uintptr_t old_tsd_sp = 0;
+	volatile int newstack = 0;
 
 	/*
 	 * This function involves modifying the Linux process stack for this
@@ -1805,13 +1810,11 @@ lx_sigdeliver(int lx_sig, siginfo_t *sip, ucontext_t *ucp, size_t stacksz,
 		LX_REG(&jump_uc, REG_RDX) = hargs[2];
 #endif
 
-		if (syscall(SYS_brand, B_JUMP_TO_LINUX, &jump_uc) == -1) {
-			lx_err_fatal("B_JUMP_TO_LINUX failed: %s",
-			    strerror(errno));
-		}
+		lx_jump_to_linux(&jump_uc);
 	}
 
 	assert(0);
+	abort();
 
 after_signal_handler:
 	/*
