@@ -70,6 +70,8 @@ extern "C" {
 #include <sys/atomic.h>
 #include <sys/sunddi.h>
 #include <sys/sunldi.h>
+#include <sys/zfs_ioctl.h>
+#include <sys/nvpair.h>
 #include <vm/as.h>
 #include <vm/anon.h>
 
@@ -198,6 +200,7 @@ typedef enum lxpr_nodetype {
 	LXPR_SYS_FS_INOTIFY_MAX_USER_WATCHES,	/* inotify/max_user_watches */
 	LXPR_SYS_KERNELDIR,	/* /proc/sys/kernel/	*/
 	LXPR_SYS_KERNEL_CAPLCAP,	/* /proc/sys/kernel/cap_last_cap */
+	LXPR_SYS_KERNEL_COREPATT,	/* /proc/sys/kernel/core_pattern */
 	LXPR_SYS_KERNEL_HOSTNAME,	/* /proc/sys/kernel/hostname */
 	LXPR_SYS_KERNEL_MSGMNI,	/* /proc/sys/kernel/msgmni */
 	LXPR_SYS_KERNEL_NGROUPS_MAX,	/* /proc/sys/kernel/ngroups_max */
@@ -269,6 +272,13 @@ typedef struct lxpr_mnt {
 	lxpr_node_t	*lxprm_node;	/* node at root of proc mount */
 	struct zone	*lxprm_zone;	/* zone for this mount */
 	ldi_ident_t	lxprm_li;	/* ident for ldi */
+
+	cred_t		*lxprm_rcred;	/* Cred for root in our zone. */
+
+	/* Used for ZFS LDI functions in lx_prsubr.c. */
+	boolean_t	lxprm_zfs_isopen;
+	major_t		lxprm_zfs_major;
+	ldi_handle_t	lxprm_zfs_lh;
 } lxpr_mnt_t;
 
 extern vnodeops_t	*lxpr_vnodeops;
@@ -284,7 +294,15 @@ extern ino_t lxpr_parentinode(lxpr_node_t *);
 extern lxpr_node_t *lxpr_getnode(vnode_t *, lxpr_nodetype_t, proc_t *, int);
 extern void lxpr_freenode(lxpr_node_t *);
 
-typedef struct lxpr_uiobuf lxpr_uiobuf_t;
+typedef struct lxpr_uiobuf {
+	uio_t *uiop;
+	char *buffer;
+	uint32_t buffsize;
+	char *pos;
+	size_t beg;
+	int error;
+} lxpr_uiobuf_t;
+
 extern lxpr_uiobuf_t *lxpr_uiobuf_new(uio_t *);
 extern void lxpr_uiobuf_free(lxpr_uiobuf_t *);
 extern int lxpr_uiobuf_flush(lxpr_uiobuf_t *);
@@ -293,6 +311,24 @@ extern boolean_t lxpr_uiobuf_nonblock(lxpr_uiobuf_t *);
 extern void lxpr_uiobuf_write(lxpr_uiobuf_t *, const char *, size_t);
 extern void lxpr_uiobuf_printf(lxpr_uiobuf_t *, const char *, ...);
 extern void lxpr_uiobuf_seterr(lxpr_uiobuf_t *, int);
+
+extern void lxpr_zfs_init(void);
+extern void lxpr_zfs_fini(void);
+
+typedef struct lxpr_zfs_iter lxpr_zfs_iter_t;
+typedef struct lxpr_zfs_ds lxpr_zfs_ds_t;
+struct lxpr_zfs_iter {
+	list_t		it_list;
+	lxpr_zfs_ds_t	*it_ds;
+};
+extern int lxpr_zfs_list_pools(lxpr_mnt_t *, zfs_cmd_t *, nvlist_t **);
+extern int lxpr_zvol_dev(lxpr_mnt_t *, char *, major_t *, minor_t *);
+extern void lxpr_zfs_end_iter(lxpr_zfs_iter_t *);
+extern int lxpr_zfs_next_zvol(lxpr_mnt_t *, char *, zfs_cmd_t *,
+    lxpr_zfs_iter_t *);
+
+extern void lxpr_core_path_l2s(const char *, char *);
+extern void lxpr_core_path_s2l(const char *, char *);
 
 proc_t *lxpr_lock(pid_t);
 void lxpr_unlock(proc_t *);

@@ -48,6 +48,7 @@
 #include <sys/stropts.h>
 #include <sys/cmn_err.h>
 #include <sys/lx_brand.h>
+#include <lx_auxv.h>
 #include <sys/x86_archext.h>
 #include <sys/archsystm.h>
 #include <sys/fp.h>
@@ -64,6 +65,7 @@
 #include <sys/brand.h>
 #include <sys/cred_impl.h>
 #include <sys/tihdr.h>
+#include <sys/corectl.h>
 #include <inet/ip.h>
 #include <inet/ip_ire.h>
 #include <inet/ip6.h>
@@ -79,6 +81,7 @@
 extern kthread_t *prchoose(proc_t *);
 extern int prreadargv(proc_t *, char *, size_t, size_t *);
 extern int prreadenvv(proc_t *, char *, size_t, size_t *);
+extern int prreadbuf(proc_t *, uintptr_t, uint8_t *, size_t, size_t *);
 
 #include "lx_proc.h"
 
@@ -208,6 +211,7 @@ static void lxpr_read_sys_fs_inotify_max_user_instances(lxpr_node_t *,
 static void lxpr_read_sys_fs_inotify_max_user_watches(lxpr_node_t *,
     lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_caplcap(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_kernel_corepatt(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_hostname(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_msgmni(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_ngroups_max(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -223,6 +227,8 @@ static void lxpr_read_sys_vm_overcommit_mem(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_vm_swappiness(lxpr_node_t *, lxpr_uiobuf_t *);
 
 static int lxpr_write_sys_net_core_somaxc(lxpr_node_t *, uio_t *, cred_t *,
+    caller_context_t *);
+static int lxpr_write_sys_kernel_corepatt(lxpr_node_t *, uio_t *, cred_t *,
     caller_context_t *);
 
 /*
@@ -450,6 +456,7 @@ static lxpr_dirent_t sys_fs_inotifydir[] = {
  */
 static lxpr_dirent_t sys_kerneldir[] = {
 	{ LXPR_SYS_KERNEL_CAPLCAP,	"cap_last_cap" },
+	{ LXPR_SYS_KERNEL_COREPATT,	"core_pattern" },
 	{ LXPR_SYS_KERNEL_HOSTNAME,	"hostname" },
 	{ LXPR_SYS_KERNEL_MSGMNI,	"msgmni" },
 	{ LXPR_SYS_KERNEL_NGROUPS_MAX,	"ngroups_max" },
@@ -519,6 +526,7 @@ lxpr_open(vnode_t **vpp, int flag, cred_t *cr, caller_context_t *ct)
 		switch (type) {
 		case LXPR_PID_OOM_SCR_ADJ:
 		case LXPR_PID_TID_OOM_SCR_ADJ:
+		case LXPR_SYS_KERNEL_COREPATT:
 		case LXPR_SYS_NET_CORE_SOMAXCON:
 		case LXPR_SYS_VM_OVERCOMMIT_MEM:
 		case LXPR_SYS_VM_SWAPPINESS:
@@ -683,6 +691,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_sys_fs_inotify_max_user_watches, /* max_user_watches */
 	lxpr_read_invalid,		/* /proc/sys/kernel	*/
 	lxpr_read_sys_kernel_caplcap,	/* /proc/sys/kernel/cap_last_cap */
+	lxpr_read_sys_kernel_corepatt,	/* /proc/sys/kernel/core_pattern */
 	lxpr_read_sys_kernel_hostname,	/* /proc/sys/kernel/hostname */
 	lxpr_read_sys_kernel_msgmni,	/* /proc/sys/kernel/msgmni */
 	lxpr_read_sys_kernel_ngroups_max, /* /proc/sys/kernel/ngroups_max */
@@ -800,6 +809,7 @@ static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
 	lxpr_lookup_not_a_dir,		/* .../inotify/max_user_watches */
 	lxpr_lookup_sys_kerneldir,	/* /proc/sys/kernel	*/
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/cap_last_cap */
+	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/core_pattern */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/hostname */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/msgmni */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/kernel/ngroups_max */
@@ -917,6 +927,7 @@ static int (*lxpr_readdir_function[LXPR_NFILES])() = {
 	lxpr_readdir_not_a_dir,		/* .../inotify/max_user_watches	*/
 	lxpr_readdir_sys_kerneldir,	/* /proc/sys/kernel	*/
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/cap_last_cap */
+	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/core_pattern */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/hostname */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/msgmni */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/kernel/ngroups_max */
@@ -1037,6 +1048,9 @@ static void
 lxpr_read_pid_auxv(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
 	proc_t *p;
+	lx_proc_data_t *pd;
+	lx_elf_data_t *edp = NULL;
+	int i, cnt;
 
 	ASSERT(lxpnp->lxpr_type == LXPR_PID_AUXV ||
 	    lxpnp->lxpr_type == LXPR_PID_TID_AUXV);
@@ -1047,30 +1061,59 @@ lxpr_read_pid_auxv(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		lxpr_uiobuf_seterr(uiobuf, EINVAL);
 		return;
 	}
+	if ((pd = ptolxproc(p)) == NULL) {
+		/* Emit a single AT_NULL record for non-branded processes */
+		auxv_t buf;
 
-	/*
-	 * No attempt is made to translate the native aux vector types and
-	 * values into what Linux expects.  This can be implemented later if
-	 * deemed to be necessary.
-	 */
+		bzero(&buf, sizeof (buf));
+		lxpr_unlock(p);
+		lxpr_uiobuf_write(uiobuf, (char *)&buf, sizeof (buf));
+		return;
+	} else {
+		edp = &pd->l_elf_data;
+	}
+
 	if (p->p_model == DATAMODEL_NATIVE) {
-		lxpr_uiobuf_write(uiobuf, (char *)p->p_user.u_auxv,
-		    sizeof (auxv_t[__KERN_NAUXV_IMPL]));
+		auxv_t buf[__KERN_NAUXV_IMPL];
+
+		/*
+		 * Because a_type is only of size int (not long), the buffer
+		 * contents must be zeroed first to ensure cleanliness.
+		 */
+		bzero(buf, sizeof (buf));
+		for (i = 0, cnt = 0; i < __KERN_NAUXV_IMPL; i++) {
+			if (lx_auxv_stol(&p->p_user.u_auxv[i],
+			    &buf[cnt], edp) == 0) {
+				cnt++;
+			}
+			if (p->p_user.u_auxv[i].a_type == AT_NULL) {
+				break;
+			}
+		}
+		lxpr_uiobuf_write(uiobuf, (char *)buf, cnt * sizeof (buf[0]));
+		lxpr_unlock(p);
 	}
 #if defined(_SYSCALL32_IMPL)
 	else {
 		auxv32_t buf[__KERN_NAUXV_IMPL];
-		int i;
-		for (i = 0; i < __KERN_NAUXV_IMPL; i++) {
-			buf[i].a_type = p->p_user.u_auxv[i].a_type;
-			buf[i].a_un.a_val = p->p_user.u_auxv[i].a_un.a_val;
+
+		for (i = 0, cnt = 0; i < __KERN_NAUXV_IMPL; i++) {
+			auxv_t temp;
+
+			if (lx_auxv_stol(&p->p_user.u_auxv[i],
+			    &temp, edp) == 0) {
+				buf[cnt].a_type = (int)temp.a_type;
+				buf[cnt].a_un.a_val = (int)temp.a_un.a_val;
+				cnt++;
+			}
+			if (p->p_user.u_auxv[i].a_type == AT_NULL) {
+				break;
+			}
 		}
-		lxpr_uiobuf_write(uiobuf, (char *)buf,
-		    sizeof (auxv32_t[__KERN_NAUXV_IMPL]));
+		lxpr_unlock(p);
+		lxpr_uiobuf_write(uiobuf, (char *)buf, cnt * sizeof (buf[0]));
 	}
 #endif /* defined(_SYSCALL32_IMPL) */
-
-	lxpr_unlock(p);
 }
 
 /*
@@ -1096,6 +1139,78 @@ lxpr_read_pid_cgroup(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_unlock(p);
 }
 
+static void
+lxpr_copy_cmdline(proc_t *p, lx_proc_data_t *pd, lxpr_uiobuf_t *uiobuf)
+{
+	uio_t *uiop = uiobuf->uiop;
+	char *buf = uiobuf->buffer;
+	int bsz = uiobuf->buffsize;
+	boolean_t env_overflow = B_FALSE;
+	uintptr_t pos = pd->l_args_start + uiop->uio_offset;
+	uintptr_t estart = pd->l_envs_start;
+	uintptr_t eend = pd->l_envs_end;
+	size_t chunk, copied;
+	int err = 0;
+
+	/* Do not bother with data beyond the end of the envp strings area. */
+	if (pos > eend) {
+		return;
+	}
+	mutex_exit(&p->p_lock);
+
+	/*
+	 * If the starting or ending bounds are outside the argv strings area,
+	 * check to see if the process has overwritten the terminating NULL.
+	 * If not, no data needs to be copied from oustide the argv area.
+	 */
+	if (pos >= estart || (pos + uiop->uio_resid) >= estart) {
+		uint8_t term;
+		if (uread(p, &term, sizeof (term), estart - 1) != 0) {
+			err = EFAULT;
+		} else if (term != 0) {
+			env_overflow = B_TRUE;
+		}
+	}
+
+
+	/* Data between astart and estart-1 can be copied freely. */
+	while (pos < estart && uiop->uio_resid > 0 && err == 0) {
+		chunk = MIN(estart - pos, uiop->uio_resid);
+		chunk = MIN(chunk, bsz);
+
+		if (prreadbuf(p, pos, (uint8_t *)buf, chunk, &copied) != 0 ||
+		    copied != chunk) {
+			err = EFAULT;
+			break;
+		}
+		err = uiomove(buf, copied, UIO_READ, uiop);
+		pos += copied;
+	}
+
+	/*
+	 * Onward from estart, data is copied as a contiguous string.  To
+	 * protect env data from potential snooping, only one buffer-sized copy
+	 * is allowed to avoid complex seek logic.
+	 */
+	if (err == 0 && env_overflow && pos == estart && uiop->uio_resid > 0) {
+		chunk = MIN(eend - pos, uiop->uio_resid);
+		chunk = MIN(chunk, bsz);
+		if (prreadbuf(p, pos, (uint8_t *)buf, chunk, &copied) == 0) {
+			int len = strnlen(buf, copied);
+			if (len > 0) {
+				err = uiomove(buf, len, UIO_READ, uiop);
+			}
+		}
+	}
+
+	uiobuf->error = err;
+	/* reset any uiobuf state */
+	uiobuf->pos = uiobuf->buffer;
+	uiobuf->beg = 0;
+
+	mutex_enter(&p->p_lock);
+}
+
 /*
  * lxpr_read_pid_cmdline(): read argument vector from process
  */
@@ -1105,6 +1220,7 @@ lxpr_read_pid_cmdline(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	proc_t *p;
 	char *buf;
 	size_t asz = lxpr_maxargvlen, sz;
+	lx_proc_data_t *pd;
 
 	ASSERT(lxpnp->lxpr_type == LXPR_PID_CMDLINE ||
 	    lxpnp->lxpr_type == LXPR_PID_TID_CMDLINE);
@@ -1118,10 +1234,16 @@ lxpr_read_pid_cmdline(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		return;
 	}
 
-	if (prreadargv(p, buf, asz, &sz) != 0) {
-		lxpr_uiobuf_seterr(uiobuf, EINVAL);
+	if ((pd = ptolxproc(p)) != NULL && pd->l_args_start != 0 &&
+	    pd->l_envs_start != 0 && pd->l_envs_end != 0) {
+		/* Use Linux-style argv bounds if possible. */
+		lxpr_copy_cmdline(p, pd, uiobuf);
 	} else {
-		lxpr_uiobuf_write(uiobuf, buf, sz);
+		if (prreadargv(p, buf, asz, &sz) != 0) {
+			lxpr_uiobuf_seterr(uiobuf, EINVAL);
+		} else {
+			lxpr_uiobuf_write(uiobuf, buf, sz);
+		}
 	}
 
 	lxpr_unlock(p);
@@ -3376,8 +3498,11 @@ nextp:
  *
  * Over the years, /proc/partitions has been made considerably smaller -- to
  * the point that it really is only major number, minor number, number of
- * blocks (which we report as 0), and partition name.  We support this only
- * because some things want to see it to make sense of /proc/diskstats.
+ * blocks (which we report as 0), and partition name.
+ *
+ * We support this because some things want to see it to make sense of
+ * /proc/diskstats, and also because "fdisk -l" and a few other things look
+ * here to find all disks on the system.
  */
 /* ARGSUSED */
 static void
@@ -3388,6 +3513,11 @@ lxpr_read_partitions(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	kstat_t ks0;
 	int nidx, num, i;
 	size_t sidx, size;
+	zfs_cmd_t *zc;
+	nvlist_t *nv = NULL;
+	nvpair_t *elem = NULL;
+	lxpr_mnt_t *mnt;
+	lxpr_zfs_iter_t zfsi;
 
 	ASSERT(lxpnp->lxpr_type == LXPR_PARTITIONS);
 
@@ -3424,6 +3554,36 @@ lxpr_read_partitions(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	}
 
 	kmem_free(ksr, sidx);
+
+	/* If we never got to open the zfs LDI, then stop now. */
+	mnt = (lxpr_mnt_t *)lxpnp->lxpr_vnode->v_vfsp->vfs_data;
+	if (mnt->lxprm_zfs_isopen == B_FALSE)
+		return;
+
+	zc = kmem_zalloc(sizeof (zfs_cmd_t), KM_SLEEP);
+
+	if (lxpr_zfs_list_pools(mnt, zc, &nv) != 0)
+		goto out;
+
+	while ((elem = nvlist_next_nvpair(nv, elem)) != NULL) {
+		char *pool = nvpair_name(elem);
+
+		bzero(&zfsi, sizeof (lxpr_zfs_iter_t));
+		while (lxpr_zfs_next_zvol(mnt, pool, zc, &zfsi) == 0) {
+			major_t	major;
+			minor_t	minor;
+			if (lxpr_zvol_dev(mnt, zc->zc_name, &major, &minor)
+			    != 0)
+				continue;
+
+			lxpr_uiobuf_printf(uiobuf, "%4d %7d %10d zvol/dsk/%s\n",
+			    major, minor, 0, zc->zc_name);
+		}
+	}
+
+	nvlist_free(nv);
+out:
+	kmem_free(zc, sizeof (zfs_cmd_t));
 }
 
 /*
@@ -3729,16 +3889,28 @@ lxpr_read_stat(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 /*
  * lxpr_read_swaps():
  *
- * We don't support swap files or partitions, so just provide a dummy file with
- * the necessary header.
+ * We don't support swap files or partitions, but some programs like to look
+ * here just to check we have some swap on the system, so we lie and show
+ * our entire swap cap as one swap partition.
  */
 /* ARGSUSED */
 static void
 lxpr_read_swaps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
+	zone_t *zone = curzone;
+	uint64_t totswap, usedswap;
+
+	mutex_enter(&zone->zone_mem_lock);
+	/* Uses units of 1 kb (2^10). */
+	totswap = zone->zone_max_swap_ctl >> 10;
+	usedswap = zone->zone_max_swap >> 10;
+	mutex_exit(&zone->zone_mem_lock);
+
 	lxpr_uiobuf_printf(uiobuf,
 	    "Filename                                "
 	    "Type            Size    Used    Priority\n");
+	lxpr_uiobuf_printf(uiobuf, "%-40s%-16s%-8llu%-8llu%-8d\n",
+	    "/dev/swap", "partition", totswap, usedswap, -1);
 }
 
 /*
@@ -3777,6 +3949,38 @@ lxpr_read_sys_kernel_caplcap(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
 	ASSERT(lxpnp->lxpr_type == LXPR_SYS_KERNEL_CAPLCAP);
 	lxpr_uiobuf_printf(uiobuf, "%d\n", LX_CAP_MAX_VALID);
+}
+
+static void
+lxpr_read_sys_kernel_corepatt(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	zone_t *zone = curproc->p_zone;
+	struct core_globals *cg;
+	refstr_t *rp;
+	corectl_path_t *ccp;
+	char tr[MAXPATHLEN];
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_KERNEL_COREPATT);
+
+	cg = zone_getspecific(core_zone_key, zone);
+	ASSERT(cg != NULL);
+
+	/* If core dumps are disabled, return an empty string. */
+	if ((cg->core_options & CC_PROCESS_PATH) == 0) {
+		lxpr_uiobuf_printf(uiobuf, "\n");
+		return;
+	}
+
+	ccp = cg->core_default_path;
+	mutex_enter(&ccp->ccp_mtx);
+	if ((rp = ccp->ccp_path) != NULL)
+		refstr_hold(rp);
+	mutex_exit(&ccp->ccp_mtx);
+
+	lxpr_core_path_s2l(refstr_value(rp), tr);
+	refstr_rele(rp);
+
+	lxpr_uiobuf_printf(uiobuf, "%s\n", tr);
 }
 
 static void
@@ -4390,6 +4594,7 @@ lxpr_access(vnode_t *vp, int mode, int flags, cred_t *cr, caller_context_t *ct)
 		switch (type) {
 		case LXPR_PID_OOM_SCR_ADJ:
 		case LXPR_PID_TID_OOM_SCR_ADJ:
+		case LXPR_SYS_KERNEL_COREPATT:
 		case LXPR_SYS_NET_CORE_SOMAXCON:
 		case LXPR_SYS_VM_OVERCOMMIT_MEM:
 		case LXPR_SYS_VM_SWAPPINESS:
@@ -5668,6 +5873,63 @@ lxpr_write_sys_net_core_somaxc(lxpr_node_t *lxpnp, struct uio *uio,
 	return (res);
 }
 
+/* ARGSUSED */
+static int
+lxpr_write_sys_kernel_corepatt(lxpr_node_t *lxpnp, struct uio *uio,
+    struct cred *cr, caller_context_t *ct)
+{
+	zone_t *zone = curproc->p_zone;
+	struct core_globals *cg;
+	refstr_t *rp, *nrp;
+	corectl_path_t *ccp;
+	char val[MAXPATHLEN];
+	char valtr[MAXPATHLEN];
+	size_t olen;
+	int error;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_KERNEL_COREPATT);
+
+	cg = zone_getspecific(core_zone_key, zone);
+	ASSERT(cg != NULL);
+
+	if (secpolicy_coreadm(cr) != 0)
+		return (EPERM);
+
+	if (uio->uio_loffset != 0)
+		return (EINVAL);
+
+	if (uio->uio_resid == 0)
+		return (0);
+
+	olen = uio->uio_resid;
+	if (olen > sizeof (val) - 1)
+		return (EINVAL);
+
+	bzero(val, sizeof (val));
+	error = uiomove(val, olen, UIO_WRITE, uio);
+	if (error != 0)
+		return (error);
+
+	if (val[olen - 1] == '\n')
+		val[olen - 1] = '\0';
+
+	lxpr_core_path_l2s(val, valtr);
+
+	nrp = refstr_alloc(valtr);
+
+	ccp = cg->core_default_path;
+	mutex_enter(&ccp->ccp_mtx);
+	rp = ccp->ccp_path;
+	refstr_hold((ccp->ccp_path = nrp));
+	cg->core_options |= CC_PROCESS_PATH;
+	mutex_exit(&ccp->ccp_mtx);
+
+	if (rp != NULL)
+		refstr_rele(rp);
+
+	return (0);
+}
+
 /*
  * lxpr_readlink(): Vnode operation for VOP_READLINK()
  */
@@ -5861,6 +6123,8 @@ lxpr_write(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
 	lxpr_nodetype_t	type = lxpnp->lxpr_type;
 
 	switch (type) {
+	case LXPR_SYS_KERNEL_COREPATT:
+		return (lxpr_write_sys_kernel_corepatt(lxpnp, uiop, cr, ct));
 	case LXPR_SYS_NET_CORE_SOMAXCON:
 		return (lxpr_write_sys_net_core_somaxc(lxpnp, uiop, cr, ct));
 
@@ -5908,6 +6172,7 @@ lxpr_create(struct vnode *dvp, char *nm, struct vattr *vap,
 	 * We're currently restricting O_CREAT to:
 	 * - /proc/<pid>/oom_score_adj
 	 * - /proc/<pid>/task/<tid>/oom_score_adj
+	 * - /proc/sys/kernel/core_pattern
 	 * - /proc/sys/net/core/somaxconn
 	 * - /proc/sys/vm/overcommit_memory
 	 * - /proc/sys/vm/swappiness
@@ -5925,6 +6190,10 @@ lxpr_create(struct vnode *dvp, char *nm, struct vattr *vap,
 	    strcmp(nm, "somaxconn") == 0) {
 		vp = lxpr_lookup_common(dvp, nm, NULL, sys_net_coredir,
 		    SYS_NET_COREDIRFILES);
+	} else if (type == LXPR_SYS_KERNELDIR &&
+	    strcmp(nm, "core_pattern") == 0) {
+		vp = lxpr_lookup_common(dvp, nm, NULL, sys_kerneldir,
+		    SYS_KERNELDIRFILES);
 	} else if (type == LXPR_SYS_VMDIR &&
 	    (strcmp(nm, "overcommit_memory") == 0 ||
 	    strcmp(nm, "swappiness") == 0)) {

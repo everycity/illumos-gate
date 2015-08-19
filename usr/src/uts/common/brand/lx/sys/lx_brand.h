@@ -101,6 +101,7 @@ extern "C" {
 #define	B_SET_NATIVE_STACK	147
 #define	B_SIGEV_THREAD_ID	148
 #define	B_OVERRIDE_KERN_VER	149
+#define	B_NOTIFY_VDSO_LOC	150
 
 #ifndef _ASM
 /*
@@ -156,9 +157,10 @@ typedef enum lx_ptrace_options {
  * We repurpose the 3rd brand-specific aux vector slot for the Linux
  * AT_SYSINFO_EHDR entry (we modify the a_type in the brand library).
  */
-#define	AT_SUN_BRAND_LX_PHDR	AT_SUN_BRAND_AUX1
-#define	AT_SUN_BRAND_LX_INTERP	AT_SUN_BRAND_AUX2
-#define	AT_SUN_BRAND_LX_SYSINFO_EHDR	AT_SUN_BRAND_AUX3
+#define	AT_SUN_BRAND_LX_PHDR		AT_SUN_BRAND_AUX1
+#define	AT_SUN_BRAND_LX_INTERP		AT_SUN_BRAND_AUX2
+#define	AT_SUN_BRAND_LX_CLKTCK		AT_SUN_BRAND_AUX3
+#define	AT_SUN_BRAND_LX_SYSINFO_EHDR	AT_SUN_BRAND_AUX4
 
 /* Aux vector containing hz value */
 #define	AT_CLKTCK	17
@@ -360,6 +362,7 @@ typedef struct lx_elf_data64 {
 	uintptr_t	ed_entry;
 	uintptr_t	ed_base;
 	uintptr_t	ed_ldentry;
+	uintptr_t	ed_vdso;
 } lx_elf_data64_t;
 
 typedef struct lx_elf_data32 {
@@ -369,6 +372,7 @@ typedef struct lx_elf_data32 {
 	uint32_t	ed_entry;
 	uint32_t	ed_base;
 	uint32_t	ed_ldentry;
+	uint32_t	ed_vdso;
 } lx_elf_data32_t;
 
 #if defined(_LP64)
@@ -430,6 +434,11 @@ typedef struct lx_proc_data {
 	lx_proc_flags_t l_flags;
 
 	lx_rlimit64_t l_fake_limits[LX_RLFAKE_NLIMITS];
+
+	/* original start/end bounds of arg/env string data */
+	uintptr_t l_args_start;
+	uintptr_t l_envs_start;
+	uintptr_t l_envs_end;
 
 	/* Override zone-wide settings for uname release and version */
 	char l_uname_release[LX_KERN_RELEASE_MAX];

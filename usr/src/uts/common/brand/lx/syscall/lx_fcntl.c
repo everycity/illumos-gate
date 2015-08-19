@@ -20,13 +20,63 @@
 #include <sys/fcntl.h>
 #include <sys/stat.h>
 #include <sys/cmn_err.h>
+#include <sys/pathname.h>
 #include <sys/lx_impl.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_fcntl.h>
 #include <sys/lx_misc.h>
+#include <sys/lx_socket.h>
 
 extern int fcntl(int, int, intptr_t);
 extern int flock_check(vnode_t *, flock64_t *, offset_t, offset_t);
+
+
+int
+lx_vp_at(int fd, char *upath, vnode_t **vpp, int flag)
+{
+	vnode_t *startvp;
+	int error;
+
+	if (fd == LX_AT_FDCWD) {
+		fd = AT_FDCWD;
+	}
+
+	if ((error = fgetstartvp(fd, upath, &startvp)) != 0) {
+		return (error);
+	}
+
+	if (upath != NULL) {
+		uio_seg_t seg = UIO_USERSPACE;
+		char buf[LX_DEV_LOG_LEN + 1];
+
+		/*
+		 * Because sockets listening on /dev/log are redirected to a
+		 * different path due to devfs restrictions, filesystem
+		 * operations acting on that path must also be redirected.
+		 * This ensures that things such as syslog are able to chown
+		 * their AF_UNIX socket during initialization.
+		 */
+		if (copyin(upath, &buf, sizeof (buf)) == 0) {
+			if (strncmp(LX_DEV_LOG, buf, sizeof (buf)) == 0) {
+				seg = UIO_SYSSPACE;
+				upath = LX_DEV_LOG_REDIRECT;
+			}
+		}
+
+		error = lookupnameat(upath, seg,
+		    (flag == AT_SYMLINK_NOFOLLOW) ?  NO_FOLLOW : FOLLOW,
+		    NULLVPP, vpp, startvp);
+		if (startvp != NULL) {
+			VN_RELE(startvp);
+		}
+		return (error);
+	} else {
+		/* VN_HOLD was established in fgetstartvp */
+		*vpp = startvp;
+		VERIFY(*vpp);
+		return (0);
+	}
+}
 
 #define	LTOS_FLOCK(l, s)						\
 {									\
