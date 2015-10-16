@@ -38,7 +38,6 @@
 #include <sys/sysmacros.h>
 #include <sys/systeminfo.h>
 #include <sys/types.h>
-#include <sys/epoll.h>
 #include <sys/mman.h>
 #include <sys/shm.h>
 #include <sys/socket.h>
@@ -666,25 +665,6 @@ lx_dup(int fildes)
 }
 
 long
-lx_epoll_pwait(int epfd, void *events, int maxevents, int timeout,
-    const sigset_t *sigmask)
-{
-	int r;
-
-	r = epoll_pwait(epfd, events, maxevents, timeout, sigmask);
-	return ((r == -1) ? -errno : r);
-}
-
-long
-lx_epoll_wait(int epfd, void *events, int maxevents, int timeout)
-{
-	int r;
-
-	r = epoll_wait(epfd, events, maxevents, timeout);
-	return ((r == -1) ? -errno : r);
-}
-
-long
 lx_fchdir(int fildes)
 {
 	int r;
@@ -802,15 +782,6 @@ lx_nice(int incr)
 }
 
 long
-lx_nanosleep(const struct timespec *rqtp, struct timespec *rmtp)
-{
-	int r;
-
-	r = nanosleep(rqtp, rmtp);
-	return ((r == -1) ? -errno : r);
-}
-
-long
 lx_pause(void)
 {
 	int r;
@@ -877,6 +848,7 @@ long
 lx_symlink(const char *name1, const char *name2)
 {
 	int r;
+	char nm2[MAXPATHLEN];
 
 	/*
 	 * Newer versions of systemd setup the logging socket in a different
@@ -887,7 +859,8 @@ lx_symlink(const char *name1, const char *name2)
 	 * symlink, although this is not an issue in practice because its
 	 * normally only done by systemd during early boot.
 	 */
-	if (strcmp(name2, LX_DEV_LOG) == 0) {
+	if (uucopystr((void *)name2, nm2, sizeof (nm2)) == 0 &&
+	    strcmp(nm2, LX_DEV_LOG) == 0) {
 		(void) unlink(LX_DEV_LOG_REDIRECT);
 		r = symlink(name1, LX_DEV_LOG_REDIRECT);
 	} else {

@@ -590,7 +590,6 @@ f kernel/drv/amd64/eibnx 0755 root sys
 f kernel/drv/amd64/fasttrap 0755 root sys
 f kernel/drv/amd64/fbt 0755 root sys
 f kernel/drv/amd64/fm 0755 root sys
-f kernel/drv/amd64/fp 0755 root sys
 f kernel/drv/amd64/heci 0755 root sys
 f kernel/drv/amd64/hid 0755 root sys
 f kernel/drv/amd64/hubd 0755 root sys
@@ -749,7 +748,6 @@ f kernel/drv/eibnx.conf 0644 root sys
 f kernel/drv/fasttrap.conf 0644 root sys
 f kernel/drv/fbt.conf 0644 root sys
 f kernel/drv/fm.conf 0644 root sys
-f kernel/drv/fp.conf 0644 root sys
 f kernel/drv/hxge.conf 0644 root sys
 f kernel/drv/icmp.conf 0644 root sys
 f kernel/drv/icmp6.conf 0644 root sys
@@ -1910,7 +1908,9 @@ f usr/bin/amd64/moe 0555 root bin
 f usr/bin/amd64/newtask 4555 root sys
 f usr/bin/amd64/nohup 0555 root bin
 f usr/bin/amd64/pargs 0555 root bin
+h usr/bin/amd64/pauxv=usr/bin/amd64/pargs
 f usr/bin/amd64/pcred 0555 root bin
+h usr/bin/amd64/penv=usr/bin/amd64/pargs
 f usr/bin/amd64/pfiles 0555 root bin
 f usr/bin/amd64/pflags 0555 root bin
 f usr/bin/amd64/pldd 0555 root bin
@@ -2194,9 +2194,11 @@ h usr/bin/pargs=usr/lib/isaexec
 f usr/bin/passwd 6555 root sys
 h usr/bin/paste=usr/bin/alias
 f usr/bin/pathchk 0555 root bin
+h usr/bin/pauxv=usr/lib/isaexec
 f usr/bin/pax 0555 root bin
 s usr/bin/pcat=unpack
 h usr/bin/pcred=usr/lib/isaexec
+h usr/bin/penv=usr/lib/isaexec
 h usr/bin/pfbash=usr/bin/pfexec
 h usr/bin/pfcsh=usr/bin/pfexec
 f usr/bin/pfexec 0555 root bin
@@ -4254,6 +4256,7 @@ f usr/include/sys/sysdc_impl.h 0644 root bin
 d usr/include/sys/sysevent 0755 root bin
 f usr/include/sys/sysevent.h 0644 root bin
 f usr/include/sys/sysevent/ap_driver.h 0644 root bin
+f usr/include/sys/sysevent/datalink.h 0644 root bin
 f usr/include/sys/sysevent/dev.h 0644 root bin
 f usr/include/sys/sysevent/domain.h 0644 root bin
 f usr/include/sys/sysevent/dr.h 0644 root bin
@@ -10400,6 +10403,7 @@ f usr/sbin/msgid 0555 root bin
 f usr/sbin/mvdir 0555 root bin
 s usr/sbin/ncheck=ff
 f usr/sbin/ndd 0555 root bin
+f usr/sbin/ndp 0555 root bin
 s usr/sbin/newaliases=../lib/mailwrapper
 s usr/sbin/newfs=../lib/fs/ufs/newfs
 f usr/sbin/newkey 0555 root sys
@@ -11638,9 +11642,11 @@ f usr/share/man/man1/pargs.1 0444 root bin
 f usr/share/man/man1/passwd.1 0444 root bin
 f usr/share/man/man1/paste.1 0444 root bin
 f usr/share/man/man1/pathchk.1 0444 root bin
+s usr/share/man/man1/pauxv.1=pargs.1
 f usr/share/man/man1/pax.1 0444 root bin
 s usr/share/man/man1/pcat.1=pack.1
 s usr/share/man/man1/pcred.1=proc.1
+s usr/share/man/man1/penv.1=pargs.1
 s usr/share/man/man1/pfcsh.1=pfexec.1
 f usr/share/man/man1/pfexec.1 0444 root bin
 s usr/share/man/man1/pfiles.1=proc.1
@@ -12025,6 +12031,7 @@ f usr/share/man/man1m/mvdir.1m 0444 root bin
 f usr/share/man/man1m/ncheck.1m 0444 root bin
 f usr/share/man/man1m/ncheck_ufs.1m 0444 root bin
 f usr/share/man/man1m/ndd.1m 0444 root bin
+f usr/share/man/man1m/ndp.1m 0444 root bin
 f usr/share/man/man1m/netstat.1m 0444 root bin
 f usr/share/man/man1m/netstrategy.1m 0444 root bin
 f usr/share/man/man1m/newaliases.1m 0444 root bin
@@ -13565,6 +13572,7 @@ s usr/share/man/man3c/strcspn.3c=string.3c
 s usr/share/man/man3c/strdup.3c=string.3c
 s usr/share/man/man3c/strdupa.3c=string.3c
 f usr/share/man/man3c/strerror.3c 0444 root bin
+s usr/share/man/man3c/strerror_l.3c=strerror.3c
 s usr/share/man/man3c/strerror_r.3c=strerror.3c
 f usr/share/man/man3c/strfmon.3c 0444 root bin
 s usr/share/man/man3c/strfmon_l.3c=strfmon.3c
@@ -18381,7 +18389,6 @@ f usr/share/man/man7d/fctl.7d 0444 root bin
 f usr/share/man/man7d/fd.7d 0444 root bin
 s usr/share/man/man7d/fdc.7d=fd.7d
 s usr/share/man/man7d/firewire.7d=ieee1394.7d
-f usr/share/man/man7d/fp.7d 0444 root bin
 f usr/share/man/man7d/gld.7d 0444 root bin
 f usr/share/man/man7d/hci1394.7d 0444 root bin
 f usr/share/man/man7d/heci.7d 0444 root bin
@@ -18557,6 +18564,7 @@ s usr/share/man/man7p/ARP.7p=arp.7p
 s usr/share/man/man7p/ESP.7p=ipsecesp.7p
 s usr/share/man/man7p/ICMP.7p=icmp.7p
 s usr/share/man/man7p/IP.7p=ip.7p
+s usr/share/man/man7p/NDP.7p=ndp.7p
 s usr/share/man/man7p/RARP.7p=rarp.7p
 s usr/share/man/man7p/SCTP.7p=sctp.7p
 s usr/share/man/man7p/TCP.7p=tcp.7p
@@ -18575,6 +18583,7 @@ f usr/share/man/man7p/ip6.7p 0444 root bin
 f usr/share/man/man7p/ipsec.7p 0444 root bin
 f usr/share/man/man7p/ipsecah.7p 0444 root bin
 f usr/share/man/man7p/ipsecesp.7p 0444 root bin
+f usr/share/man/man7p/ndp.7p 0444 root bin
 f usr/share/man/man7p/pf_key.7p 0444 root bin
 f usr/share/man/man7p/rarp.7p 0444 root bin
 f usr/share/man/man7p/route.7p 0444 root bin

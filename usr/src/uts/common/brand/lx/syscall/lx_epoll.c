@@ -22,8 +22,10 @@
 #include <sys/epoll.h>
 #include <sys/devpoll.h>
 #include <sys/fcntl.h>
+#include <sys/file.h>
 #include <sys/sunddi.h>
 #include <sys/sunldi.h>
+#include <sys/vnode.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_types.h>
 
@@ -89,4 +91,61 @@ lx_epoll_create(int size)
 	}
 
 	return (lx_epoll_create1(0));
+}
+
+long
+lx_epoll_wait(int fd, void *events, int maxevents, int timeout)
+{
+	struct dvpoll arg;
+	file_t *fp;
+	int rv = 0, error, flag;
+
+	if (maxevents <= 0) {
+		return (set_errno(EINVAL));
+	}
+	if ((fp = getf(fd)) == NULL) {
+		return (set_errno(EBADF));
+	}
+
+	arg.dp_nfds = maxevents;
+	arg.dp_timeout = timeout;
+	arg.dp_fds = (pollfd_t *)events;
+	flag = fp->f_flag | DATAMODEL_NATIVE | FKIOCTL;
+	error = VOP_IOCTL(fp->f_vnode, DP_POLL, (uintptr_t)&arg, flag,
+	    fp->f_cred, &rv, NULL);
+
+	releasef(fd);
+	if (error != 0) {
+		return (set_errno(error));
+	}
+	return (rv);
+}
+
+long
+lx_epoll_pwait(int fd, void *events, int maxevents, int timeout, void *sigmask)
+{
+	struct dvpoll arg;
+	file_t *fp;
+	int rv = 0, error, flag;
+
+	if (maxevents <= 0) {
+		return (set_errno(EINVAL));
+	}
+	if ((fp = getf(fd)) == NULL) {
+		return (set_errno(EBADF));
+	}
+
+	arg.dp_nfds = maxevents;
+	arg.dp_timeout = timeout;
+	arg.dp_fds = (pollfd_t *)events;
+	arg.dp_setp = (sigset_t *)sigmask;
+	flag = fp->f_flag | DATAMODEL_NATIVE | FKIOCTL;
+	error = VOP_IOCTL(fp->f_vnode, DP_PPOLL, (uintptr_t)&arg, flag,
+	    fp->f_cred, &rv, NULL);
+
+	releasef(fd);
+	if (error != 0) {
+		return (set_errno(error));
+	}
+	return (rv);
 }
