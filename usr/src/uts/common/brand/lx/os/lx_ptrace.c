@@ -898,9 +898,7 @@ static int
 lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
     boolean_t *release_hold)
 {
-	klwp_t *rlwp;
-
-	rlwp = remote->br_lwp;
+	klwp_t *rlwp = remote->br_lwp;
 
 	/*
 	 * The tracee LWP was in "ptrace-stop" and we now hold its p_lock.
@@ -916,6 +914,12 @@ lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
 	remote->br_ptrace_tracer = NULL;
 	remote->br_ptrace_flags = 0;
 	*release_hold = B_TRUE;
+
+	/*
+	 * Decrement traced-lwp count for the process.
+	 */
+	ASSERT(MUTEX_HELD(&rlwp->lwp_procp->p_lock));
+	VERIFY(ptolxproc(rlwp->lwp_procp)->l_ptrace-- >= 1);
 
 	/*
 	 * The tracer may, as described in lx_ptrace_cont(), choose to suppress
@@ -1028,7 +1032,7 @@ lx_ptrace_attach(pid_t lx_pid)
 		VERIFY(rlwpd->br_ptrace_attach != LX_PTA_NONE);
 		error = EPERM;
 	} else {
-		lx_proc_data_t *rprocd;
+		lx_proc_data_t *rprocd = ptolxproc(rproc);
 
 		/*
 		 * Bond the tracee to the accord.
@@ -1046,6 +1050,10 @@ lx_ptrace_attach(pid_t lx_pid)
 		mutex_enter(&accord->lxpa_tracees_lock);
 		VERIFY(!list_link_active(&rlwpd->br_ptrace_linkage));
 		list_insert_tail(&accord->lxpa_tracees, rlwpd);
+		/*
+		 * Bump traced-lwp count for the remote process.
+		 */
+		rprocd->l_ptrace++;
 		mutex_exit(&accord->lxpa_tracees_lock);
 
 		/*
@@ -1053,11 +1061,6 @@ lx_ptrace_attach(pid_t lx_pid)
 		 */
 		sigtoproc(rproc, rthr, SIGSTOP);
 
-		/*
-		 * Set the in-kernel process-wide ptrace(2) enable flag.
-		 */
-		rprocd = ttolxproc(rthr);
-		rprocd->l_ptrace = 1;
 
 		error = 0;
 	}
@@ -1122,16 +1125,19 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	proc_t *srcp = lwptoproc(src->br_lwp);
 	proc_t *dstp = lwptoproc(dst->br_lwp);
 	lx_ptrace_accord_t *accord;
-	boolean_t unlock = B_FALSE;
+	boolean_t is_fork = B_FALSE;
 
-	if (srcp == dstp) {
+	VERIFY(MUTEX_HELD(&dstp->p_lock));
+	if (srcp != dstp) {
 		/*
-		 * This is syslwp_create(), so the process p_lock is already
-		 * held.
+		 * In the case of being called via forklwp, some lock shuffling
+		 * is required.  The destination p_lock must be dropped to
+		 * avoid deadlocks when locking the source and manipulating
+		 * ptrace accord resources.
 		 */
-		VERIFY(MUTEX_HELD(&srcp->p_lock));
-	} else {
-		unlock = B_TRUE;
+		is_fork = B_TRUE;
+		sprlock_proc(dstp);
+		mutex_exit(&dstp->p_lock);
 		mutex_enter(&srcp->p_lock);
 	}
 
@@ -1223,6 +1229,11 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	src->br_ptrace_flags &= ~LX_PTF_CLONING;
 
 	/*
+	 * Bump traced-lwp count for the process.
+	 */
+	ptolxproc(dstp)->l_ptrace++;
+
+	/*
 	 * If lx_ptrace_exit_tracer() is trying to detach our tracer, it will
 	 * be sleeping on this CV until LX_PTF_CLONING is clear.  Wake it
 	 * now.
@@ -1230,8 +1241,10 @@ lx_ptrace_inherit_tracer(lx_lwp_data_t *src, lx_lwp_data_t *dst)
 	cv_broadcast(&lx_ptrace_busy_cv);
 
 out:
-	if (unlock) {
+	if (is_fork) {
 		mutex_exit(&srcp->p_lock);
+		mutex_enter(&dstp->p_lock);
+		sprunprlock(dstp);
 	}
 }
 
@@ -1303,6 +1316,12 @@ lx_ptrace_traceme(void)
 		lwpd->br_ptrace_tracer = accord;
 		did_attach = B_TRUE;
 		error = 0;
+
+		/*
+		 * Speculatively bump l_ptrace now before dropping p_lock.
+		 * It will be reverted if the tracee attachment fails.
+		 */
+		ptolxproc(p)->l_ptrace++;
 	}
 	mutex_exit(&p->p_lock);
 
@@ -1315,8 +1334,6 @@ lx_ptrace_traceme(void)
 		mutex_enter(&accord->lxpa_tracees_lock);
 
 		if (!(accord->lxpa_flags & LX_ACC_TOMBSTONE)) {
-			lx_proc_data_t *procd = ttolxproc(curthread);
-
 			/*
 			 * Put ourselves in the tracee list for this accord.
 			 */
@@ -1324,12 +1341,6 @@ lx_ptrace_traceme(void)
 			list_insert_tail(&accord->lxpa_tracees, lwpd);
 			mutex_exit(&accord->lxpa_tracees_lock);
 			lx_ptrace_accord_exit(accord);
-
-			/*
-			 * Set the in-kernel process-wide ptrace(2) enable
-			 * flag.
-			 */
-			procd->l_ptrace = 1;
 
 			return (0);
 		}
@@ -1341,6 +1352,13 @@ lx_ptrace_traceme(void)
 		 */
 		error = ESRCH;
 		lx_ptrace_accord_exit(accord);
+
+		/*
+		 * Undo speculative increment of ptracer count.
+		 */
+		mutex_enter(&p->p_lock);
+		ptolxproc(p)->l_ptrace--;
+		mutex_exit(&p->p_lock);
 	}
 
 	/*
@@ -1788,6 +1806,11 @@ lx_ptrace_exit_tracer(proc_t *p, lx_lwp_data_t *lwpd,
 		mutex_exit(&accord->lxpa_tracees_lock);
 
 		/*
+		 * Decrement traced-lwp count for the remote process.
+		 */
+		VERIFY(ptolxproc(rproc)->l_ptrace-- >= 1);
+
+		/*
 		 * Ensure that the LWP is not stopped on our account.
 		 */
 		lx_ptrace_restart_lwp(rlwp);
@@ -1857,6 +1880,12 @@ lx_ptrace_exit_tracee(proc_t *p, lx_lwp_data_t *lwpd,
 	 * Wake up any tracers waiting for us to detach from the accord.
 	 */
 	cv_broadcast(&lx_ptrace_busy_cv);
+
+	/*
+	 * Decrement traced-lwp count for the process.
+	 */
+	VERIFY(ptolxproc(p)->l_ptrace-- >= 1);
+
 	mutex_exit(&p->p_lock);
 	mutex_exit(&accord->lxpa_tracees_lock);
 

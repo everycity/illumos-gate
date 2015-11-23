@@ -243,7 +243,8 @@ typedef enum lx_proc_flags {
 	LX_PROC_INSTALL_MODE	= 0x01,
 	LX_PROC_STRICT_MODE	= 0x02,
 	/* internal flags */
-	LX_PROC_CHILD_DEATHSIG	= 0x04
+	LX_PROC_CHILD_DEATHSIG	= 0x04,
+	LX_PROC_AIO_USED	= 0x08
 } lx_proc_flags_t;
 
 #define	LX_PROC_ALL	(LX_PROC_INSTALL_MODE | LX_PROC_STRICT_MODE)
@@ -282,7 +283,7 @@ typedef struct {
 typedef struct lx_proc_data {
 	uintptr_t l_handler;	/* address of user-space handler */
 	pid_t l_ppid;		/* pid of originating parent proc */
-	uint64_t l_ptrace;	/* process being observed with ptrace */
+	int64_t l_ptrace;	/* count of process lwps observed by ptrace */
 	lx_elf_data_t l_elf_data; /* ELF data for linux executable */
 	/* signal to deliver to parent when this thread group dies */
 	int l_signal;
@@ -573,6 +574,8 @@ extern void lx_switch_to_native(klwp_t *);
 
 extern int lx_syscall_enter(void);
 extern int lx_syscall_return(klwp_t *, int, long);
+
+extern int lx_syscall_fast_enter(void);
 
 extern void lx_trace_sysenter(int, uintptr_t *);
 extern void lx_trace_sysreturn(int, long);

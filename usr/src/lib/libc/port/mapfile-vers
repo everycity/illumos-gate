@@ -93,6 +93,35 @@ $if _x86 && _ELF64
 $add amd64
 $endif
 
+SYMBOL_VERSION ILLUMOS_0.18 {	# signalfd
+    protected:
+	signalfd;
+} ILLUMOS_0.17;
+
+SYMBOL_VERSION ILLUMOS_0.17 {	# glob(3C) LFS
+$if lf64
+    protected:
+	_glob_ext64;
+	_globfree_ext64;
+$endif
+} ILLUMOS_0.16;
+
+SYMBOL_VERSION ILLUMOS_0.16 {	# timerfd
+    protected:
+	timerfd_create;
+	timerfd_gettime;
+	timerfd_settime;
+} ILLUMOS_0.15;
+
+SYMBOL_VERSION ILLUMOS_0.15 {	# epoll(3C)
+    protected:
+	epoll_create;
+	epoll_create1;
+	epoll_ctl;
+	epoll_wait;
+	epoll_pwait;
+} ILLUMOS_0.14;
+
 SYMBOL_VERSION ILLUMOS_0.14 {	# strerror_l
     protected:
 	strerror_l;
@@ -2846,11 +2875,6 @@ $endif
 	_dgettext;
 	_doprnt;
 	_doscan;
-	epoll_create;
-	epoll_create1;
-	epoll_ctl;
-	epoll_wait;
-	epoll_pwait;
 	_errfp;
 	_errxfp;
 	exportfs;
@@ -3013,7 +3037,6 @@ $endif
 	_so_shutdown;
 	_so_socket;
 	_so_socketpair;
-	signalfd;
 	str2group;
 	str2passwd;
 	str2spwd;
@@ -3045,9 +3068,6 @@ $endif
 	_thr_suspend_mutator;
 	thr_wait_mutator;
 	_thr_wait_mutator;
-	timerfd_create;
-	timerfd_gettime;
-	timerfd_settime;
 	__tls_get_addr;
 	_tmem_get_base;
 	_tmem_get_nentries;

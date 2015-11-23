@@ -43,6 +43,7 @@ extern long lx_chown16();
 extern long lx_clock_getres();
 extern long lx_clock_gettime();
 extern long lx_clock_settime();
+extern long lx_close();
 extern long lx_connect();
 extern long lx_epoll_create();
 extern long lx_epoll_create1();
@@ -71,6 +72,7 @@ extern long lx_getrandom();
 extern long lx_getrlimit();
 extern long lx_gettid();
 extern long lx_gettimeofday();
+extern long lx_io_setup();
 extern long lx_ioctl();
 extern long lx_ioprio_get();
 extern long lx_ioprio_set();
@@ -110,6 +112,7 @@ extern long lx_setresgid16();
 extern long lx_setresuid();
 extern long lx_setresuid16();
 extern long lx_setrlimit();
+extern long lx_socket();
 extern long lx_socketcall();
 extern long lx_syncfs();
 extern long lx_sysinfo32();
@@ -134,13 +137,36 @@ extern long lx_xattr();
 
 #define	LX_VSYSCALL_ADDR		(uintptr_t)0xffffffffff600000
 #define	LX_VSYSCALL_SIZE		(uintptr_t)0x1000
+#endif
+
+
 /*
- * System call numbers for vsyscall revectoring:
+ * System call numbers for revectoring:
  */
+
+#if defined(_LP64)
+#define	LX_SYS_close		3
 #define	LX_SYS_gettimeofday	96
 #define	LX_SYS_time		201
+#define	LX_SYS_io_setup		206
+#define	LX_SYS_clock_gettime	228
 #define	LX_SYS_getcpu		309
+
+#define	LX_SYS32_close		6
+#define	LX_SYS32_gettimeofday	78
+#define	LX_SYS32_time		13
+#define	LX_SYS32_clock_gettime	265
+#define	LX_SYS32_io_setup	245
+#define	LX_SYS32_getcpu		318
+#else
+#define	LX_SYS_close		6
+#define	LX_SYS_gettimeofday	78
+#define	LX_SYS_time		13
+#define	LX_SYS_clock_gettime	265
+#define	LX_SYS_io_setup		245
+#define	LX_SYS_getcpu		318
 #endif
+
 
 #endif	/* _KERNEL */
 

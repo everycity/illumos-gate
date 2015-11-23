@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2015 Joyent, Inc.  All rights reserved.
  */
@@ -1741,12 +1741,9 @@ top:
 	dmu_tx_hold_zap(tx, zfsvfs->z_unlinkedobj, FALSE, NULL);
 
 	/*
-	 * Mark this transaction as typically resulting in a net free of
-	 * space, unless object removal will be delayed indefinitely
-	 * (due to active holds on the vnode due to the file being open).
+	 * Mark this transaction as typically resulting in a net free of space
 	 */
-	if (may_delete_now)
-		dmu_tx_mark_netfree(tx);
+	dmu_tx_mark_netfree(tx);
 
 	error = dmu_tx_assign(tx, waited ? TXG_WAITED : TXG_NOWAIT);
 	if (error) {
@@ -3667,6 +3664,18 @@ top:
 		}
 	}
 
+	vnevent_pre_rename_src(ZTOV(szp), sdvp, snm, ct);
+	if (tzp)
+		vnevent_pre_rename_dest(ZTOV(tzp), tdvp, tnm, ct);
+
+	/*
+	 * notify the target directory if it is not the same
+	 * as source directory.
+	 */
+	if (tdvp != sdvp) {
+		vnevent_pre_rename_dest_dir(tdvp, ZTOV(szp), tnm, ct);
+	}
+
 	tx = dmu_tx_create(zfsvfs->z_os);
 	dmu_tx_hold_sa(tx, szp->z_sa_hdl, B_FALSE);
 	dmu_tx_hold_sa(tx, sdzp->z_sa_hdl, B_FALSE);
@@ -4141,7 +4150,7 @@ top:
 /* ARGSUSED */
 static int
 zfs_null_putapage(vnode_t *vp, page_t *pp, u_offset_t *offp,
-		size_t *lenp, int flags, cred_t *cr)
+    size_t *lenp, int flags, cred_t *cr)
 {
 	pvn_write_done(pp, B_INVAL|B_FORCE|B_ERROR);
 	return (0);
@@ -4167,7 +4176,7 @@ zfs_null_putapage(vnode_t *vp, page_t *pp, u_offset_t *offp,
 /* ARGSUSED */
 static int
 zfs_putapage(vnode_t *vp, page_t *pp, u_offset_t *offp,
-		size_t *lenp, int flags, cred_t *cr)
+    size_t *lenp, int flags, cred_t *cr)
 {
 	znode_t		*zp = VTOZ(vp);
 	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;

@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, Joyent, Inc.  All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 #ifndef _LIBZONECFG_H
@@ -168,6 +168,11 @@ extern "C" {
  */
 #define	ZONE_DRY_RUN		0x01
 
+typedef enum zone_iptype {
+	ZS_SHARED,
+	ZS_EXCLUSIVE
+} zone_iptype_t;
+
 /*
  * The integer field expresses the current values on a get.
  * On a put, it represents the new values if >= 0 or "don't change" if < 0.
@@ -178,6 +183,9 @@ struct zoneent {
 	char	zone_path[MAXPATHLEN];		/* path to zone storage */
 	uuid_t	zone_uuid;			/* unique ID for zone */
 	char	zone_newname[ZONENAME_MAX];	/* for doing renames */
+	char	zone_brand[MAXNAMELEN];		/* zone's brand */
+	zone_iptype_t zone_iptype;		/* zone's IP type */
+	zoneid_t zone_did;			/* persistent debug ID */
 };
 
 typedef struct zone_dochandle *zone_dochandle_t;	/* opaque handle */
@@ -281,11 +289,6 @@ typedef struct {
 	char		*zpe_vers;
 } zone_pkg_entry_t;
 
-typedef enum zone_iptype {
-	ZS_SHARED,
-	ZS_EXCLUSIVE
-} zone_iptype_t;
-
 /*
  * Basic configuration management routines.
  */
@@ -313,6 +316,7 @@ extern	boolean_t zonecfg_valid_importance(char *);
 extern	int	zonecfg_str_to_bytes(char *, uint64_t *);
 extern	boolean_t zonecfg_valid_memlimit(char *, uint64_t *);
 extern	boolean_t zonecfg_valid_alias_limit(char *, char *, uint64_t *);
+extern	void	zonecfg_notify_create(zone_dochandle_t);
 
 /*
  * Zone name, path to zone directory, autoboot setting, pool, boot

@@ -2433,6 +2433,8 @@ f usr/has/man/man1has/edit.1has 0444 root bin
 f usr/has/man/man1has/vi.1has 0444 root bin
 d usr/include 0755 root bin
 f usr/include/aclutils.h 0644 root bin
+d usr/include/ads 0755 root bin
+f usr/include/ads/dsgetdc.h 0644 root bin
 f usr/include/aio.h 0644 root bin
 f usr/include/alloca.h 0644 root bin
 d usr/include/amd64 0755 root bin
@@ -2805,6 +2807,7 @@ f usr/include/iso646.h 0644 root bin
 d usr/include/kerberosv5 0755 root bin
 f usr/include/kerberosv5/com_err.h 0644 root bin
 f usr/include/kerberosv5/krb5.h 0644 root bin
+f usr/include/kerberosv5/locate_plugin.h 0644 root bin
 f usr/include/kerberosv5/mit-sipb-copyright.h 0644 root bin
 f usr/include/kerberosv5/mit_copyright.h 0644 root bin
 f usr/include/klpd.h 0644 root bin
@@ -4680,6 +4683,8 @@ f usr/lib/amd64/libSMHBAAPI.so.1 0755 root bin
 s usr/lib/amd64/libSMHBAAPI.so=libSMHBAAPI.so.1
 s usr/lib/amd64/libadm.so.1=../../../lib/amd64/libadm.so.1
 s usr/lib/amd64/libadm.so=../../../lib/amd64/libadm.so.1
+f usr/lib/amd64/libads.so.1 0755 root bin
+s usr/lib/amd64/libads.so=libads.so.1
 f usr/lib/amd64/libadt_jni.so.1 0755 root bin
 s usr/lib/amd64/libadt_jni.so=libadt_jni.so.1
 f usr/lib/amd64/libadutils.so.1 0755 root bin
@@ -6071,6 +6076,8 @@ f usr/lib/libSMHBAAPI.so.1 0755 root bin
 s usr/lib/libSMHBAAPI.so=libSMHBAAPI.so.1
 s usr/lib/libadm.so.1=../../lib/libadm.so.1
 s usr/lib/libadm.so=../../lib/libadm.so.1
+f usr/lib/libads.so.1 0755 root bin
+s usr/lib/libads.so=libads.so.1
 f usr/lib/libadt_jni.so.1 0755 root bin
 s usr/lib/libadt_jni.so=libadt_jni.so.1
 f usr/lib/libadutils.so.1 0755 root bin
@@ -9474,7 +9481,6 @@ f usr/lib/mail.local 0555 root bin
 f usr/lib/mailwrapper 0555 root bin
 f usr/lib/makekey 0555 root bin
 h usr/lib/makewhatis=usr/bin/man
-f usr/lib/mandoc_preconv 0555 root bin
 d usr/lib/mdb 0755 root sys
 d usr/lib/mdb/kvm 0755 root sys
 d usr/lib/mdb/kvm/amd64 0755 root sys
@@ -9502,6 +9508,7 @@ f usr/lib/mdb/kvm/amd64/mac.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/md.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/mdb_kb.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/mdb_ks.so 0555 root sys
+f usr/lib/mdb/kvm/amd64/mm.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/mpt.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/mpt_sas.so 0555 root sys
 f usr/lib/mdb/kvm/amd64/mr_sas.so 0555 root sys
@@ -9558,6 +9565,7 @@ f usr/lib/mdb/kvm/mac.so 0555 root sys
 f usr/lib/mdb/kvm/md.so 0555 root sys
 f usr/lib/mdb/kvm/mdb_kb.so 0555 root sys
 f usr/lib/mdb/kvm/mdb_ks.so 0555 root sys
+f usr/lib/mdb/kvm/mm.so 0555 root sys
 f usr/lib/mdb/kvm/mpt.so 0555 root sys
 f usr/lib/mdb/kvm/mpt_sas.so 0555 root sys
 f usr/lib/mdb/kvm/mr_sas.so 0555 root sys
@@ -9989,6 +9997,13 @@ s usr/lib/smbsrv/amd64/libsmb.so=libsmb.so.1
 f usr/lib/smbsrv/amd64/libsmbns.so.1 0755 root bin
 s usr/lib/smbsrv/amd64/libsmbns.so=libsmbns.so.1
 d usr/lib/smbsrv/dtrace 0755 root bin
+f usr/lib/smbsrv/dtrace/smbd-all.d 0555 root bin
+f usr/lib/smbsrv/dtrace/smbd-authsvc.d 0555 root bin
+f usr/lib/smbsrv/dtrace/smbd-doorsvc.d 0555 root bin
+f usr/lib/smbsrv/dtrace/smbd-pipesvc.d 0555 root bin
+f usr/lib/smbsrv/dtrace/smbnode.d 0555 root bin
+f usr/lib/smbsrv/dtrace/smbsrv.d 0555 root bin
+f usr/lib/smbsrv/dtrace/smbvfs.d 0555 root bin
 f usr/lib/smbsrv/libmlrpc.so.1 0755 root bin
 s usr/lib/smbsrv/libmlrpc.so=libmlrpc.so.1
 f usr/lib/smbsrv/libmlsvc.so.1 0755 root bin
@@ -10409,6 +10424,7 @@ s usr/sbin/newfs=../lib/fs/ufs/newfs
 f usr/sbin/newkey 0555 root sys
 f usr/sbin/nfsref 0555 root bin
 f usr/sbin/nlsadmin 0755 root adm
+f usr/sbin/nltest 0555 root bin
 f usr/sbin/nscd 0555 root bin
 f usr/sbin/nwamadm 0555 root bin
 f usr/sbin/nwamcfg 0555 root bin
@@ -10818,7 +10834,7 @@ d usr/share/lib/zoneinfo/America 0755 root bin
 h usr/share/lib/zoneinfo/America/Adak=usr/share/lib/zoneinfo/US/Aleutian
 f usr/share/lib/zoneinfo/America/Anchorage 0644 root bin
 f usr/share/lib/zoneinfo/America/Anguilla 0644 root bin
-f usr/share/lib/zoneinfo/America/Antigua 0644 root bin
+h usr/share/lib/zoneinfo/America/Antigua=usr/share/lib/zoneinfo/America/Port_of_Spain
 f usr/share/lib/zoneinfo/America/Araguaina 0644 root bin
 d usr/share/lib/zoneinfo/America/Argentina 0755 root bin
 f usr/share/lib/zoneinfo/America/Argentina/Buenos_Aires 0644 root bin
@@ -10872,6 +10888,7 @@ f usr/share/lib/zoneinfo/America/Edmonton 0644 root bin
 f usr/share/lib/zoneinfo/America/Eirunepe 0644 root bin
 f usr/share/lib/zoneinfo/America/El_Salvador 0644 root bin
 h usr/share/lib/zoneinfo/America/Ensenada=usr/share/lib/zoneinfo/America/Tijuana
+f usr/share/lib/zoneinfo/America/Fort_Nelson 0644 root bin
 h usr/share/lib/zoneinfo/America/Fort_Wayne=usr/share/lib/zoneinfo/US/East-Indiana
 f usr/share/lib/zoneinfo/America/Fortaleza 0644 root bin
 f usr/share/lib/zoneinfo/America/Glace_Bay 0644 root bin
@@ -10927,7 +10944,7 @@ f usr/share/lib/zoneinfo/America/Miquelon 0644 root bin
 f usr/share/lib/zoneinfo/America/Moncton 0644 root bin
 f usr/share/lib/zoneinfo/America/Monterrey 0644 root bin
 f usr/share/lib/zoneinfo/America/Montevideo 0644 root bin
-f usr/share/lib/zoneinfo/America/Montreal 0644 root bin
+h usr/share/lib/zoneinfo/America/Montreal=usr/share/lib/zoneinfo/America/Toronto
 f usr/share/lib/zoneinfo/America/Montserrat 0644 root bin
 f usr/share/lib/zoneinfo/America/Nassau 0644 root bin
 f usr/share/lib/zoneinfo/America/New_York 0644 root bin
@@ -11318,7 +11335,7 @@ f usr/share/lib/zoneinfo/Pacific/Kosrae 0644 root bin
 f usr/share/lib/zoneinfo/Pacific/Kwajalein 0644 root bin
 f usr/share/lib/zoneinfo/Pacific/Majuro 0644 root bin
 f usr/share/lib/zoneinfo/Pacific/Marquesas 0644 root bin
-f usr/share/lib/zoneinfo/Pacific/Midway 0644 root bin
+h usr/share/lib/zoneinfo/Pacific/Midway=usr/share/lib/zoneinfo/US/Samoa
 f usr/share/lib/zoneinfo/Pacific/Nauru 0644 root bin
 f usr/share/lib/zoneinfo/Pacific/Niue 0644 root bin
 f usr/share/lib/zoneinfo/Pacific/Norfolk 0644 root bin
@@ -11330,7 +11347,7 @@ f usr/share/lib/zoneinfo/Pacific/Pohnpei 0644 root bin
 f usr/share/lib/zoneinfo/Pacific/Ponape 0644 root bin
 f usr/share/lib/zoneinfo/Pacific/Port_Moresby 0644 root bin
 f usr/share/lib/zoneinfo/Pacific/Rarotonga 0644 root bin
-f usr/share/lib/zoneinfo/Pacific/Saipan 0644 root bin
+h usr/share/lib/zoneinfo/Pacific/Saipan=usr/share/lib/zoneinfo/Pacific/Guam
 h usr/share/lib/zoneinfo/Pacific/Samoa=usr/share/lib/zoneinfo/US/Samoa
 f usr/share/lib/zoneinfo/Pacific/Tahiti 0644 root bin
 f usr/share/lib/zoneinfo/Pacific/Tarawa 0644 root bin
@@ -11710,14 +11727,12 @@ f usr/share/man/man1/runat.1 0444 root bin
 f usr/share/man/man1/rup.1 0444 root bin
 f usr/share/man/man1/ruptime.1 0444 root bin
 f usr/share/man/man1/rusers.1 0444 root bin
-f usr/share/man/man1/scp.1 0444 root bin
 f usr/share/man/man1/script.1 0444 root bin
 f usr/share/man/man1/sdiff.1 0444 root bin
 f usr/share/man/man1/sed.1 0444 root bin
 f usr/share/man/man1/setfacl.1 0444 root bin
 f usr/share/man/man1/setpgrp.1 0444 root bin
 s usr/share/man/man1/settime.1=touch.1
-f usr/share/man/man1/sftp.1 0444 root bin
 s usr/share/man/man1/sh.1=ksh93.1
 f usr/share/man/man1/shcomp.1 0444 root bin
 f usr/share/man/man1/size.1 044 root bin
@@ -12112,7 +12127,6 @@ f usr/share/man/man1m/savecore.1m 0444 root bin
 f usr/share/man/man1m/sbdadm.1m 0444 root bin
 f usr/share/man/man1m/sendmail.1m 0444 root bin
 f usr/share/man/man1m/setuname.1m 0444 root bin
-f usr/share/man/man1m/sftp-server.1m 0444 root bin
 f usr/share/man/man1m/share.1m 0444 root bin
 f usr/share/man/man1m/share_nfs.1m 0444 root bin
 f usr/share/man/man1m/shareall.1m 0444 root bin

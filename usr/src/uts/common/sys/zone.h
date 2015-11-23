@@ -110,6 +110,7 @@ extern "C" {
 #define	ZONE_ATTR_PG_FLT_DELAY	21
 #define	ZONE_ATTR_RSS		22
 #define	ZONE_ATTR_APP_SVC_CT	23
+#define	ZONE_ATTR_SCHED_FIXEDHI	24
 
 /* Start of the brand-specific attribute namespace */
 #define	ZONE_ATTR_BRAND_ATTRS	32768
@@ -457,6 +458,7 @@ typedef struct {
 	kstat_named_t	zm_ffnoproc;
 	kstat_named_t	zm_ffnomem;
 	kstat_named_t	zm_ffmisc;
+	kstat_named_t	zm_nested_intp;
 	kstat_named_t	zm_init_pid;
 	kstat_named_t	zm_boot_time;
 } zone_misc_kstat_t;
@@ -600,6 +602,7 @@ typedef struct zone {
 	struct brand	*zone_brand;		/* zone's brand */
 	void 		*zone_brand_data;	/* store brand specific data */
 	id_t		zone_defaultcid;	/* dflt scheduling class id */
+	boolean_t	zone_fixed_hipri;	/* fixed sched. hi prio */
 	kstat_t		*zone_swapresv_kstat;
 	kstat_t		*zone_lockedmem_kstat;
 	/*
@@ -701,6 +704,8 @@ typedef struct zone {
 	uint32_t	zone_ffnoproc;		/* get proc/lwp error */
 	uint32_t	zone_ffnomem;		/* as_dup/memory error */
 	uint32_t	zone_ffmisc;		/* misc. other error */
+
+	uint32_t	zone_nested_intp;	/* nested interp. kstat */
 
 	struct loadavg_s zone_loadavg;		/* loadavg for this zone */
 	uint64_t	zone_hp_avenrun[3];	/* high-precision avenrun */

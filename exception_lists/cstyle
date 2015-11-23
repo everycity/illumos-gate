@@ -61,9 +61,10 @@ usr/src/cmd/krb5/ldap_util/kdb5_ldap_util.h
 usr/src/cmd/krb5/slave/kprop.c
 usr/src/cmd/krb5/slave/kprop.h
 usr/src/cmd/krb5/slave/kpropd.c
-usr/src/cmd/mandoc/arch.c
 usr/src/cmd/mandoc/att.c
 usr/src/cmd/mandoc/chars.c
+usr/src/cmd/mandoc/compat_fgetln.c
+usr/src/cmd/mandoc/compat_reallocarray.c
 usr/src/cmd/mandoc/config.h
 usr/src/cmd/mandoc/eqn.c
 usr/src/cmd/mandoc/eqn_html.c
@@ -86,6 +87,8 @@ usr/src/cmd/mandoc/man_term.c
 usr/src/cmd/mandoc/man_validate.c
 usr/src/cmd/mandoc/mandoc.c
 usr/src/cmd/mandoc/mandoc.h
+usr/src/cmd/mandoc/mandoc_aux.c
+usr/src/cmd/mandoc/manpath.c
 usr/src/cmd/mandoc/mdoc.c
 usr/src/cmd/mandoc/mdoc.h
 usr/src/cmd/mandoc/mdoc_argv.c
@@ -113,7 +116,6 @@ usr/src/cmd/mandoc/term.h
 usr/src/cmd/mandoc/term_ascii.c
 usr/src/cmd/mandoc/term_ps.c
 usr/src/cmd/mandoc/tree.c
-usr/src/cmd/mandoc/vol.c
 usr/src/common/bzip2/bzlib.h
 usr/src/common/bzip2/crctable.c
 usr/src/common/bzip2/randtable.c
@@ -669,6 +671,7 @@ usr/src/lib/krb5/ss/ss.h
 usr/src/lib/krb5/ss/std_rqs.c
 usr/src/lib/krb5/ss/utils.c
 usr/src/lib/libgss/g_glue.c
+usr/src/lib/libresolv2/common
 usr/src/lib/librstp/common/base.h
 usr/src/lib/librstp/common/choose.h
 usr/src/lib/librstp/common/edge.c
@@ -708,6 +711,11 @@ usr/src/lib/librstp/common/transmit.h
 usr/src/lib/librstp/common/uid_stp.h
 usr/src/lib/librstp/common/vector.c
 usr/src/lib/librstp/common/vector.h
+usr/src/lib/libsmbfs/smb/derparse.c
+usr/src/lib/libsmbfs/smb/derparse.h
+usr/src/lib/libsmbfs/smb/spnego.c
+usr/src/lib/libsmbfs/smb/spnegoparse.c
+usr/src/lib/libsmbfs/smb/spnegoparse.h
 usr/src/uts/common/gssapi/gssapi.h
 usr/src/uts/common/gssapi/mechs/krb5/crypto/block_size.c
 usr/src/uts/common/gssapi/mechs/krb5/crypto/checksum_length.c

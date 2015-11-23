@@ -506,6 +506,22 @@ noprod_sys_syscall:
 
 	ENABLE_INTR_FLAGS
 
+	/*
+	 * If our LWP has a branded syscall_fast handler, execute it.  A return
+	 * code of zero indicates that the handler completely processed the syscall
+	 * and we can return directly to userspace.
+	 */
+	movq	LWP_BRAND_SYSCALL_FAST(%r14), %rdi
+	testq	%rdi, %rdi
+	jz	_syscall_no_brand_fast
+	call	*%rdi
+	testl	%eax, %eax
+	jnz	_syscall_no_brand_fast
+	incq	LWP_RU_SYSC(%r14)
+	incq	%gs:CPU_STATS_SYS_SYSCALL
+	jmp	_sys_rtt
+
+_syscall_no_brand_fast:
 	MSTATE_TRANSITION(LMS_USER, LMS_SYSTEM)
 	movl	REGOFF_RAX(%rsp), %eax	/* (%rax damaged by mstate call) */
 
@@ -812,6 +828,22 @@ _syscall32_save:
 
 	ENABLE_INTR_FLAGS
 
+	/*
+	 * If our LWP has a branded syscall_fast handler, execute it.  A return
+	 * code of zero indicates that the handler completely processed the syscall
+	 * and we can return directly to userspace.
+	 */
+	movq	LWP_BRAND_SYSCALL_FAST(%r14), %rdi
+	testq	%rdi, %rdi
+	jz	_syscall32_no_brand_fast
+	call	*%rdi
+	testl	%eax, %eax
+	jnz	_syscall32_no_brand_fast
+	incq	LWP_RU_SYSC(%r14)
+	incq	%gs:CPU_STATS_SYS_SYSCALL
+	jmp	_sys_rtt
+
+_syscall32_no_brand_fast:
 	MSTATE_TRANSITION(LMS_USER, LMS_SYSTEM)
 	movl	REGOFF_RAX(%rsp), %eax	/* (%rax damaged by mstate call) */
 
@@ -1237,6 +1269,7 @@ sys_int80()
 	ENTRY_NP(brand_sys_int80)
 	SWAPGS				/* kernel gsbase */
 	XPV_TRAP_POP
+	call	smap_enable
 
 	/*
 	 * We first attempt to call the "b_int80" handler from the "struct
@@ -1275,6 +1308,7 @@ sys_int80()
 	 * because gptrap will pop them again with its own XPV_TRAP_POP.
 	 */
 	XPV_TRAP_POP
+	call	smap_enable
 nopop_int80:
 	subq	$2, (%rsp)	/* int insn 2-bytes */
 	pushq	$_CONST(_MUL(T_INT80, GATE_DESC_SIZE) + 2)
@@ -1305,12 +1339,14 @@ sys_syscall_int()
 	ENTRY_NP(brand_sys_syscall_int)
 	SWAPGS				/* kernel gsbase */
 	XPV_TRAP_POP
+	call	smap_enable
 	BRAND_CALLBACK(BRAND_CB_INT91, BRAND_URET_FROM_INTR_STACK())
 	jmp	nopop_syscall_int
 
 	ALTENTRY(sys_syscall_int)
 	SWAPGS				/* kernel gsbase */
 	XPV_TRAP_POP
+	call	smap_enable
 
 nopop_syscall_int:
 	movq	%gs:CPU_THREAD, %r15
