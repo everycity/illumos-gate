@@ -25,7 +25,9 @@
  *
  * Because libnsl (which we need to make RPCs) depends on the netconfig table
  * (which won't exist inside an lx zone) we provide a built-in default
- * netconfig table which we hook into libnsl via the brand callbacks.
+ * netconfig table which we hook into libnsl via the brand callbacks. See
+ *	_nsl_brand_set_hooks(lx_nsl_set_sz_func, lx_get_ent_func)
+ * in lx_nfs_mount().
  *
  * Finally, in most of the functions below, when the code refers to the
  * hostname we're really working with the IP addr that the Linux user-level
@@ -82,6 +84,7 @@
 #include <nfs/nfssys.h>
 #include <strings.h>
 #include <sys/lx_mount.h>
+#include <sys/lx_misc.h>
 
 #ifndef	NFS_VERSMAX
 #define	NFS_VERSMAX	4
@@ -160,9 +163,9 @@ static nfs_map_opt_t nmo_tab[] = {
 	{"minorversion", NULL,		MOUNT_OPT_INVALID},
 	{"mountaddr",	NULL,		MOUNT_OPT_INVALID},
 	{"mounthost",	NULL,		MOUNT_OPT_INVALID},
-	{"mountport",	NULL,		MOUNT_OPT_INVALID},
-	{"mountproto",	NULL,		MOUNT_OPT_INVALID},
-	{"mountvers",	NULL,		MOUNT_OPT_INVALID},
+	{"mountport",	NULL,		MOUNT_OPT_PASTHRU},
+	{"mountproto",	NULL,		MOUNT_OPT_PASTHRU},
+	{"mountvers",	NULL,		MOUNT_OPT_PASTHRU},
 	{"namlen",	NULL,		MOUNT_OPT_INVALID},
 	{"nfsvers",	NULL,		MOUNT_OPT_INVALID},
 	{"noac",	NULL,		MOUNT_OPT_PASTHRU},
@@ -187,7 +190,7 @@ static nfs_map_opt_t nmo_tab[] = {
 	{"rsize",	NULL,		MOUNT_OPT_PASTHRU},
 	{"sec",		NULL,		MOUNT_OPT_PASTHRU},
 	{"sharecache",	NULL,		MOUNT_OPT_IGNORE},
-	{"sloppy",	NULL,		MOUNT_OPT_INVALID},
+	{"sloppy",	NULL,		MOUNT_OPT_IGNORE},
 	{"soft",	NULL,		MOUNT_OPT_PASTHRU},
 	{"tcp",		"proto=tcp",	MOUNT_OPT_TOKEN},
 	{"timeo",	NULL,		MOUNT_OPT_PASTHRU},
@@ -1965,6 +1968,8 @@ append_opt(char *optstr, int len, char *k, char *v)
 		if (strcmp(k, nmo_tab[i].nmo_lx_opt) == 0) {
 			switch (nmo_tab[i].nmo_argtyp) {
 			case MOUNT_OPT_INVALID:
+				lx_unsupported("invalid NFS mount option: %s",
+				    k);
 				return (-EINVAL);
 
 			case MOUNT_OPT_PASTHRU:
@@ -2030,6 +2035,16 @@ get_nfs_kv(char *vs, char **kp, char **vp)
  *
  * example input string, given 'nolock' as the only user-level option:
  *     nolock,vers=4,addr=127.0.0.1,clientaddr=0.0.0.0
+ *
+ * opt string (all one line) from a Centos 6 distro given 'nolock,vers=3' as
+ * the explicit options:
+ *     nolock,addr=127.0.0.1,vers=3,proto=tcp,mountvers=3,mountproto=tcp,
+ *     mountport=1892
+ *
+ * This is an example emitted by the Ubuntu 14.04 automounter for an explicit
+ * v3 mount:
+ *	timeo=60,soft,intr,sloppy,addr=10.88.88.200,vers=3,proto=tcp,
+ *	mountvers=3,mountproto=tcp,mountport=63484
  */
 static int
 convert_nfs_arg_str(char *srcp, char *mntopts)
@@ -2074,11 +2089,20 @@ convert_nfs_arg_str(char *srcp, char *mntopts)
 				 */
 			} else if (strcmp(key, "vers") == 0) {
 				/*
-				 * This should always be passed and is the
-				 * only vers we want to support.
+				 * This may be implicitly or explicitly passed.
+				 * Check for the versions we want to support.
 				 */
-				if (atoi(val) != 4)
+				int r;
+				int v = atoi(val);
+
+				if (v != 3 && v != 4)
 					return (-EINVAL);
+
+				r = append_opt(mntopts, MAX_MNTOPT_STR,
+				    key, val);
+				if (r != 0)
+					return (r);
+
 			} else if (strcmp(key, "sec") == 0) {
 				no_sec = B_FALSE;
 			} else {
@@ -2137,6 +2161,9 @@ lx_nfs_mount(char *srcp, char *mntp, char *fst, int lx_flags, char *opts)
 	 * dealing with Illumos options after this.
 	 */
 	convert_nfs_arg_str(srcp, opts);
+
+	/* Linux seems to always allow overlay mounts */
+	il_flags |= MS_OVERLAY;
 
 	/* Convert some Linux flags to Illumos flags. */
 	if (lx_flags & LX_MS_RDONLY)

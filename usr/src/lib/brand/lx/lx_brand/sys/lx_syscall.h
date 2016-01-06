@@ -75,8 +75,6 @@ extern long lx_vhangup(void);
 extern long lx_fadvise64(uintptr_t, off64_t, uintptr_t, uintptr_t);
 extern long lx_fadvise64_64(uintptr_t, off64_t, off64_t, uintptr_t);
 
-extern long lx_readv(uintptr_t, uintptr_t, uintptr_t);
-extern long lx_writev(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_pread(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_pwrite(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_preadv(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
@@ -91,17 +89,10 @@ extern long lx_accept(int, void *, int *);
 extern long lx_accept4(int, void *, int *, int);
 extern long lx_getpeername(int, void *, int *);
 extern long lx_getsockname(int, void *, int *);
-extern long lx_getsockopt(int, int, int, void *, int *);
 extern long lx_listen(int, int);
-extern long lx_setsockopt(int, int, int, void *, int);
 extern long lx_shutdown(int, int);
 extern long lx_socketpair(int, int, int, int *);
 
-extern long lx_select(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_pselect6(uintptr_t, uintptr_t, uintptr_t, uintptr_t,
-    uintptr_t, uintptr_t);
-extern long lx_poll(uintptr_t, uintptr_t, uintptr_t);
-extern long lx_ppoll(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_settimeofday(uintptr_t, uintptr_t);
 extern long lx_getrusage(uintptr_t, uintptr_t);
 extern long lx_mknod(uintptr_t, uintptr_t, uintptr_t);
@@ -316,8 +307,10 @@ extern long lx_utimes(const char *, const struct timeval *);
 
 #if defined(_LP64)
 #define	LX_SYS_clone		56
+#define	LX_SYS_vfork		58
 #else
 #define	LX_SYS_clone		120
+#define	LX_SYS_vfork		190
 #endif
 
 #ifdef	__cplusplus

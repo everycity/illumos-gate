@@ -526,7 +526,7 @@ MISC_KMODS	+= md_sp
 #
 #	Brand modules
 #
-BRAND_KMODS	+= sn1_brand sngl_brand s10_brand lx_brand
+BRAND_KMODS	+= sn1_brand s10_brand lx_brand
 DRV_KMODS	+= lx_systrace lx_ptm lx_audio lx_netlink
 
 #
@@ -545,7 +545,7 @@ SCHED_KMODS	+= IA RT TS RT_DPTBL TS_DPTBL FSS FX FX_DPTBL SDC
 FS_KMODS	+= autofs ctfs dcfs dev devfs fdfs fifofs hsfs hyprlofs
 FS_KMODS	+= lofs lxautofs lx_proc lxprocfs mntfs namefs nfs objfs zfs zut
 FS_KMODS	+= pcfs procfs sockfs specfs tmpfs udfs ufs sharefs lx_sysfs
-FS_KMODS	+= smbfs bootfs lx_cgroup
+FS_KMODS	+= smbfs bootfs lx_cgroup lx_devfs
 
 #
 #	Streams Modules (/kernel/strmod):

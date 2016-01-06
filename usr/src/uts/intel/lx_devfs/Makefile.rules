@@ -1,5 +1,3 @@
-#!/bin/ksh -p
-#
 #
 # This file and its contents are supplied under the terms of the
 # Common Development and Distribution License ("CDDL"), version 1.0.
@@ -12,20 +10,12 @@
 #
 
 #
-# Copyright (c) 2014 Joyent, Inc.  All rights reserved.
+# Copyright 2015 Joyent, Inc.  All rights reserved.
 #
 
-# Does this brand support reprovisioning?
-# jst_reprovision="yes"
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/brand/lx/devfs/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
 
-# Is a template image optional?
-# jst_tmplopt="yes"
-
-. /usr/lib/brand/jcommon/libhooks.ksh
-
-function jcommon_attach_hook
-{
-	jattach_zone_final_setup
-}
-
-. /usr/lib/brand/jcommon/cinstall
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/brand/lx/devfs/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))

@@ -1479,8 +1479,22 @@ mapelfexec(
 			break;
 
 		case PT_INTERP:
-			if (ptload)
-				goto bad;
+			/*
+			 * The ELF specification is unequivocal about the
+			 * PT_INTERP program header with respect to any PT_LOAD
+			 * program header:  "If it is present, it must precede
+			 * any loadable segment entry." Linux, however, makes
+			 * no attempt to enforce this -- which has allowed some
+			 * binary editing tools to get away with generating
+			 * invalid ELF binaries in the respect that PT_INTERP
+			 * occurs after the first PT_LOAD program header.  This
+			 * is unfortunate (and of course, disappointing) but
+			 * it's no worse than that: there is no reason that we
+			 * can't process the PT_INTERP entry (if present) after
+			 * one or more PT_LOAD entries.  We therefore
+			 * deliberately do not check ptload here and always
+			 * store dyphdr to be the PT_INTERP program header.
+			 */
 			*dyphdr = phdr;
 			break;
 
@@ -1925,7 +1939,7 @@ top:
 	ASSERT(p == ttoproc(curthread));
 	prstop(0, 0);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 	nphdrs = prnsegs(as, 0) + 2;		/* two CORE note sections */
 
 	/*
@@ -1936,7 +1950,7 @@ top:
 		(void) process_scns(content, p, credp, NULL, NULL, NULL, 0,
 		    NULL, &nshdrs);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT(nshdrs == 0 || nshdrs > 1);
 
@@ -2052,7 +2066,7 @@ top:
 
 	mutex_exit(&p->p_lock);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 	i = 2;
 	for (seg = AS_SEGFIRST(as); seg != NULL; seg = AS_SEGNEXT(as, seg)) {
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
@@ -2152,7 +2166,7 @@ exclude:
 		}
 		ASSERT(tmp == NULL);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	if (overflow || i != nphdrs) {
 		if (ntries++ == 0) {
@@ -2301,14 +2315,14 @@ exclude:
 			bigwad->shdr[0].sh_info = nphdrs;
 
 		if (nshdrs > 1) {
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			if ((error = process_scns(content, p, credp, vp,
 			    &bigwad->shdr[0], nshdrs, rlimit, &doffset,
 			    NULL)) != 0) {
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				goto done;
 			}
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 		}
 
 		if ((error = core_write(vp, UIO_SYSSPACE, soffset,

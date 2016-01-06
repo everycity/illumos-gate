@@ -3710,9 +3710,6 @@ retry_firstlock:
 		goto errout;
 	}
 
-	if (terr == 0 && tvp != NULL)
-		vnevent_rename_dest(tvp, tdvp, tnm, ct);
-
 	/*
 	 * Unlink the source.
 	 * Remove the source entry.  ufs_dirremove() checks that the entry
@@ -3724,8 +3721,12 @@ retry_firstlock:
 	    DR_RENAME, cr)) == ENOENT)
 		error = 0;
 
-	vnevent_rename_src(ITOV(sip), sdvp, snm, ct);
-	vnevent_rename_dest_dir(tdvp, ITOV(sip), tnm, ct);
+	if (error == 0) {
+		vnevent_rename_src(ITOV(sip), sdvp, snm, ct);
+		if (tvp != NULL)
+			vnevent_rename_dest(tvp, tdvp, tnm, ct);
+		vnevent_rename_dest_dir(tdvp, ITOV(sip), tnm, ct);
+	}
 
 errout:
 	if (slot.fbp)
@@ -5659,7 +5660,7 @@ retry_map:
 	 * deadlock between ufs_read/ufs_map/pagefault when a quiesce is
 	 * pending.
 	 */
-	while (!AS_LOCK_TRYENTER(as, &as->a_lock, RW_WRITER)) {
+	while (!AS_LOCK_TRYENTER(as, RW_WRITER)) {
 		ufs_map_alock_retry_cnt++;
 		delay(RETRY_LOCK_DELAY);
 	}
@@ -5675,7 +5676,7 @@ retry_map:
 		 * as->a_lock and wait for ulp->ul_fs_lock status to change.
 		 */
 		ufs_map_lockfs_retry_cnt++;
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		as_rangeunlock(as);
 		if (error == EIO)
 			goto out;

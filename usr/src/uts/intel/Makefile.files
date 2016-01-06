@@ -105,6 +105,11 @@ LX_CGROUP_OBJS +=	\
 	cgrps_vfsops.o	\
 	cgrps_vnops.o
 
+LX_DEVFS_OBJS +=	\
+	lxd_node.o	\
+	lxd_vfsops.o	\
+	lxd_vnops.o
+
 LX_PROC_OBJS +=	\
 	lx_prsubr.o	\
 	lx_prvfsops.o	\
@@ -283,7 +288,6 @@ IOMMULIB_OBJS = iommulib.o
 #	Brand modules
 #
 SN1_BRAND_OBJS	=	sn1_brand.o sn1_brand_asm.o
-SNGL_BRAND_OBJS	=	sngl_brand.o sngl_brand_asm.o
 S10_BRAND_OBJS	=	s10_brand.o s10_brand_asm.o
 LX_BRAND_OBJS  =		\
 	lx_aio.o		\
@@ -314,11 +318,13 @@ LX_BRAND_OBJS  =		\
 	lx_open.o		\
 	lx_pid.o		\
 	lx_pipe.o		\
+	lx_poll.o		\
 	lx_prctl.o		\
 	lx_ptrace.o		\
 	lx_rlimit.o		\
 	lx_rw.o			\
 	lx_sched.o		\
+	lx_signal.o		\
 	lx_signum.o		\
 	lx_socket.o		\
 	lx_sync.o		\

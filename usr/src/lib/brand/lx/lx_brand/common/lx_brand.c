@@ -541,15 +541,38 @@ lx_start(uintptr_t sp, uintptr_t entry)
 	LX_REG(&jump_uc, REG_SP) = sp;
 	LX_REG(&jump_uc, REG_PC) = entry;
 
-#if defined(_LP64)
 	/*
 	 * The AMD64 ABI states that at process entry, %rdx contains "a
 	 * function pointer that the application should register with
-	 * atexit()".  We make sure to pass NULL explicitly so that
-	 * no function is registered.
+	 * atexit()".  This behavior has been observed in statically linked
+	 * i386 programs as well.  As a precaution, all of the registers are
+	 * zeroed prior to initial execution.
 	 */
+#if defined(_LP64)
+	LX_REG(&jump_uc, REG_RAX) = NULL;
+	LX_REG(&jump_uc, REG_RCX) = NULL;
 	LX_REG(&jump_uc, REG_RDX) = NULL;
-#endif
+	LX_REG(&jump_uc, REG_RBX) = NULL;
+	LX_REG(&jump_uc, REG_RBP) = NULL;
+	LX_REG(&jump_uc, REG_RSI) = NULL;
+	LX_REG(&jump_uc, REG_RDI) = NULL;
+	LX_REG(&jump_uc, REG_R8) = NULL;
+	LX_REG(&jump_uc, REG_R9) = NULL;
+	LX_REG(&jump_uc, REG_R10) = NULL;
+	LX_REG(&jump_uc, REG_R11) = NULL;
+	LX_REG(&jump_uc, REG_R12) = NULL;
+	LX_REG(&jump_uc, REG_R13) = NULL;
+	LX_REG(&jump_uc, REG_R14) = NULL;
+	LX_REG(&jump_uc, REG_R15) = NULL;
+#else
+	LX_REG(&jump_uc, EAX) = NULL;
+	LX_REG(&jump_uc, ECX) = NULL;
+	LX_REG(&jump_uc, EDX) = NULL;
+	LX_REG(&jump_uc, EBX) = NULL;
+	LX_REG(&jump_uc, EBP) = NULL;
+	LX_REG(&jump_uc, ESI) = NULL;
+	LX_REG(&jump_uc, EDI) = NULL;
+#endif /* defined(_LP64) */
 
 	lx_debug("starting Linux program sp %p ldentry %p", sp, entry);
 	lx_jump_to_linux(&jump_uc);
@@ -947,7 +970,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_stat64,			/*   4: stat */
 	lx_fstat64,			/*   5: fstat */
 	lx_lstat64,			/*   6: lstat */
-	lx_poll,			/*   7: poll */
+	NULL,				/*   7: poll */
 	lx_lseek,			/*   8: lseek */
 	lx_mmap,			/*   9: mmap */
 	lx_mprotect,			/*  10: mprotect */
@@ -959,11 +982,11 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/*  16: ioctl */
 	lx_pread,			/*  17: pread64 */
 	lx_pwrite,			/*  18: pwrite64 */
-	lx_readv,			/*  19: readv */
-	lx_writev,			/*  20: writev */
+	NULL,				/*  19: readv */
+	NULL,				/*  20: writev */
 	lx_access,			/*  21: access */
 	NULL,				/*  22: pipe */
-	lx_select,			/*  23: select */
+	NULL,				/*  23: select */
 	NULL,				/*  24: sched_yield */
 	lx_remap,			/*  25: mremap */
 	lx_msync,			/*  26: msync */
@@ -994,8 +1017,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_getsockname,			/*  51: getsockname */
 	lx_getpeername,			/*  52: getpeername */
 	lx_socketpair,			/*  53: socketpair */
-	lx_setsockopt,			/*  54: setsockopt */
-	lx_getsockopt,			/*  55: getsockopt */
+	NULL,				/*  54: setsockopt */
+	NULL,				/*  55: getsockopt */
 	lx_clone,			/*  56: clone */
 	lx_fork,			/*  57: fork */
 	lx_vfork,			/*  58: vfork */
@@ -1210,8 +1233,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_readlinkat,			/* 267: readlinkat */
 	NULL,				/* 268: fchmodat */
 	lx_faccessat,			/* 269: faccessat */
-	lx_pselect6,			/* 270: pselect6 */
-	lx_ppoll,			/* 271: ppoll */
+	NULL,				/* 270: pselect6 */
+	NULL,				/* 271: ppoll */
 	NULL,				/* 272: unshare */
 	NULL,				/* 273: set_robust_list */
 	NULL,				/* 274: get_robust_list */
@@ -1413,11 +1436,11 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_setfsgid16,			/* 139: setfsgid16 */
 	lx_llseek,			/* 140: llseek */
 	NULL,				/* 141: getdents */
-	lx_select,			/* 142: select */
+	NULL,				/* 142: select */
 	lx_flock,			/* 143: flock */
 	lx_msync,			/* 144: msync */
-	lx_readv,			/* 145: readv */
-	lx_writev,			/* 146: writev */
+	NULL,				/* 145: readv */
+	NULL,				/* 146: writev */
 	lx_getsid,			/* 147: getsid */
 	lx_fdatasync,			/* 148: fdatasync */
 	lx_sysctl,			/* 149: sysctl */
@@ -1439,7 +1462,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_getresuid16,			/* 165: getresuid16 */
 	NULL,				/* 166: vm86 */
 	lx_query_module,		/* 167: query_module */
-	lx_poll,			/* 168: poll */
+	NULL,				/* 168: poll */
 	NULL,				/* 169: nfsservctl */
 	NULL,				/* 170: setresgid16 */
 	lx_getresgid16,			/* 171: getresgid16 */
@@ -1579,8 +1602,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_readlinkat,			/* 305: readlinkat */
 	NULL,				/* 306: fchmodat */
 	lx_faccessat,			/* 307: faccessat */
-	lx_pselect6,			/* 308: pselect6 */
-	lx_ppoll,			/* 309: ppoll */
+	NULL,				/* 308: pselect6 */
+	NULL,				/* 309: ppoll */
 	NULL,				/* 310: unshare */
 	NULL,				/* 311: set_robust_list */
 	NULL,				/* 312: get_robust_list */
