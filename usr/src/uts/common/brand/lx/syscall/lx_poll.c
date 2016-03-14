@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -675,9 +675,22 @@ lx_select(int nfds, long *rfds, long *wfds, long *efds,
 	return (lx_select_common(nfds, rfds, wfds, efds, tsp, NULL));
 }
 
+
+typedef struct {
+	uintptr_t lpsa_addr;
+	unsigned long lpsa_len;
+} lx_pselect_sig_arg_t;
+
+#if defined(_LP64)
+typedef struct {
+	caddr32_t lpsa_addr;
+	uint32_t lpsa_len;
+} lx_pselect_sig_arg32_t;
+#endif /* defined(_LP64) */
+
 long
 lx_pselect(int nfds, long *rfds, long *wfds, long *efds,
-    timespec_t *timeoutp, lx_sigset_t *setp)
+    timespec_t *timeoutp, void *setp)
 {
 	timespec_t ts, *tsp = NULL;
 	k_sigset_t kset, *ksetp = NULL;
@@ -702,12 +715,47 @@ lx_pselect(int nfds, long *rfds, long *wfds, long *efds,
 		tsp = &ts;
 	}
 	if (setp != NULL) {
-		lx_sigset_t lset;
+		lx_sigset_t lset, *sigaddr = NULL;
 
-		if (copyin(setp, &lset, sizeof (lset)))
-			return (set_errno(EFAULT));
-		lx_ltos_sigset(&lset, &kset);
-		ksetp = &kset;
+		if (get_udatamodel() == DATAMODEL_NATIVE) {
+			lx_pselect_sig_arg_t lpsa;
+
+			if (copyin(setp, &lpsa, sizeof (lpsa)) != 0)
+				return (set_errno(EFAULT));
+			/*
+			 * Linux forces a size to be passed only so it can
+			 * check that it's the size of a sigset_t.
+			 */
+			if (lpsa.lpsa_len != sizeof (lx_sigset_t))
+				return (set_errno(EINVAL));
+
+			sigaddr = (lx_sigset_t *)lpsa.lpsa_addr;
+		}
+#if defined(_LP64)
+		else {
+			lx_pselect_sig_arg32_t lpsa32;
+
+			if (copyin(setp, &lpsa32, sizeof (lpsa32)) != 0)
+				return (set_errno(EFAULT));
+			/*
+			 * Linux forces a size to be passed only so it can
+			 * check that it's the size of a sigset_t.
+			 */
+			if (lpsa32.lpsa_len != sizeof (lx_sigset_t))
+				return (set_errno(EINVAL));
+
+			sigaddr = (lx_sigset_t *)(uint64_t)lpsa32.lpsa_addr;
+		}
+#endif /* defined(_LP64) */
+
+		/* This is where we check if the sigset is *really* NULL. */
+		if (sigaddr != NULL) {
+			if (copyin(sigaddr, &lset, sizeof (lset)) != 0)
+				return (set_errno(EFAULT));
+
+			lx_ltos_sigset(&lset, &kset);
+			ksetp = &kset;
+		}
 	}
 
 	return (lx_select_common(nfds, rfds, wfds, efds, tsp, ksetp));

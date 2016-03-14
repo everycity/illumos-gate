@@ -22,7 +22,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/kmem.h>
@@ -625,7 +625,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"close",	lx_close,		0,		1}, /*  6 */
 	{"waitpid",	lx_waitpid,		0,		3}, /*  7 */
 	{"creat",	NULL,			0,		2}, /*  8 */
-	{"link",	NULL,			0,		2}, /*  9 */
+	{"link",	lx_link,		0,		2}, /*  9 */
 	{"unlink",	NULL,			0,		1}, /* 10 */
 	{"execve",	NULL,			0,		3}, /* 11 */
 	{"chdir",	NULL,			0,		1}, /* 12 */
@@ -722,9 +722,9 @@ lx_sysent_t lx_sysent32[] = {
 	{"syslog",	NULL,			0,		3}, /* 103 */
 	{"setitimer",	NULL,			0,		3}, /* 104 */
 	{"getitimer",	NULL,			0,		2}, /* 105 */
-	{"stat",	NULL,			0,		2}, /* 106 */
-	{"lstat",	NULL,			0,		2}, /* 107 */
-	{"fstat",	NULL,			0,		2}, /* 108 */
+	{"stat",	lx_stat32,		0,		2}, /* 106 */
+	{"lstat",	lx_lstat32,		0,		2}, /* 107 */
+	{"fstat",	lx_fstat32,		0,		2}, /* 108 */
 	{"uname",	NULL,			NOSYS_OBSOLETE,	0}, /* 109 */
 	{"oldiopl",	NULL,			NOSYS_NO_EQUIV,	0}, /* 110 */
 	{"vhangup",	NULL,			0,		0}, /* 111 */
@@ -796,8 +796,8 @@ lx_sysent_t lx_sysent32[] = {
 	{"rt_sigtimedwait", NULL,		0,		4}, /* 177 */
 	{"rt_sigqueueinfo", NULL,		0,		3}, /* 178 */
 	{"rt_sigsuspend", NULL,			0,		2}, /* 179 */
-	{"pread64",	NULL,			0,		5}, /* 180 */
-	{"pwrite64",	NULL,			0,		5}, /* 181 */
+	{"pread64",	lx_pread32,		0,		5}, /* 180 */
+	{"pwrite64",	lx_pwrite32,		0,		5}, /* 181 */
 	{"chown16",	lx_chown16,		0,		3}, /* 182 */
 	{"getcwd",	NULL,			0,		2}, /* 183 */
 	{"capget",	NULL,			0,		2}, /* 184 */
@@ -811,9 +811,9 @@ lx_sysent_t lx_sysent32[] = {
 	{"mmap2",	NULL,			LX_SYS_EBPARG6,	6}, /* 192 */
 	{"truncate64",	NULL,			0,		3}, /* 193 */
 	{"ftruncate64",	NULL,			0,		3}, /* 194 */
-	{"stat64",	NULL,			0,		2}, /* 195 */
-	{"lstat64",	NULL,			0,		2}, /* 196 */
-	{"fstat64",	NULL,			0,		2}, /* 197 */
+	{"stat64",	lx_stat64,		0,		2}, /* 195 */
+	{"lstat64",	lx_lstat64,		0,		2}, /* 196 */
+	{"fstat64",	lx_fstat64,		0,		2}, /* 197 */
 	{"lchown",	lx_lchown,		0,		3}, /* 198 */
 	{"getuid",	NULL,			0,		0}, /* 199 */
 	{"getgid",	NULL,			0,		0}, /* 200 */
@@ -842,18 +842,18 @@ lx_sysent_t lx_sysent32[] = {
 	{"security",	NULL,			NOSYS_NO_EQUIV,	0}, /* 223 */
 	{"gettid",	lx_gettid,		0,		0}, /* 224 */
 	{"readahead",	NULL,			NOSYS_NO_EQUIV,	0}, /* 225 */
-	{"setxattr",	lx_xattr,		0,		5}, /* 226 */
-	{"lsetxattr",	lx_xattr,		0,		5}, /* 227 */
-	{"fsetxattr",	lx_xattr,		0,		5}, /* 228 */
-	{"getxattr",	lx_xattr,		0,		4}, /* 229 */
-	{"lgetxattr",	lx_xattr,		0,		4}, /* 230 */
-	{"fgetxattr",	lx_xattr,		0,		4}, /* 231 */
-	{"listxattr",	lx_xattr,		0,		3}, /* 232 */
-	{"llistxattr",	lx_xattr,		0,		3}, /* 233 */
-	{"flistxattr",	lx_xattr,		0,		3}, /* 234 */
-	{"removexattr",	lx_xattr,		0,		2}, /* 235 */
-	{"lremovexattr", lx_xattr,		0,		2}, /* 236 */
-	{"fremovexattr", lx_xattr,		0,		2}, /* 237 */
+	{"setxattr",	lx_setxattr,		0,		5}, /* 226 */
+	{"lsetxattr",	lx_lsetxattr,		0,		5}, /* 227 */
+	{"fsetxattr",	lx_fsetxattr,		0,		5}, /* 228 */
+	{"getxattr",	lx_getxattr,		0,		4}, /* 229 */
+	{"lgetxattr",	lx_lgetxattr,		0,		4}, /* 230 */
+	{"fgetxattr",	lx_fgetxattr,		0,		4}, /* 231 */
+	{"listxattr",	lx_listxattr,		0,		3}, /* 232 */
+	{"llistxattr",	lx_llistxattr,		0,		3}, /* 233 */
+	{"flistxattr",	lx_flistxattr,		0,		3}, /* 234 */
+	{"removexattr",	lx_removexattr,		0,		2}, /* 235 */
+	{"lremovexattr", lx_lremovexattr,	0,		2}, /* 236 */
+	{"fremovexattr", lx_fremovexattr,	0,		2}, /* 237 */
 	{"tkill",	lx_tkill,		0,		2}, /* 238 */
 	{"sendfile64",	NULL,			0,		4}, /* 239 */
 	{"futex",	lx_futex,		LX_SYS_EBPARG6,	6}, /* 240 */
@@ -920,10 +920,10 @@ lx_sysent_t lx_sysent32[] = {
 	{"mknodat",	NULL,			0,		4}, /* 297 */
 	{"fchownat",	lx_fchownat,		0,		5}, /* 298 */
 	{"futimesat",	NULL,			0,		3}, /* 299 */
-	{"fstatat64",	NULL,			0,		4}, /* 300 */
+	{"fstatat64",	lx_fstatat64,		0,		4}, /* 300 */
 	{"unlinkat",	NULL,			0,		3}, /* 301 */
 	{"renameat",	NULL,			0,		4}, /* 302 */
-	{"linkat",	NULL,			0,		5}, /* 303 */
+	{"linkat",	lx_linkat,		0,		5}, /* 303 */
 	{"symlinkat",	NULL,			0,		3}, /* 304 */
 	{"readlinkat",	NULL,			0,		4}, /* 305 */
 	{"fchmodat",	lx_fchmodat,		0,		3}, /* 306 */
@@ -953,8 +953,8 @@ lx_sysent_t lx_sysent32[] = {
 	{"dup3",	NULL,			0,		3}, /* 330 */
 	{"pipe2",	lx_pipe2,		0,		2}, /* 331 */
 	{"inotify_init1", NULL,			0,		1}, /* 332 */
-	{"preadv",	NULL,			0,		4}, /* 333 */
-	{"pwritev",	NULL,			0,		4}, /* 334 */
+	{"preadv",	lx_preadv32,		0,		5}, /* 333 */
+	{"pwritev",	lx_pwritev32,		0,		5}, /* 334 */
 	{"rt_tgsigqueueinfo", NULL,		0,		4}, /* 335 */
 	{"perf_event_open", NULL,		NOSYS_NULL,	0}, /* 336 */
 	{"recvmmsg",	NULL,			NOSYS_NULL,	0}, /* 337 */
@@ -991,9 +991,9 @@ lx_sysent_t lx_sysent64[] = {
 	{"write",	lx_write,		0,		3}, /* 1 */
 	{"open",	lx_open,		0,		3}, /* 2 */
 	{"close",	lx_close,		0,		1}, /* 3 */
-	{"stat",	NULL,			0,		2}, /* 4 */
-	{"fstat",	NULL,			0,		2}, /* 5 */
-	{"lstat",	NULL,			0,		2}, /* 6 */
+	{"stat",	lx_stat64,		0,		2}, /* 4 */
+	{"fstat",	lx_fstat64,		0,		2}, /* 5 */
+	{"lstat",	lx_lstat64,		0,		2}, /* 6 */
 	{"poll",	lx_poll,		0,		3}, /* 7 */
 	{"lseek",	NULL,			0,		3}, /* 8 */
 	{"mmap",	NULL,			0,		6}, /* 9 */
@@ -1004,8 +1004,8 @@ lx_sysent_t lx_sysent64[] = {
 	{"rt_sigprocmask", NULL,		0,		4}, /* 14 */
 	{"rt_sigreturn", NULL,			0,		0}, /* 15 */
 	{"ioctl",	lx_ioctl,		0,		3}, /* 16 */
-	{"pread64",	NULL,			0,		4}, /* 17 */
-	{"pwrite64",	NULL,			0,		4}, /* 18 */
+	{"pread64",	lx_pread,		0,		4}, /* 17 */
+	{"pwrite64",	lx_pwrite,		0,		4}, /* 18 */
 	{"readv",	lx_readv,		0,		3}, /* 19 */
 	{"writev",	lx_writev,		0,		3}, /* 20 */
 	{"access",	NULL,			0,		2}, /* 21 */
@@ -1073,7 +1073,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"mkdir",	lx_mkdir,		0,		2}, /* 83 */
 	{"rmdir",	NULL,			0,		1}, /* 84 */
 	{"creat",	NULL,			0,		2}, /* 85 */
-	{"link",	NULL,			0,		2}, /* 86 */
+	{"link",	lx_link,		0,		2}, /* 86 */
 	{"unlink",	NULL,			0,		1}, /* 87 */
 	{"symlink",	NULL,			0,		2}, /* 88 */
 	{"readlink",	NULL,			0,		3}, /* 89 */
@@ -1175,18 +1175,18 @@ lx_sysent_t lx_sysent64[] = {
 	{"security",	NULL,			NOSYS_NO_EQUIV,	0}, /* 185 */
 	{"gettid",	lx_gettid,		0,		0}, /* 186 */
 	{"readahead",	NULL,			NOSYS_NO_EQUIV,	0}, /* 187 */
-	{"setxattr",	lx_xattr,		0,		5}, /* 188 */
-	{"lsetxattr",	lx_xattr,		0,		5}, /* 189 */
-	{"fsetxattr",	lx_xattr,		0,		5}, /* 190 */
-	{"getxattr",	lx_xattr,		0,		4}, /* 191 */
-	{"lgetxattr",	lx_xattr,		0,		4}, /* 192 */
-	{"fgetxattr",	lx_xattr,		0,		4}, /* 193 */
-	{"listxattr",	lx_xattr,		0,		3}, /* 194 */
-	{"llistxattr",	lx_xattr,		0,		3}, /* 195 */
-	{"flistxattr",	lx_xattr,		0,		3}, /* 196 */
-	{"removexattr",	lx_xattr,		0,		2}, /* 197 */
-	{"lremovexattr", lx_xattr,		0,		2}, /* 198 */
-	{"fremovexattr", lx_xattr,		0,		2}, /* 199 */
+	{"setxattr",	lx_setxattr,		0,		5}, /* 188 */
+	{"lsetxattr",	lx_lsetxattr,		0,		5}, /* 189 */
+	{"fsetxattr",	lx_fsetxattr,		0,		5}, /* 190 */
+	{"getxattr",	lx_getxattr,		0,		4}, /* 191 */
+	{"lgetxattr",	lx_lgetxattr,		0,		4}, /* 192 */
+	{"fgetxattr",	lx_fgetxattr,		0,		4}, /* 193 */
+	{"listxattr",	lx_listxattr,		0,		3}, /* 194 */
+	{"llistxattr",	lx_llistxattr,		0,		3}, /* 195 */
+	{"flistxattr",	lx_flistxattr,		0,		3}, /* 196 */
+	{"removexattr",	lx_removexattr,		0,		2}, /* 197 */
+	{"lremovexattr", lx_lremovexattr,	0,		2}, /* 198 */
+	{"fremovexattr", lx_fremovexattr,	0,		2}, /* 199 */
 	{"tkill",	lx_tkill,		0,		2}, /* 200 */
 	{"time",	lx_time,		0,		1}, /* 201 */
 	{"futex",	lx_futex,		0,		6}, /* 202 */
@@ -1249,10 +1249,10 @@ lx_sysent_t lx_sysent64[] = {
 	{"mknodat",	NULL,			0,		4}, /* 259 */
 	{"fchownat",	lx_fchownat,		0,		5}, /* 260 */
 	{"futimesat",	NULL,			0,		3}, /* 261 */
-	{"fstatat64",	NULL,			0,		4}, /* 262 */
+	{"fstatat64",	lx_fstatat64,		0,		4}, /* 262 */
 	{"unlinkat",	NULL,			0,		3}, /* 263 */
 	{"renameat",	NULL,			0,		4}, /* 264 */
-	{"linkat",	NULL,			0,		5}, /* 265 */
+	{"linkat",	lx_linkat,		0,		5}, /* 265 */
 	{"symlinkat",	NULL,			0,		3}, /* 266 */
 	{"readlinkat",	NULL,			0,		4}, /* 267 */
 	{"fchmodat",	lx_fchmodat,		0,		3}, /* 268 */
@@ -1282,8 +1282,8 @@ lx_sysent_t lx_sysent64[] = {
 	{"dup3",	NULL,			0,		3}, /* 292 */
 	{"pipe2",	lx_pipe2,		0,		2}, /* 293 */
 	{"inotify_init1", NULL,			0,		1}, /* 294 */
-	{"preadv",	NULL,			0,		4}, /* 295 */
-	{"pwritev",	NULL,			0,		4}, /* 296 */
+	{"preadv",	lx_preadv,		0,		4}, /* 295 */
+	{"pwritev",	lx_pwritev,		0,		4}, /* 296 */
 	{"rt_tgsigqueueinfo", NULL, 		0,		4}, /* 297 */
 	{"perf_event_open", NULL,		NOSYS_NULL,	0}, /* 298 */
 	{"recvmmsg",	NULL,			NOSYS_NULL,	0}, /* 299 */

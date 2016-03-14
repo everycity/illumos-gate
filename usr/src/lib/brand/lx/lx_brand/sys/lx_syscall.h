@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef _SYS_LX_SYSCALL_H
@@ -50,7 +50,6 @@ extern long lx_utimensat(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_fstatat64(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_unlinkat(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_renameat(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_linkat(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_symlinkat(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_readlinkat(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_access(uintptr_t, uintptr_t);
@@ -74,15 +73,6 @@ extern long lx_ioctl(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_vhangup(void);
 extern long lx_fadvise64(uintptr_t, off64_t, uintptr_t, uintptr_t);
 extern long lx_fadvise64_64(uintptr_t, off64_t, off64_t, uintptr_t);
-
-extern long lx_pread(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_pwrite(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_preadv(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_pwritev(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_pread64(uintptr_t, uintptr_t, uintptr_t, uintptr_t,
-    uintptr_t);
-extern long lx_pwrite64(uintptr_t, uintptr_t, uintptr_t, uintptr_t,
-    uintptr_t);
 
 extern long lx_socketcall(uintptr_t, uintptr_t);
 extern long lx_accept(int, void *, int *);
@@ -144,7 +134,6 @@ extern long lx_ftruncate64(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_sysctl(uintptr_t);
 extern long lx_fsync(uintptr_t);
 extern long lx_fdatasync(uintptr_t);
-extern long lx_link(uintptr_t, uintptr_t);
 extern long lx_unlink(uintptr_t);
 extern long lx_rmdir(uintptr_t);
 extern long lx_rename(uintptr_t, uintptr_t);

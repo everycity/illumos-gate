@@ -67,6 +67,7 @@
 #include <sys/ddi.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_ptm.h>
+#include <sys/lx_impl.h>
 
 #include "lxd.h"
 
@@ -100,6 +101,8 @@ size_t lxd_minfree = 0;
 
 extern pgcnt_t swapfs_minfree;
 
+extern int lxd_symlink(vnode_t *, char *, struct vattr *, char *, cred_t *,
+    caller_context_t *, int);
 extern int stat64(char *, struct stat64 *);
 
 /*
@@ -139,16 +142,17 @@ static struct modlinkage modlinkage = {
 /*
  * Definitions and translators for devt's.
  */
-static int lxd_pts_devt_translator(dev_t, lx_dev_t *);
-static int lxd_ptm_devt_translator(dev_t, lx_dev_t *);
+static void lxd_pts_devt_translator(dev_t, dev_t *);
+static void lxd_ptm_devt_translator(dev_t, dev_t *);
 
 #define	LX_PTS_MAJOR_MIN	136
 #define	LX_PTS_MAJOR_MAX	143
-#define	LX_PTS_MAX		\
-	((LX_PTS_MAJOR_MAX - LX_PTS_MAJOR_MIN + 1) * LX_MINORMASK)
 
 #define	LX_PTM_MAJOR		5
 #define	LX_PTM_MINOR		2
+
+static kmutex_t			lxd_xlate_lock;
+static boolean_t		lxd_xlate_initialized = B_FALSE;
 
 static lxd_minor_translator_t lxd_mtranslator_mm[] = {
 	{ "/dev/null",		0, 1, 3 },
@@ -200,6 +204,7 @@ _fini()
 	 */
 	(void) vfs_freevfsops_by_type(lxd_fstype);
 	vn_freevnodeops(lxd_vnodeops);
+	mutex_destroy(&lxd_xlate_lock);
 	return (0);
 }
 
@@ -226,7 +231,6 @@ lxd_init(int fstype, char *name)
 	extern const struct fs_operation_def lxd_vnodeops_template[];
 	int error;
 	major_t dev;
-	int i;
 
 	lxd_fstype = fstype;
 	ASSERT(lxd_fstype != 0);
@@ -264,9 +268,30 @@ lxd_init(int fstype, char *name)
 	 */
 	lxd_dev = makedevice(dev, 0);
 
-	/*
-	 * Initialize device translator mapping table.
-	 */
+	mutex_init(&lxd_xlate_lock, NULL, MUTEX_DEFAULT, NULL);
+
+	return (0);
+}
+
+/*
+ * Initialize device translator mapping table.
+ *
+ * Note that we cannot do this in lxd_init since that can lead to a recursive
+ * rw_enter while we're doing lookupnameat (via sdev_lookup/prof_make_maps/
+ * devi_attach_node/modload). Thus we do it in the mount path and keep track
+ * so that we only initialize the table once.
+ */
+static void
+lxd_xlate_init()
+{
+	int i;
+
+	mutex_enter(&lxd_xlate_lock);
+	if (lxd_xlate_initialized) {
+		mutex_exit(&lxd_xlate_lock);
+		return;
+	}
+
 	for (i = 0; lxd_devt_translators[i].lxd_xl_driver != NULL; i++) {
 		lxd_minor_translator_t	*mt;
 		int j;
@@ -320,7 +345,8 @@ lxd_init(int fstype, char *name)
 		}
 	}
 
-	return (0);
+	lxd_xlate_initialized = B_TRUE;
+	mutex_exit(&lxd_xlate_lock);
 }
 
 static int
@@ -335,6 +361,9 @@ lxd_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	struct vattr rattr;
 	vnode_t *realrootvp;
 	vnode_t *tvp;
+	lx_zone_data_t *lxzdata;
+	lx_virt_disk_t *vd;
+	vattr_t vattr;
 
 	nodev = vfs_optionisset(vfsp, MNTOPT_NODEVICES, NULL);
 
@@ -343,6 +372,8 @@ lxd_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 
 	if (mvp->v_type != VDIR)
 		return (ENOTDIR);
+
+	lxd_xlate_init();
 
 	/*
 	 * This is the same behavior as with lofs.
@@ -458,6 +489,28 @@ lxd_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	pn_free(&dpn);
 	error = 0;
 	atomic_inc_32(&lxd_mountcount);
+
+	lxzdata = ztolxzd(curproc->p_zone);
+	ASSERT(lxzdata->lxzd_vdisks != NULL);
+
+	vattr.va_mask = AT_TYPE | AT_MODE;
+	vattr.va_type = VLNK;
+	vattr.va_mode = 0777;
+
+	vd = list_head(lxzdata->lxzd_vdisks);
+	while (vd != NULL) {
+		/* only create links for actual zvols */
+		if (vd->lxvd_type == LXVD_ZVOL) {
+			char lnknm[MAXPATHLEN];
+
+			(void) snprintf(lnknm, sizeof (lnknm),
+			    "./zvol/dsk/%s", vd->lxvd_real_name);
+			(void) lxd_symlink(LDNTOV(ldn), vd->lxvd_name, &vattr,
+			    lnknm, cr, NULL, 0);
+		}
+
+		vd = list_next(lxzdata->lxzd_vdisks, vd);
+	}
 
 out:
 	if (error == 0)
@@ -751,32 +804,33 @@ lxd_statvfs(struct vfs *vfsp, statvfs64_t *sbp)
 	return (0);
 }
 
-static int
-lxd_pts_devt_translator(dev_t dev, lx_dev_t *jdev)
+static void
+lxd_pts_devt_translator(dev_t dev, dev_t *jdev)
 {
 	minor_t	min = getminor(dev);
-	int	lx_maj;
-	int	lx_min;
+	int	lx_maj, lx_min;
 
 	/*
-	 * linux has a really small minor number name space (8 bits).
-	 * so if pts devices are limited to one major number you could
-	 * only have 256 of them.  linux addresses this issue by using
-	 * multiple major numbers for pts devices.
+	 * Linux uses a range of major numbers for pts devices to address the
+	 * relatively small minor number space (8 bits).
 	 */
-	if (min >= LX_PTS_MAX)
-		return (EOVERFLOW);
 
 	lx_maj = LX_PTS_MAJOR_MIN + (min / LX_MINORMASK);
 	lx_min = min % LX_MINORMASK;
+	if (lx_maj > LX_PTS_MAJOR_MAX) {
+		/*
+		 * The major is outside the acceptable range but there's little
+		 * we can presently do about it short of overhauling the
+		 * translation logic.
+		 */
+		lx_unsupported("pts major out of translation range");
+	}
 
 	*jdev = LX_MAKEDEVICE(lx_maj, lx_min);
-	return (0);
 }
 
-static int
-lxd_ptm_devt_translator(dev_t dev, lx_dev_t *jdev)
+static void
+lxd_ptm_devt_translator(dev_t dev, dev_t *jdev)
 {
 	*jdev = LX_MAKEDEVICE(LX_PTM_MAJOR, LX_PTM_MINOR);
-	return (0);
 }

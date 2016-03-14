@@ -21,7 +21,7 @@
 #
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-# Copyright 2015 Joyent, Inc.
+# Copyright 2016 Joyent, Inc.
 #
 
 LX_CMN  =	$(SRC)/common/brand/lx
@@ -38,7 +38,6 @@ COBJS	=	aio.o			\
 		fcntl.o			\
 		fork.o			\
 		id.o			\
-		iovec.o			\
 		lx_brand.o		\
 		mem.o			\
 		misc.o			\
@@ -53,7 +52,6 @@ COBJS	=	aio.o			\
 		signal.o		\
 		socket.o		\
 		stack.o			\
-		stat.o			\
 		statfs.o		\
 		sysctl.o		\
 		sysv_ipc.o		\

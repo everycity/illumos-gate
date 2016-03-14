@@ -271,7 +271,7 @@ static adapter_info_t ixgbe_82599eb_cap = {
 	128,		/* default number of rx queues */
 	64,		/* maximum number of rx groups */
 	1,		/* minimum number of rx groups */
-	1,		/* default number of rx groups */
+	32,		/* default number of rx groups */
 	128,		/* maximum number of tx queues */
 	1,		/* minimum number of tx queues */
 	8,		/* default number of tx queues */
@@ -302,7 +302,7 @@ static adapter_info_t ixgbe_X540_cap = {
 	128,		/* default number of rx queues */
 	64,		/* maximum number of rx groups */
 	1,		/* minimum number of rx groups */
-	1,		/* default number of rx groups */
+	32,		/* default number of rx groups */
 	128,		/* maximum number of tx queues */
 	1,		/* minimum number of tx queues */
 	8,		/* default number of tx queues */

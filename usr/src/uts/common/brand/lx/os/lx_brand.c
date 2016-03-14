@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2016, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -171,10 +171,12 @@
 #include <sys/socket.h>
 #include <lx_signum.h>
 #include <util/sscanf.h>
+#include <sys/lx_brand.h>
+#include <sys/zfs_ioctl.h>
 
 int	lx_debug = 0;
 
-void	lx_init_brand_data(zone_t *);
+void	lx_init_brand_data(zone_t *, kmutex_t *);
 void	lx_free_brand_data(zone_t *);
 void	lx_setbrand(proc_t *);
 int	lx_getattr(zone_t *, int, void *, size_t *);
@@ -190,6 +192,9 @@ extern int waitsys(idtype_t, id_t, siginfo_t *, int);
 extern int getsetcontext32(int, void *);
 extern int waitsys32(idtype_t, id_t, siginfo_t *, int);
 #endif
+
+extern int zvol_name2minor(const char *, minor_t *);
+extern int zvol_create_minor(const char *);
 
 extern void lx_proc_exit(proc_t *);
 extern int lx_sched_affinity(int, uintptr_t, int, uintptr_t, int64_t *);
@@ -221,6 +226,12 @@ void (*lx_cgrp_freelwp)(vfs_t *, uint_t, id_t, pid_t);
 
 uint64_t lx_maxstack64 = LX_MAXSTACK64;
 
+/*
+ * Certain Linux tools care deeply about major/minor number mapping.
+ * Map virtual disks (zfs datasets, zvols, etc) into a safe reserved range.
+ */
+#define	LX_MAJOR_DISK	203
+
 static int lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
     struct intpdata *idata, int level, long *execsz, int setid,
     caddr_t exec_file, struct cred *cred, int *brand_action);
@@ -241,6 +252,11 @@ static int lx_pagefault(proc_t *, klwp_t *, caddr_t, enum fault_type,
     enum seg_rw);
 #endif
 
+typedef struct lx_zfs_ds {
+	list_node_t	ds_link;
+	char		ds_name[MAXPATHLEN];
+	uint64_t	ds_cookie;
+} lx_zfs_ds_t;
 
 /* lx brand */
 struct brand_ops lx_brops = {
@@ -322,14 +338,21 @@ lx_proc_exit(proc_t *p)
 	lx_proc_data_t *lxpd;
 	proc_t *cp;
 	lx_zone_data_t *lxzdata;
+	vfs_t *cgrp;
 
 	/* cgroup integration */
 	lxzdata = ztolxzd(p->p_zone);
-	if (lxzdata->lxzd_cgroup != NULL) {
+	mutex_enter(&lxzdata->lxzd_lock);
+	cgrp = lxzdata->lxzd_cgroup;
+	if (cgrp != NULL) {
+		VFS_HOLD(cgrp);
+		mutex_exit(&lxzdata->lxzd_lock);
 		lx_lwp_data_t *lwpd = lwptolxlwp(ttolwp(curthread));
 		ASSERT(lx_cgrp_proc_exit != NULL);
-		(*lx_cgrp_proc_exit)(lxzdata->lxzd_cgroup,
-		    lwpd->br_cgroupid, p->p_pid);
+		(*lx_cgrp_proc_exit)(cgrp, lwpd->br_cgroupid, p->p_pid);
+		VFS_RELE(cgrp);
+	} else {
+		mutex_exit(&lxzdata->lxzd_lock);
 	}
 
 	mutex_enter(&p->p_lock);
@@ -382,8 +405,10 @@ lx_setattr(zone_t *zone, int attr, void *ubuf, size_t ubufsz)
 		if (copyin(ubuf, buf, ubufsz) != 0) {
 			return (EFAULT);
 		}
+		mutex_enter(&lxzd->lxzd_lock);
 		(void) strlcpy(lxzd->lxzd_kernel_release, buf,
 		    LX_KERN_RELEASE_MAX);
+		mutex_exit(&lxzd->lxzd_lock);
 		return (0);
 	}
 	case LX_ATTR_KERN_VERSION: {
@@ -395,8 +420,10 @@ lx_setattr(zone_t *zone, int attr, void *ubuf, size_t ubufsz)
 		if (copyin(ubuf, buf, ubufsz) != 0) {
 			return (EFAULT);
 		}
+		mutex_enter(&lxzd->lxzd_lock);
 		(void) strlcpy(lxzd->lxzd_kernel_version, buf,
 		    LX_KERN_VERSION_MAX);
+		mutex_exit(&lxzd->lxzd_lock);
 		return (0);
 	}
 	default:
@@ -413,24 +440,38 @@ lx_getattr(zone_t *zone, int attr, void *ubuf, size_t *ubufsz)
 
 	switch (attr) {
 	case LX_ATTR_KERN_RELEASE: {
+		char buf[LX_KERN_RELEASE_MAX];
+
+		mutex_enter(&lxzd->lxzd_lock);
 		len = strnlen(lxzd->lxzd_kernel_release, LX_KERN_RELEASE_MAX);
 		len++;
 		if (*ubufsz < len) {
+			mutex_exit(&lxzd->lxzd_lock);
 			return (ERANGE);
 		}
-		if (copyout(lxzd->lxzd_kernel_release, ubuf, len) != 0) {
+		bzero(buf, sizeof (buf));
+		(void) strncpy(buf, lxzd->lxzd_kernel_release, sizeof (buf));
+		mutex_exit(&lxzd->lxzd_lock);
+		if (copyout(buf, ubuf, len) != 0) {
 			return (EFAULT);
 		}
 		*ubufsz = len;
 		return (0);
 	}
 	case LX_ATTR_KERN_VERSION: {
+		char buf[LX_KERN_VERSION_MAX];
+
+		mutex_enter(&lxzd->lxzd_lock);
 		len = strnlen(lxzd->lxzd_kernel_version, LX_KERN_VERSION_MAX);
 		len++;
 		if (*ubufsz < len) {
+			mutex_exit(&lxzd->lxzd_lock);
 			return (ERANGE);
 		}
-		if (copyout(lxzd->lxzd_kernel_version, ubuf, len) != 0) {
+		bzero(buf, sizeof (buf));
+		(void) strncpy(buf, lxzd->lxzd_kernel_version, sizeof (buf));
+		mutex_exit(&lxzd->lxzd_lock);
+		if (copyout(buf, ubuf, len) != 0) {
 			return (EFAULT);
 		}
 		*ubufsz = len;
@@ -759,13 +800,316 @@ lx_savecontext32(ucontext32_t *ucp)
 }
 #endif
 
+static int
+lx_zfs_ioctl(ldi_handle_t lh, int cmd, zfs_cmd_t *zc, size_t *dst_alloc_size)
+{
+	uint64_t	cookie;
+	size_t		dstsize;
+	int		rc, unused;
+
+	cookie = zc->zc_cookie;
+
+	dstsize = (dst_alloc_size == NULL ? 0 : 8192);
+
+again:
+	if (dst_alloc_size != NULL) {
+		zc->zc_nvlist_dst = (uint64_t)(intptr_t)kmem_alloc(dstsize,
+		    KM_SLEEP);
+		zc->zc_nvlist_dst_size = dstsize;
+	}
+
+	rc = ldi_ioctl(lh, cmd, (intptr_t)zc, FKIOCTL, kcred, &unused);
+	if (rc == ENOMEM && dst_alloc_size != NULL) {
+		/*
+		 * Our nvlist_dst buffer was too small, retry with a bigger
+		 * buffer. ZFS will tell us the exact needed size.
+		 */
+		size_t newsize = zc->zc_nvlist_dst_size;
+		ASSERT(newsize > dstsize);
+
+		kmem_free((void *)(uintptr_t)zc->zc_nvlist_dst, dstsize);
+		dstsize = newsize;
+		zc->zc_cookie = cookie;
+
+		goto again;
+	}
+
+	if (dst_alloc_size != NULL) {
+		*dst_alloc_size = dstsize;
+	}
+
+	return (rc);
+}
+
+static int
+lx_zone_zfs_open(ldi_handle_t *lh, dev_t *zfs_dev)
+{
+	ldi_ident_t li;
+
+	if (ldi_ident_from_mod(&modlinkage, &li) != 0) {
+		return (-1);
+	}
+	if (ldi_open_by_name("/dev/zfs", FREAD|FWRITE, kcred, lh, li) != 0) {
+		ldi_ident_release(li);
+		return (-1);
+	}
+	ldi_ident_release(li);
+	if (ldi_get_dev(*lh, zfs_dev) != 0) {
+		ldi_close(*lh, FREAD|FWRITE, kcred);
+		return (-1);
+	}
+	return (0);
+}
+
+/*
+ * We only get the relevant properties for zvols. This is because we're
+ * essentially iterating all of the ZFS datasets/zvols on the entire system
+ * when we boot the zone and there is a significant performance penalty if we
+ * have to retrieve all of the properties for everything. Especially since we
+ * don't care about any of them except the zvols actually in our delegated
+ * datasets.
+ *
+ * Note that the two properties we care about, volsize & volblocksize, are
+ * mandatory for zvols and should always be present. Also, note that the
+ * blocksize property value cannot change after the zvol has been created.
+ */
+static void
+lx_zvol_props(ldi_handle_t lh, zfs_cmd_t *zc, uint64_t *vsz, uint64_t *bsz)
+{
+	int		rc;
+	size_t		size;
+	nvlist_t	*nv = NULL, *nv2;
+
+	rc = lx_zfs_ioctl(lh, ZFS_IOC_OBJSET_STATS, zc, &size);
+	if (rc != 0)
+		return;
+
+	rc = nvlist_unpack((char *)(uintptr_t)zc->zc_nvlist_dst,
+	    zc->zc_nvlist_dst_size, &nv, 0);
+	ASSERT(rc == 0);
+
+	kmem_free((void *)(uintptr_t)zc->zc_nvlist_dst, size);
+	zc->zc_nvlist_dst = NULL;
+	zc->zc_nvlist_dst_size = 0;
+
+	if ((rc = nvlist_lookup_nvlist(nv, "volsize", &nv2)) == 0) {
+		uint64_t val;
+
+		rc = nvlist_lookup_uint64(nv2, ZPROP_VALUE, &val);
+		if (rc == 0) {
+			*vsz = val;
+		}
+	}
+
+	if ((rc = nvlist_lookup_nvlist(nv, "volblocksize", &nv2)) == 0) {
+		uint64_t val;
+
+		rc = nvlist_lookup_uint64(nv2, ZPROP_VALUE, &val);
+		if (rc == 0) {
+			*bsz = val;
+		}
+	}
+
+	nvlist_free(nv);
+}
+
+/*
+ * Unlike ZFS proper, which does dynamic zvols, we currently only generate the
+ * zone's "disk" list once at zone boot time and use that consistently in all
+ * of the various subsystems (devfs, sysfs, procfs).  This allows us to avoid
+ * re-iterating the datasets every time one of those subsystems accesses a
+ * "disk" and allows us to keep the view consistent across all subsystems, but
+ * it does mean a reboot is required to see new "disks". This is somewhat
+ * mitigated by its similarity to actual disk drives on a real system.
+ */
+static void
+lx_zone_get_zvols(zone_t *zone, ldi_handle_t lh, minor_t *emul_minor)
+{
+	lx_zone_data_t *lxzd;
+	list_t *zvol_lst, ds_lst;
+	int rc;
+	unsigned int devnum = 0;
+	size_t size;
+	zfs_cmd_t *zc;
+	nvpair_t *elem = NULL;
+	nvlist_t *pnv = NULL;
+
+	lxzd = ztolxzd(zone);
+	ASSERT(lxzd != NULL);
+	zvol_lst = lxzd->lxzd_vdisks;
+
+	zc = kmem_zalloc(sizeof (zfs_cmd_t), KM_SLEEP);
+	if (lx_zfs_ioctl(lh, ZFS_IOC_POOL_CONFIGS, zc, &size) != 0) {
+		goto out;
+	}
+	ASSERT(zc->zc_cookie > 0);
+
+	rc = nvlist_unpack((char *)(uintptr_t)zc->zc_nvlist_dst,
+	    zc->zc_nvlist_dst_size, &pnv, 0);
+	kmem_free((void *)(uintptr_t)zc->zc_nvlist_dst, size);
+	if (rc != 0)
+		goto out;
+
+	/*
+	 * We use a dataset list to process all of the datasets in the pool
+	 * without doing recursion so that we don't risk blowing the kernel
+	 * stack.
+	 */
+	list_create(&ds_lst, sizeof (lx_zfs_ds_t),
+	    offsetof(lx_zfs_ds_t, ds_link));
+
+	while ((elem = nvlist_next_nvpair(pnv, elem)) != NULL) {
+		lx_zfs_ds_t *ds;
+
+		ds = kmem_zalloc(sizeof (lx_zfs_ds_t), KM_SLEEP);
+		(void) strcpy(ds->ds_name, nvpair_name(elem));
+		list_insert_head(&ds_lst, ds);
+
+		while (ds != NULL) {
+			int w;		/* dummy variable */
+
+			bzero(zc, sizeof (zfs_cmd_t));
+			zc->zc_cookie = ds->ds_cookie;
+			(void) strcpy(zc->zc_name, ds->ds_name);
+
+			rc = lx_zfs_ioctl(lh, ZFS_IOC_DATASET_LIST_NEXT,
+			    zc, NULL);
+			/* Update the cookie before doing anything else. */
+			ds->ds_cookie = zc->zc_cookie;
+
+			if (rc != 0) {
+				list_remove(&ds_lst, ds);
+				kmem_free(ds, sizeof (lx_zfs_ds_t));
+				ds = list_tail(&ds_lst);
+				continue;
+			}
+
+			/* Reserved internal names, skip over these. */
+			if (strchr(zc->zc_name, '$') != NULL ||
+			    strchr(zc->zc_name, '%') != NULL)
+				continue;
+
+			if (!zone_dataset_visible_inzone(zone, zc->zc_name, &w))
+				continue;
+
+			if (zc->zc_objset_stats.dds_type == DMU_OST_ZVOL) {
+				lx_virt_disk_t *vd;
+				minor_t m = 0;
+				char *znm = zc->zc_name;
+
+				/* Create a virtual disk entry for the zvol */
+				vd = kmem_zalloc(sizeof (lx_virt_disk_t),
+				    KM_SLEEP);
+				vd->lxvd_type = LXVD_ZVOL;
+				(void) snprintf(vd->lxvd_name,
+				    sizeof (vd->lxvd_name),
+				    "zvol%u", devnum++);
+				(void) strlcpy(vd->lxvd_real_name,
+				    zc->zc_name,
+				    sizeof (vd->lxvd_real_name));
+
+				/* Record emulated and real dev_t values */
+				vd->lxvd_emul_dev = makedevice(LX_MAJOR_DISK,
+				    (*emul_minor)++);
+				if (zvol_name2minor(znm, &m) != 0) {
+					(void) zvol_create_minor(znm);
+					zvol_name2minor(znm, &m);
+				}
+				if (m != 0) {
+					vd->lxvd_real_dev = makedevice(
+					    lxzd->lxzd_zfs_dev, m);
+				}
+
+				/* Query volume size properties */
+				lx_zvol_props(lh, zc, &vd->lxvd_volsize,
+				    &vd->lxvd_blksize);
+
+				list_insert_tail(zvol_lst, vd);
+			} else {
+				lx_zfs_ds_t *nds;
+
+				/* Create a new ds_t for the child. */
+				nds = kmem_zalloc(sizeof (lx_zfs_ds_t),
+				    KM_SLEEP);
+				(void) strcpy(nds->ds_name, zc->zc_name);
+				list_insert_after(&ds_lst, ds, nds);
+
+				/* Depth-first, so do the one just created. */
+				ds = nds;
+			}
+		}
+
+		ASSERT(list_is_empty(&ds_lst));
+	}
+
+	list_destroy(&ds_lst);
+
+out:
+	nvlist_free(pnv);
+	kmem_free(zc, sizeof (zfs_cmd_t));
+}
+
+static void
+lx_zone_get_zfsds(zone_t *zone, minor_t *emul_minor)
+{
+	lx_zone_data_t *lxzd = ztolxzd(zone);
+	vfs_t *vfsp = zone->zone_rootvp->v_vfsp;
+
+	/*
+	 * Only the root will be mounted at zone init time.
+	 * Finding means of discovering other datasets mounted in the zone
+	 * would be a good enhancement later.
+	 */
+	if (getmajor(vfsp->vfs_dev) == getmajor(lxzd->lxzd_zfs_dev)) {
+		lx_virt_disk_t *vd;
+
+		vd = kmem_zalloc(sizeof (lx_virt_disk_t), KM_SLEEP);
+		vd->lxvd_type = LXVD_ZFS_DS;
+		vd->lxvd_real_dev = vfsp->vfs_dev;
+		vd->lxvd_emul_dev = makedevice(LX_MAJOR_DISK, (*emul_minor)++);
+		snprintf(vd->lxvd_name, sizeof (vd->lxvd_name),
+		    "zfsds%u", 0);
+		(void) strlcpy(vd->lxvd_real_name,
+		    refstr_value(vfsp->vfs_resource),
+		    sizeof (vd->lxvd_real_name));
+
+		list_insert_tail(lxzd->lxzd_vdisks, vd);
+	}
+}
+
+/* Cleanup virtual disk list */
+static void
+lx_zone_cleanup_vdisks(lx_zone_data_t *lxzd)
+{
+	lx_virt_disk_t *vd;
+
+	ASSERT(lxzd->lxzd_vdisks != NULL);
+	vd = (list_remove_head(lxzd->lxzd_vdisks));
+	while (vd != NULL) {
+		kmem_free(vd, sizeof (lx_virt_disk_t));
+		vd = list_remove_head(lxzd->lxzd_vdisks);
+	}
+
+	list_destroy(lxzd->lxzd_vdisks);
+	kmem_free(lxzd->lxzd_vdisks, sizeof (list_t));
+	lxzd->lxzd_vdisks = NULL;
+}
+
 void
-lx_init_brand_data(zone_t *zone)
+lx_init_brand_data(zone_t *zone, kmutex_t *zsl)
 {
 	lx_zone_data_t *data;
+	ldi_handle_t lh;
+
+	ASSERT(MUTEX_HELD(zsl));
 	ASSERT(zone->zone_brand == &lx_brand);
 	ASSERT(zone->zone_brand_data == NULL);
+
 	data = (lx_zone_data_t *)kmem_zalloc(sizeof (lx_zone_data_t), KM_SLEEP);
+	mutex_init(&data->lxzd_lock, NULL, MUTEX_DEFAULT, NULL);
+
+	/* No need to hold mutex now since zone_brand_data is not set yet. */
+
 	/*
 	 * Set the default lxzd_kernel_version to 2.4.
 	 * This can be changed by a call to setattr() during zone boot.
@@ -775,14 +1119,6 @@ lx_init_brand_data(zone_t *zone)
 	(void) strlcpy(data->lxzd_kernel_version, "BrandZ virtual linux",
 	    LX_KERN_VERSION_MAX);
 
-	/*
-	 * Linux is not at all picky about address family when it comes to
-	 * supporting interface-related ioctls.  To mimic this behavior, we'll
-	 * attempt those ioctls against a ksocket configured for that purpose.
-	 */
-	(void) ksocket_socket(&data->lxzd_ioctl_sock, AF_INET, SOCK_DGRAM, 0,
-	    0, zone->zone_kcred);
-
 	zone->zone_brand_data = data;
 
 	/*
@@ -790,6 +1126,30 @@ lx_init_brand_data(zone_t *zone)
 	 * The zone must reboot to simulate this behaviour.
 	 */
 	zone->zone_reboot_on_init_exit = B_TRUE;
+
+	/*
+	 * We cannot hold the zone_status_lock while performing zfs operations
+	 * so we drop the lock, get the zfs devs as the last step in this
+	 * function, then reaquire the lock. Don't add any code after this
+	 * which requires that the zone_status_lock was continuously held.
+	 */
+	mutex_exit(zsl);
+
+	data->lxzd_vdisks = kmem_alloc(sizeof (list_t), KM_SLEEP);
+	list_create(data->lxzd_vdisks, sizeof (lx_virt_disk_t),
+	    offsetof(lx_virt_disk_t, lxvd_link));
+
+	if (lx_zone_zfs_open(&lh, &data->lxzd_zfs_dev) == 0) {
+		minor_t emul_minor = 1;
+
+		lx_zone_get_zfsds(zone, &emul_minor);
+		lx_zone_get_zvols(zone, lh, &emul_minor);
+		ldi_close(lh, FREAD|FWRITE, kcred);
+	} else {
+		/* Avoid matching any devices */
+		data->lxzd_zfs_dev = makedevice(-1, 0);
+	}
+	mutex_enter(zsl);
 }
 
 void
@@ -797,6 +1157,7 @@ lx_free_brand_data(zone_t *zone)
 {
 	lx_zone_data_t *data = ztolxzd(zone);
 	ASSERT(data != NULL);
+	mutex_enter(&data->lxzd_lock);
 	if (data->lxzd_ioctl_sock != NULL) {
 		/*
 		 * Since zone_kcred has been cleaned up already, close the
@@ -805,7 +1166,13 @@ lx_free_brand_data(zone_t *zone)
 		ksocket_close(data->lxzd_ioctl_sock, kcred);
 		data->lxzd_ioctl_sock = NULL;
 	}
+	ASSERT(data->lxzd_cgroup == NULL);
+
+	lx_zone_cleanup_vdisks(data);
+
+	mutex_exit(&data->lxzd_lock);
 	zone->zone_brand_data = NULL;
+	mutex_destroy(&data->lxzd_lock);
 	kmem_free(data, sizeof (*data));
 }
 
@@ -1488,11 +1855,14 @@ lx_kern_release_cmp(zone_t *zone, const char *vers)
 	int zvers[3] = {0, 0, 0};
 	int cvers[3] = {0, 0, 0};
 	int i;
+	lx_zone_data_t *lxzd = (lx_zone_data_t *)zone->zone_brand_data;
 
 	VERIFY(zone->zone_brand == &lx_brand);
 
-	(void) sscanf(ztolxzd(zone)->lxzd_kernel_release, "%d.%d.%d", &zvers[0],
+	mutex_enter(&lxzd->lxzd_lock);
+	(void) sscanf(lxzd->lxzd_kernel_release, "%d.%d.%d", &zvers[0],
 	    &zvers[1], &zvers[2]);
+	mutex_exit(&lxzd->lxzd_lock);
 	(void) sscanf(vers, "%d.%d.%d", &cvers[0], &cvers[1], &cvers[2]);
 
 	for (i = 0; i < 3; i++) {
@@ -1633,13 +2003,19 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	struct execenv	origenv;
 	stack_t		orig_sigaltstack;
 	struct user	*up = PTOU(ttoproc(curthread));
-	lx_elf_data_t	*edp;
+	lx_elf_data_t	edp;
 	char		*lib_path = NULL;
 
 	ASSERT(ttoproc(curthread)->p_brand == &lx_brand);
 	ASSERT(ttoproc(curthread)->p_brand_data != NULL);
 
-	edp = &ttolxproc(curthread)->l_elf_data;
+	/*
+	 * Start with a separate struct for ELF data instead of inheriting
+	 * values from the currently running binary.  This ensures that fields
+	 * such as ed_base are cleared if the new binary does not utilize an
+	 * interpreter.
+	 */
+	bzero(&edp, sizeof (edp));
 
 	if (args->to_model == DATAMODEL_NATIVE) {
 		lib_path = LX_LIB_PATH;
@@ -1763,11 +2139,11 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	 * library will ask us for this data later, when it is ready to set
 	 * things up for the lx executable.
 	 */
-	edp->ed_phdr = (uphdr_vaddr == -1) ? voffset + ehdr.e_phoff :
+	edp.ed_phdr = (uphdr_vaddr == -1) ? voffset + ehdr.e_phoff :
 	    voffset + uphdr_vaddr;
-	edp->ed_entry = voffset + ehdr.e_entry;
-	edp->ed_phent = ehdr.e_phentsize;
-	edp->ed_phnum = ehdr.e_phnum;
+	edp.ed_entry = voffset + ehdr.e_entry;
+	edp.ed_phent = ehdr.e_phentsize;
+	edp.ed_phnum = ehdr.e_phnum;
 
 	if (interp != NULL) {
 		if (ehdr.e_type == ET_DYN) {
@@ -1832,8 +2208,8 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 		 * Now that we know the base address of the brand's linker,
 		 * we also save this for later use by the brand library.
 		 */
-		edp->ed_base = voffset;
-		edp->ed_ldentry = voffset + ehdr.e_entry;
+		edp.ed_base = voffset;
+		edp.ed_ldentry = voffset + ehdr.e_entry;
 	} else {
 		/*
 		 * This program has no interpreter. The lx brand library will
@@ -1849,14 +2225,14 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 			 * which case the e_entry field of the elf header is an
 			 * absolute address.
 			 */
-			edp->ed_ldentry = ehdr.e_entry;
-			edp->ed_entry = ehdr.e_entry;
+			edp.ed_ldentry = ehdr.e_entry;
+			edp.ed_entry = ehdr.e_entry;
 		} else {
 			/*
 			 * A shared object with no interpreter, we use the
 			 * calculated address from above.
 			 */
-			edp->ed_ldentry = edp->ed_entry;
+			edp.ed_ldentry = edp.ed_entry;
 
 			/*
 			 * In all situations except an ET_DYN elf object with no
@@ -1891,7 +2267,6 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 				env.ex_brksize = 0;
 			}
 		}
-
 	}
 
 	env.ex_vp = vp;
@@ -1908,7 +2283,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 		    { AT_SUN_BRAND_LX_CLKTCK, 0 },
 		    { AT_SUN_BRAND_LX_SYSINFO_EHDR, 0 }
 		};
-		phdr_auxv[0].a_un.a_val = edp->ed_phdr;
+		phdr_auxv[0].a_un.a_val = edp.ed_phdr;
 		phdr_auxv[1].a_un.a_val = ldaddr;
 		phdr_auxv[2].a_un.a_val = hz;
 		/*
@@ -1929,7 +2304,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 		    { AT_SUN_BRAND_LX_CLKTCK, 0 },
 		    { AT_SUN_BRAND_LX_SYSINFO_EHDR, 0 }
 		};
-		phdr_auxv32[0].a_un.a_val = edp->ed_phdr;
+		phdr_auxv32[0].a_un.a_val = edp.ed_phdr;
 		phdr_auxv32[1].a_un.a_val = ldaddr;
 		phdr_auxv32[2].a_un.a_val = hz;
 		/*
@@ -1962,11 +2337,11 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	for (i = 0; i < __KERN_NAUXV_IMPL; i++) {
 		switch (up->u_auxv[i].a_type) {
 		case AT_ENTRY:
-			up->u_auxv[i].a_un.a_val = edp->ed_entry;
+			up->u_auxv[i].a_un.a_val = edp.ed_entry;
 			break;
 
 		case AT_SUN_BRAND_LX_PHDR:
-			up->u_auxv[i].a_un.a_val = edp->ed_phdr;
+			up->u_auxv[i].a_un.a_val = edp.ed_phdr;
 			break;
 
 		case AT_SUN_BRAND_LX_INTERP:
@@ -1981,6 +2356,11 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 			break;
 		}
 	}
+
+	/*
+	 * Record the brand ELF data now that the exec is a success.
+	 */
+	bcopy(&edp, &ttolxproc(curthread)->l_elf_data, sizeof (edp));
 
 	return (0);
 }

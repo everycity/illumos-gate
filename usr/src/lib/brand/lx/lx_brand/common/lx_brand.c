@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -68,7 +68,6 @@
 #include <sys/lx_debug.h>
 #include <sys/lx_brand.h>
 #include <sys/lx_types.h>
-#include <sys/lx_stat.h>
 #include <sys/lx_statfs.h>
 #include <sys/lx_signal.h>
 #include <sys/lx_syscall.h>
@@ -122,7 +121,7 @@ typedef long (*lx_syscall_handler_t)();
 
 static lx_syscall_handler_t lx_handlers[LX_NSYSCALLS + 1];
 
-static uintptr_t stack_bottom;
+static uintptr_t stack_size;
 
 #if defined(_LP64)
 long lx_fsb;
@@ -281,6 +280,10 @@ lx_err_fatal(char *msg, ...)
 
 /*
  * See if it is safe to alloca() sz bytes.  Return 1 for yes, 0 for no.
+ * We can't be certain we won't blow the stack since we don't know where it
+ * starts, but since the stack is only two pages we know any allocation bigger
+ * than that will blow the stack. Fortunately most allocations are small (e.g.
+ * 128 bytes).
  */
 int
 lx_check_alloca(size_t sz)
@@ -288,7 +291,7 @@ lx_check_alloca(size_t sz)
 	uintptr_t sp = (uintptr_t)&sz;
 	uintptr_t end = sp - sz;
 
-	return ((end < sp) && (end >= stack_bottom));
+	return ((end < sp) && (sz < stack_size));
 }
 
 /*PRINTFLIKE1*/
@@ -595,7 +598,7 @@ lx_init(int argc, char *argv[], char *envp[])
 
 	bzero(&reg, sizeof (reg));
 
-	stack_bottom = 2 * sysconf(_SC_PAGESIZE);
+	stack_size = 2 * sysconf(_SC_PAGESIZE);
 
 	/*
 	 * We need to shutdown all libc stdio.  libc stdio normally goes to
@@ -679,9 +682,6 @@ lx_init(int argc, char *argv[], char *envp[])
 	 */
 	if (syscall(SYS_brand, B_ELFDATA, (void *)&edp))
 		lx_err_fatal("failed to get required ELF data from the kernel");
-
-	if (lx_stat_init() != 0)
-		lx_err_fatal("failed to setup the stat translator");
 
 	if (lx_statfs_init() != 0)
 		lx_err_fatal("failed to setup the statfs translator");
@@ -967,9 +967,9 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/*   1: write */
 	NULL,				/*   2: open */
 	lx_close,			/*   3: close */
-	lx_stat64,			/*   4: stat */
-	lx_fstat64,			/*   5: fstat */
-	lx_lstat64,			/*   6: lstat */
+	NULL,				/*   4: stat */
+	NULL,				/*   5: fstat */
+	NULL,				/*   6: lstat */
 	NULL,				/*   7: poll */
 	lx_lseek,			/*   8: lseek */
 	lx_mmap,			/*   9: mmap */
@@ -980,8 +980,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_rt_sigprocmask,		/*  14: rt_sigprocmask */
 	lx_rt_sigreturn,		/*  15: rt_sigreturn */
 	NULL,				/*  16: ioctl */
-	lx_pread,			/*  17: pread64 */
-	lx_pwrite,			/*  18: pwrite64 */
+	NULL,				/*  17: pread64 */
+	NULL,				/*  18: pwrite64 */
 	NULL,				/*  19: readv */
 	NULL,				/*  20: writev */
 	lx_access,			/*  21: access */
@@ -1049,7 +1049,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/*  83: mkdir */
 	lx_rmdir,			/*  84: rmdir */
 	lx_creat,			/*  85: creat */
-	lx_link,			/*  86: link */
+	NULL,				/*  86: link */
 	lx_unlink,			/*  87: unlink */
 	lx_symlink,			/*  88: symlink */
 	lx_readlink,			/*  89: readlink */
@@ -1225,10 +1225,10 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_mknodat,			/* 259: mknodat */
 	NULL,				/* 260: fchownat */
 	lx_futimesat,			/* 261: futimesat */
-	lx_fstatat64,			/* 262: fstatat64 */
+	NULL,				/* 262: fstatat64 */
 	lx_unlinkat,			/* 263: unlinkat */
 	lx_renameat,			/* 264: renameat */
-	lx_linkat,			/* 265: linkat */
+	NULL,				/* 265: linkat */
 	lx_symlinkat,			/* 266: symlinkat */
 	lx_readlinkat,			/* 267: readlinkat */
 	NULL,				/* 268: fchmodat */
@@ -1258,8 +1258,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_dup3,			/* 292: dup3 */
 	NULL,				/* 293: pipe2 */
 	lx_inotify_init1,		/* 294: inotify_init1 */
-	lx_preadv,			/* 295: preadv */
-	lx_pwritev,			/* 296: pwritev */
+	NULL,				/* 295: preadv */
+	NULL,				/* 296: pwritev */
 	lx_rt_tgsigqueueinfo,		/* 297: rt_tgsigqueueinfo */
 	NULL,				/* 298: perf_event_open */
 	NULL,				/* 299: recvmmsg */
@@ -1303,7 +1303,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_close,			/*   6: close */
 	NULL,				/*   7: waitpid */
 	lx_creat,			/*   8: creat */
-	lx_link,			/*   9: link */
+	NULL,				/*   9: link */
 	lx_unlink,			/*  10: unlink */
 	lx_execve,			/*  11: execve */
 	lx_chdir,			/*  12: chdir */
@@ -1400,9 +1400,9 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_syslog,			/* 103: syslog */
 	lx_setitimer,			/* 104: setitimer */
 	lx_getitimer,			/* 105: getitimer */
-	lx_stat,			/* 106: stat */
-	lx_lstat,			/* 107: lstat */
-	lx_fstat,			/* 108: fstat */
+	NULL,				/* 106: stat */
+	NULL,				/* 107: lstat */
+	NULL,				/* 108: fstat */
 	NULL,				/* 109: uname */
 	NULL,				/* 110: oldiopl */
 	lx_vhangup,			/* 111: vhangup */
@@ -1474,8 +1474,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_rt_sigtimedwait,		/* 177: rt_sigtimedwait */
 	lx_rt_sigqueueinfo,		/* 178: rt_sigqueueinfo */
 	lx_rt_sigsuspend,		/* 179: rt_sigsuspend */
-	lx_pread64,			/* 180: pread64 */
-	lx_pwrite64,			/* 181: pwrite64 */
+	NULL,				/* 180: pread64 */
+	NULL,				/* 181: pwrite64 */
 	NULL,				/* 182: chown16 */
 	lx_getcwd,			/* 183: getcwd */
 	lx_capget,			/* 184: capget */
@@ -1489,9 +1489,9 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_mmap2,			/* 192: mmap2 */
 	lx_truncate64,			/* 193: truncate64 */
 	lx_ftruncate64,			/* 194: ftruncate64 */
-	lx_stat64,			/* 195: stat64 */
-	lx_lstat64,			/* 196: lstat64 */
-	lx_fstat64,			/* 197: fstat64 */
+	NULL,				/* 195: stat64 */
+	NULL,				/* 196: lstat64 */
+	NULL,				/* 197: fstat64 */
 	NULL,				/* 198: lchown */
 	lx_getuid,			/* 199: getuid */
 	lx_getgid,			/* 200: getgid */
@@ -1594,10 +1594,10 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_mknodat,			/* 297: mknodat */
 	NULL,				/* 298: fchownat */
 	lx_futimesat,			/* 299: futimesat */
-	lx_fstatat64,			/* 300: fstatat64 */
+	NULL,				/* 300: fstatat64 */
 	lx_unlinkat,			/* 301: unlinkat */
 	lx_renameat,			/* 302: renameat */
-	lx_linkat,			/* 303: linkat */
+	NULL,				/* 303: linkat */
 	lx_symlinkat,			/* 304: symlinkat */
 	lx_readlinkat,			/* 305: readlinkat */
 	NULL,				/* 306: fchmodat */
@@ -1627,8 +1627,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_dup3,			/* 330: dup3 */
 	NULL,				/* 331: pipe2 */
 	lx_inotify_init1,		/* 332: inotify_init1 */
-	lx_preadv,			/* 333: preadv */
-	lx_pwritev,			/* 334: pwritev */
+	NULL,				/* 333: preadv */
+	NULL,				/* 334: pwritev */
 	lx_rt_tgsigqueueinfo,		/* 335: rt_tgsigqueueinfo */
 	NULL,				/* 336: perf_event_open */
 	NULL,				/* 337: recvmmsg */

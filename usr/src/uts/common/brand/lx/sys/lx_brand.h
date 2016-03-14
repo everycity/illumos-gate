@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef _LX_BRAND_H
@@ -36,6 +36,8 @@
 #include <sys/zone.h>
 #include <sys/ksocket.h>
 #include <sys/vfs.h>
+#include <sys/sunddi.h>
+#include <sys/sunldi.h>
 #endif
 
 #ifdef	__cplusplus
@@ -162,8 +164,15 @@ typedef enum lx_ptrace_options {
 #define	AT_SUN_BRAND_LX_CLKTCK		AT_SUN_BRAND_AUX3
 #define	AT_SUN_BRAND_LX_SYSINFO_EHDR	AT_SUN_BRAND_AUX4
 
+/* Aux vectors containing real/effective user/group IDs */
+#define	AT_LX_UID		11
+#define	AT_LX_EUID		12
+#define	AT_LX_GID		13
+#define	AT_LX_EGID		14
 /* Aux vector containing hz value */
 #define	AT_CLKTCK	17
+/* Aux vector containing secure boolean */
+#define	AT_SECURE	23
 /* Aux vector containing vDSO addr */
 #define	AT_SYSINFO_EHDR	33
 
@@ -529,11 +538,14 @@ struct lx_lwp_data {
  * enhanced to support different mounts with different subsystem controllers.
  */
 typedef struct lx_zone_data {
+	kmutex_t lxzd_lock;			/* protects all members */
 	char lxzd_kernel_release[LX_KERN_RELEASE_MAX];
 	char lxzd_kernel_version[LX_KERN_VERSION_MAX];
 	ksocket_t lxzd_ioctl_sock;
 	char lxzd_bootid[LX_BOOTID_LEN];	/* procfs boot_id */
 	vfs_t *lxzd_cgroup;			/* cgroup for this zone */
+	list_t *lxzd_vdisks;			/* virtual disks (zvols) */
+	dev_t lxzd_zfs_dev;			/* major num for zfs */
 } lx_zone_data_t;
 
 #define	BR_CPU_BOUND	0x0001
@@ -553,6 +565,23 @@ typedef struct lx_zone_data {
 /* Macro for converting to system call arguments. */
 #define	LX_ARGS(scall) ((struct lx_##scall##_args *)\
 	(ttolxlwp(curthread)->br_scall_args))
+
+typedef enum lx_virt_disk_type {
+	LXVD_NONE,
+	LXVD_ZFS_DS,
+	LXVD_ZVOL
+} lx_virt_disk_type_t;
+
+typedef struct lx_virt_disk {
+	list_node_t		lxvd_link;
+	char			lxvd_name[MAXNAMELEN];
+	lx_virt_disk_type_t	lxvd_type;
+	dev_t			lxvd_emul_dev;
+	dev_t			lxvd_real_dev;
+	uint64_t		lxvd_volsize;
+	uint64_t		lxvd_blksize;
+	char			lxvd_real_name[MAXPATHLEN];
+} lx_virt_disk_t;
 
 /*
  * Determine the upper bound on the system call number:

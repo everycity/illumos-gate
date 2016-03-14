@@ -22,7 +22,7 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef _SYS_LINUX_SYSCALLS_H
@@ -59,6 +59,13 @@ extern long lx_fchown16();
 extern long lx_fchownat();
 extern long lx_fcntl();
 extern long lx_fcntl64();
+extern long lx_fgetxattr();
+extern long lx_flistxattr();
+extern long lx_fremovexattr();
+extern long lx_fsetxattr();
+extern long lx_fstat32();
+extern long lx_fstat64();
+extern long lx_fstatat64();
 extern long lx_futex();
 extern long lx_get_robust_list();
 extern long lx_get_thread_area();
@@ -73,6 +80,7 @@ extern long lx_getrlimit();
 extern long lx_getsockopt();
 extern long lx_gettid();
 extern long lx_gettimeofday();
+extern long lx_getxattr();
 extern long lx_io_setup();
 extern long lx_ioctl();
 extern long lx_ioprio_get();
@@ -80,6 +88,15 @@ extern long lx_ioprio_set();
 extern long lx_kill();
 extern long lx_lchown();
 extern long lx_lchown16();
+extern long lx_lgetxattr();
+extern long lx_link();
+extern long lx_linkat();
+extern long lx_llistxattr();
+extern long lx_lremovexattr();
+extern long lx_lsetxattr();
+extern long lx_lstat32();
+extern long lx_lstat64();
+extern long lx_listxattr();
 extern long lx_mkdir();
 extern long lx_mkdirat();
 extern long lx_modify_ldt();
@@ -91,10 +108,18 @@ extern long lx_pipe();
 extern long lx_pipe2();
 extern long lx_poll();
 extern long lx_ppoll();
+extern long lx_pread();
+extern long lx_pread32();
+extern long lx_preadv();
+extern long lx_preadv32();
 extern long lx_prctl();
 extern long lx_prlimit64();
 extern long lx_pselect();
 extern long lx_ptrace();
+extern long lx_pwrite();
+extern long lx_pwrite32();
+extern long lx_pwritev();
+extern long lx_pwritev32();
 extern long lx_read();
 extern long lx_readv();
 extern long lx_recv();
@@ -118,13 +143,17 @@ extern long lx_setresgid16();
 extern long lx_setresuid();
 extern long lx_setresuid16();
 extern long lx_setrlimit();
+extern long lx_setxattr();
 extern long lx_setsockopt();
 extern long lx_socket();
 extern long lx_socketcall();
+extern long lx_stat32();
+extern long lx_stat64();
 extern long lx_sync_file_range();
 extern long lx_syncfs();
 extern long lx_sysinfo32();
 extern long lx_sysinfo64();
+extern long lx_removexattr();
 extern long lx_tgkill();
 extern long lx_time();
 extern long lx_tkill();
@@ -134,7 +163,6 @@ extern long lx_waitid();
 extern long lx_waitpid();
 extern long lx_write();
 extern long lx_writev();
-extern long lx_xattr();
 
 #if defined(_LP64)
 /*

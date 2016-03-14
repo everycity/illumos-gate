@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.  All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/errno.h>
@@ -48,10 +48,14 @@
 #include <sys/netstack.h>
 #include <inet/ip.h>
 #include <inet/ip_if.h>
+#include <sys/dkio.h>
+#include <sys/sdt.h>
 
 /*
  * Linux ioctl types
  */
+#define	LX_IOC_TYPE_HD		0x03
+#define	LX_IOC_TYPE_BLK		0x12
 #define	LX_IOC_TYPE_FD		0x54
 #define	LX_IOC_TYPE_DTRACE	0x68
 #define	LX_IOC_TYPE_SOCK	0x89
@@ -60,6 +64,10 @@
 /*
  * Supported ioctls
  */
+#define	LX_HDIO_GETGEO		0x0301
+#define	LX_BLKGETSIZE		0x1260
+#define	LX_BLKSSZGET		0x1268
+#define	LX_BLKGETSIZE64		0x80081272
 #define	LX_TCGETS		0x5401
 #define	LX_TCSETS		0x5402
 #define	LX_TCSETSW		0x5403
@@ -105,7 +113,11 @@
 #define	LX_SIOCGPGRP		0x8904
 #define	LX_SIOCATMARK		0x8905
 #define	LX_SIOCGSTAMP		0x8906
+#define	LX_SIOCADDRT		0x890b
+#define	LX_SIOCDELRT		0x890c
+#define	LX_SIOCRTMSG		0x890d
 #define	LX_SIOCGIFNAME		0x8910
+#define	LX_SIOCSIFLINK		0x8911
 #define	LX_SIOCGIFCONF		0x8912
 #define	LX_SIOCGIFFLAGS		0x8913
 #define	LX_SIOCSIFFLAGS		0x8914
@@ -123,10 +135,57 @@
 #define	LX_SIOCSIFMEM		0x8920
 #define	LX_SIOCGIFMTU		0x8921
 #define	LX_SIOCSIFMTU		0x8922
+#define	LX_SIOCSIFNAME		0x8923
 #define	LX_SIOCSIFHWADDR	0x8924
+#define	LX_SIOCGIFENCAP		0x8925
+#define	LX_SIOCSIFENCAP		0x8926
 #define	LX_SIOCGIFHWADDR	0x8927
+#define	LX_SIOCGIFSLAVE		0x8929
+#define	LX_SIOCSIFSLAVE		0x8930
+#define	LX_SIOCADDMULTI		0x8931
+#define	LX_SIOCDELMULTI		0x8932
 #define	LX_SIOCGIFINDEX		0x8933
+#define	LX_SIOCSIFPFLAGS	0x8934
+#define	LX_SIOCGIFPFLAGS	0x8935
+#define	LX_SIOCDIFADDR		0x8936
+#define	LX_SIOCSIFHWBROADCAST	0x8937
+#define	LX_SIOCGIFCOUNT		0x8938
+#define	LX_SIOCGIFBR		0x8940
+#define	LX_SIOCSIFBR		0x8941
 #define	LX_SIOCGIFTXQLEN	0x8942
+#define	LX_SIOCSIFTXQLEN	0x8943
+#define	LX_SIOCETHTOOL		0x8946
+#define	LX_SIOCGMIIPHY		0x8947
+#define	LX_SIOCGMIIREG		0x8948
+#define	LX_SIOCSMIIREG		0x8949
+#define	LX_SIOCWANDEV		0x894a
+#define	LX_SIOCOUTQNSD		0x894b
+#define	LX_SIOCDARP		0x8953
+#define	LX_SIOCGARP		0x8954
+#define	LX_SIOCSARP		0x8955
+#define	LX_SIOCDRARP		0x8960
+#define	LX_SIOCGRARP		0x8961
+#define	LX_SIOCSRARP		0x8962
+#define	LX_SIOCGIFMAP		0x8970
+#define	LX_SIOCSIFMAP		0x8971
+#define	LX_SIOCADDDLCI		0x8980
+#define	LX_SIOCDELDLCI		0x8981
+#define	LX_SIOCGIFVLAN		0x8982
+#define	LX_SIOCSIFVLAN		0x8983
+#define	LX_SIOCBONDENSLAVE	0x8990
+#define	LX_SIOCBONDRELEASE	0x8991
+#define	LX_SIOCBONDSETHWADDR	0x8992
+#define	LX_SIOCBONDSLAVEINFOQUERY 0x8993
+#define	LX_SIOCBONDINFOQUERY	0x8994
+#define	LX_SIOCBONDCHANGEACTIVE	0x8995
+#define	LX_SIOCBRADDBR		0x89a0
+#define	LX_SIOCBRDELBR		0x89a1
+#define	LX_SIOCBRADDIF		0x89a2
+#define	LX_SIOCBRDELIF		0x89a3
+#define	LX_SIOCSHWTSTAMP	0x89b0
+#define	LX_SIOCGHWTSTAMP	0x89b1
+#define	LX_SIOCDEVPRIVATE	0x89f0
+#define	LX_SIOCPROTOPRIVATE	0x89e0
 
 #define	FLUSER(fp)	fp->f_flag | get_udatamodel()
 #define	FLFAKE(fp)	fp->f_flag | FKIOCTL
@@ -500,6 +559,233 @@ ict_fionread(file_t *fp, int cmd, intptr_t arg, int lxcmd)
 	return (0);
 }
 
+/*
+ * hard disk-related translators
+ *
+ * Note that the normal disk ioctls only work for VCHR devices. See spec_ioctl
+ * which will return ENOTTY for a VBLK device. However, fdisk, etc. expect to
+ * work with block devices.
+ *
+ * We expect a zvol to be the primary block device we're interacting with and
+ * we use the zone's lxzd_vdisks list to handle zvols specifically.
+ */
+
+typedef struct lx_hd_geom {
+	unsigned char heads;
+	unsigned char sectors;
+	unsigned short cylinders;
+	unsigned long start;
+} lx_hd_geom_t;
+
+static lx_virt_disk_t *
+lx_lookup_zvol(lx_zone_data_t *lxzd, dev_t dev)
+{
+	lx_virt_disk_t *vd;
+
+	vd = list_head(lxzd->lxzd_vdisks);
+	while (vd != NULL) {
+		if (vd->lxvd_type == LXVD_ZVOL && vd->lxvd_real_dev == dev)
+			return (vd);
+		vd = list_next(lxzd->lxzd_vdisks, vd);
+	}
+
+	return (NULL);
+}
+
+/*
+ * See zvol_ioctl() which always fails for DKIOCGGEOM. The geometry for a
+ * zvol (or really any modern disk) is made up, so we do that here as well.
+ */
+static int
+ict_hdgetgeo(file_t *fp, int cmd, intptr_t arg, int lxcmd)
+{
+	lx_hd_geom_t lx_geom;
+	lx_zone_data_t *lxzd;
+
+	if (fp->f_vnode->v_type != VCHR && fp->f_vnode->v_type != VBLK)
+		return (set_errno(EINVAL));
+
+	lxzd = ztolxzd(curproc->p_zone);
+	ASSERT(lxzd != NULL);
+	ASSERT(lxzd->lxzd_vdisks != NULL);
+
+	if (getmajor(fp->f_vnode->v_rdev) == getmajor(lxzd->lxzd_zfs_dev)) {
+		lx_virt_disk_t *vd;
+
+		vd = lx_lookup_zvol(lxzd, fp->f_vnode->v_rdev);
+		if (vd == NULL) {
+			/* should only happen if new zvol */
+			bzero(&lx_geom, sizeof (lx_geom));
+		} else {
+			diskaddr_t tot;
+
+			tot = vd->lxvd_volsize / vd->lxvd_blksize;
+
+			/*
+			 * Since the 'sectors' value is only one byte we make
+			 * up heads/cylinder values to get things to fit.
+			 * We roundup the number of heads to ensure we don't
+			 * overflow the sectors due to truncation.
+			 */
+			lx_geom.heads = lx_geom.cylinders = (tot / 0xff) + 1;
+			lx_geom.sectors = tot / lx_geom.heads;
+			lx_geom.start = 0;
+		}
+	} else {
+		int res, rv;
+		struct dk_geom geom;
+
+		res = VOP_IOCTL(fp->f_vnode, DKIOCGGEOM, (intptr_t)&geom,
+		    fp->f_flag | FKIOCTL, fp->f_cred, &rv, NULL);
+		if (res > 0)
+			return (set_errno(res));
+
+		lx_geom.heads = geom.dkg_nhead;
+		lx_geom.sectors = geom.dkg_nsect;
+		lx_geom.cylinders = geom.dkg_ncyl;
+		lx_geom.start = 0;
+	}
+
+	if (copyout(&lx_geom, (caddr_t)arg, sizeof (lx_geom)))
+		return (set_errno(EFAULT));
+	return (0);
+}
+
+/*
+ * Per the Linux sd(4) man page, get the number of sectors. The linux/fs.h
+ * header says its 512 byte blocks.
+ */
+static int
+ict_blkgetsize(file_t *fp, int cmd, intptr_t arg, int lxcmd)
+{
+	diskaddr_t tot;
+	lx_zone_data_t *lxzd;
+
+	if (fp->f_vnode->v_type != VCHR && fp->f_vnode->v_type != VBLK)
+		return (set_errno(EINVAL));
+
+	lxzd = ztolxzd(curproc->p_zone);
+	ASSERT(lxzd != NULL);
+	ASSERT(lxzd->lxzd_vdisks != NULL);
+
+	if (getmajor(fp->f_vnode->v_rdev) == getmajor(lxzd->lxzd_zfs_dev)) {
+		lx_virt_disk_t *vd;
+
+		vd = lx_lookup_zvol(lxzd, fp->f_vnode->v_rdev);
+		if (vd == NULL) {
+			/* should only happen if new zvol */
+			tot = 0;
+		} else {
+			tot = vd->lxvd_volsize / 512;
+		}
+	} else {
+		int res, rv;
+		struct dk_minfo minfo;
+
+		res = VOP_IOCTL(fp->f_vnode, DKIOCGMEDIAINFO, (intptr_t)&minfo,
+		    fp->f_flag | FKIOCTL, fp->f_cred, &rv, NULL);
+		if (res > 0)
+			return (set_errno(res));
+
+		tot = minfo.dki_capacity;
+		if (minfo.dki_lbsize > 512) {
+			uint_t bsize = minfo.dki_lbsize / 512;
+
+			tot *= bsize;
+		}
+	}
+
+	if (copyout(&tot, (caddr_t)arg, sizeof (long)))
+		return (set_errno(EFAULT));
+	return (0);
+}
+
+/*
+ * Get the sector size (i.e. the logical block size).
+ */
+static int
+ict_blkgetssize(file_t *fp, int cmd, intptr_t arg, int lxcmd)
+{
+	uint_t bsize;
+	lx_zone_data_t *lxzd;
+
+	if (fp->f_vnode->v_type != VCHR && fp->f_vnode->v_type != VBLK)
+		return (set_errno(EINVAL));
+
+	lxzd = ztolxzd(curproc->p_zone);
+	ASSERT(lxzd != NULL);
+	ASSERT(lxzd->lxzd_vdisks != NULL);
+
+	if (getmajor(fp->f_vnode->v_rdev) == getmajor(lxzd->lxzd_zfs_dev)) {
+		lx_virt_disk_t *vd;
+
+		vd = lx_lookup_zvol(lxzd, fp->f_vnode->v_rdev);
+		if (vd == NULL) {
+			/* should only happen if new zvol */
+			bsize = 0;
+		} else {
+			bsize = (uint_t)vd->lxvd_blksize;
+		}
+	} else {
+		int res, rv;
+		struct dk_minfo minfo;
+
+		res = VOP_IOCTL(fp->f_vnode, DKIOCGMEDIAINFO, (intptr_t)&minfo,
+		    fp->f_flag | FKIOCTL, fp->f_cred, &rv, NULL);
+		if (res > 0)
+			return (set_errno(res));
+
+		bsize = (uint_t)minfo.dki_lbsize;
+	}
+
+	if (copyout(&bsize, (caddr_t)arg, sizeof (bsize)))
+		return (set_errno(EFAULT));
+	return (0);
+}
+
+/*
+ * Get the size. The linux/fs.h header says its in bytes.
+ */
+static int
+ict_blkgetsize64(file_t *fp, int cmd, intptr_t arg, int lxcmd)
+{
+	uint64_t tot;
+	lx_zone_data_t *lxzd;
+
+	if (fp->f_vnode->v_type != VCHR && fp->f_vnode->v_type != VBLK)
+		return (set_errno(EINVAL));
+
+	lxzd = ztolxzd(curproc->p_zone);
+	ASSERT(lxzd != NULL);
+	ASSERT(lxzd->lxzd_vdisks != NULL);
+
+	if (getmajor(fp->f_vnode->v_rdev) == getmajor(lxzd->lxzd_zfs_dev)) {
+		lx_virt_disk_t *vd;
+
+		vd = lx_lookup_zvol(lxzd, fp->f_vnode->v_rdev);
+		if (vd == NULL) {
+			/* should only happen if new zvol */
+			tot = 0;
+		} else {
+			tot = vd->lxvd_volsize;
+		}
+	} else {
+		int res, rv;
+		struct dk_minfo minfo;
+
+		res = VOP_IOCTL(fp->f_vnode, DKIOCGMEDIAINFO, (intptr_t)&minfo,
+		    fp->f_flag | FKIOCTL, fp->f_cred, &rv, NULL);
+		if (res > 0)
+			return (set_errno(res));
+
+		tot = minfo.dki_capacity * minfo.dki_lbsize;
+	}
+
+	if (copyout(&tot, (caddr_t)arg, sizeof (uint64_t)))
+		return (set_errno(EFAULT));
+	return (0);
+}
+
 /* Terminal-related translators */
 
 static int
@@ -851,13 +1137,31 @@ ict_if_ioctl(vnode_t *vn, int cmd, intptr_t arg, int flags, cred_t *cred)
 	ksocket_t ks;
 
 	ASSERT(lxzd != NULL);
-	ks = lxzd->lxzd_ioctl_sock;
 
 	/*
-	 * For ioctls of this type, Illumos is strict about address family
+	 * For ioctls of this type, we are strict about address family
 	 * whereas Linux is lenient.  This strictness can be avoided by using
-	 * an internal AF_INET ksocket.
+	 * an internal AF_INET ksocket, which we use if the family is anything
+	 * but AF_PACKET.
 	 */
+	if (vn->v_type == VSOCK && VTOSO(vn)->so_family == AF_PACKET)
+		return (VOP_IOCTL(vn, cmd, arg, flags, cred, &rv, NULL));
+
+	mutex_enter(&lxzd->lxzd_lock);
+	ks = lxzd->lxzd_ioctl_sock;
+	if (ks == NULL) {
+		/*
+		 * Linux is not at all picky about address family when it comes
+		 * to supporting interface-related ioctls. To mimic this
+		 * behavior, we'll attempt those ioctls against a ksocket
+		 * configured for that purpose.
+		 */
+		(void) ksocket_socket(&lxzd->lxzd_ioctl_sock, AF_INET,
+		    SOCK_DGRAM, 0, 0, curproc->p_zone->zone_kcred);
+		ks = lxzd->lxzd_ioctl_sock;
+	}
+	mutex_exit(&lxzd->lxzd_lock);
+
 	if (ks != NULL) {
 		error = ksocket_ioctl(ks, cmd, arg, &rv, cred);
 	} else {
@@ -1180,6 +1484,27 @@ ict_siocgifconf(file_t *fp, int cmd, intptr_t arg, int lxcmd)
 		return (ict_siocgifconf32(fp, cmd, arg, lxcmd));
 }
 
+/*
+ * Unfortunately some of the autofs ioctls want to return a positive integer
+ * result which does not indicate an error. To minimize disruption in the
+ * rest of the code, we'll treat a positive return as an errno and a negative
+ * return as the non-error return (which we then negate).
+ */
+static int
+ict_autofs(file_t *fp, int cmd, intptr_t arg, int lxcmd)
+{
+	int res = 0;
+	int rv;
+
+	res = VOP_IOCTL(fp->f_vnode, cmd, arg, FLUSER(fp), fp->f_cred, &rv,
+	    NULL);
+	if (res > 0)
+		return (set_errno(res));
+	if (res == 0)
+		return (0);
+	return (-res);
+}
+
 /* Structure used to define an ioctl translator. */
 typedef struct lx_ioc_cmd_translator {
 	int	lict_lxcmd;
@@ -1295,6 +1620,36 @@ static lx_ioc_cmd_translator_t lx_ioc_xlate_autofs[] = {
 	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_IOC_PROTOSUBVER)
 	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_IOC_ASKUMOUNT)
 
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_VERSION_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_PROTOVER_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_PROTOSUBVER_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_OPENMOUNT_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_CLOSEMOUNT_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_READY_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_FAIL_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_SETPIPEFD_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_CATATONIC_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_TIMEOUT_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_REQUESTER_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_EXPIRE_CMD)
+	LX_IOC_CMD_TRANSLATOR_PTHRU(LX_AUTOFS_DEV_IOC_ASKUMOUNT_CMD)
+	LX_IOC_CMD_TRANSLATOR_CUSTOM(LX_AUTOFS_DEV_IOC_ISMOUNTPOINT_CMD,
+	    ict_autofs)
+
+	LX_IOC_CMD_TRANSLATOR_END
+};
+
+static lx_ioc_cmd_translator_t lx_ioc_xlate_hd[] = {
+	LX_IOC_CMD_TRANSLATOR_CUSTOM(LX_HDIO_GETGEO, ict_hdgetgeo)
+
+	LX_IOC_CMD_TRANSLATOR_END
+};
+
+static lx_ioc_cmd_translator_t lx_ioc_xlate_blk[] = {
+	LX_IOC_CMD_TRANSLATOR_CUSTOM(LX_BLKGETSIZE, ict_blkgetsize)
+	LX_IOC_CMD_TRANSLATOR_CUSTOM(LX_BLKSSZGET, ict_blkgetssize)
+	LX_IOC_CMD_TRANSLATOR_CUSTOM(LX_BLKGETSIZE64, ict_blkgetsize64)
+
 	LX_IOC_CMD_TRANSLATOR_END
 };
 
@@ -1320,7 +1675,7 @@ long
 lx_ioctl(int fdes, int cmd, intptr_t arg)
 {
 	file_t *fp;
-	int res = 0;
+	int res = 0, error = ENOTTY;
 	lx_ioc_cmd_translator_t *ict = NULL;
 
 	if (cmd == LX_FIOCLEX || cmd == LX_FIONCLEX) {
@@ -1342,10 +1697,19 @@ lx_ioctl(int fdes, int cmd, intptr_t arg)
 
 	case LX_IOC_TYPE_SOCK:
 		ict = lx_ioc_xlate_socket;
+		error = EOPNOTSUPP;
 		break;
 
 	case LX_IOC_TYPE_AUTOFS:
 		ict = lx_ioc_xlate_autofs;
+		break;
+
+	case LX_IOC_TYPE_BLK:
+		ict = lx_ioc_xlate_blk;
+		break;
+
+	case LX_IOC_TYPE_HD:
+		ict = lx_ioc_xlate_hd;
 		break;
 
 	default:
@@ -1368,7 +1732,7 @@ lx_ioctl(int fdes, int cmd, intptr_t arg)
 	}
 	if (ict->lict_func == NULL) {
 		releasef(fdes);
-		return (set_errno(ENOTTY));
+		return (set_errno(error));
 	}
 
 	res = ict->lict_func(fp, ict->lict_cmd, arg, ict->lict_lxcmd);

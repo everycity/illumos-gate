@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2016 Joyent, Inc.
  */
 
 /*
@@ -71,14 +71,20 @@ static void lxsys_inactive(vnode_t *, cred_t *, caller_context_t *);
 static vnode_t *lxsys_lookup_static(lxsys_node_t *, char *);
 static vnode_t *lxsys_lookup_class_netdir(lxsys_node_t *, char *);
 static vnode_t *lxsys_lookup_devices_virtual_netdir(lxsys_node_t *, char *);
+static vnode_t *lxsys_lookup_blockdir(lxsys_node_t *, char *);
+static vnode_t *lxsys_lookup_devices_zfsdir(lxsys_node_t *, char *);
 
 static int lxsys_read_devices_virtual_net(lxsys_node_t *, lxsys_uiobuf_t *);
+static int lxsys_read_devices_zfs_block(lxsys_node_t *, lxsys_uiobuf_t *);
 
 static int lxsys_readdir_static(lxsys_node_t *, uio_t *, int *);
 static int lxsys_readdir_class_netdir(lxsys_node_t *, uio_t *, int *);
 static int lxsys_readdir_devices_virtual_netdir(lxsys_node_t *, uio_t *, int *);
+static int lxsys_readdir_blockdir(lxsys_node_t *, uio_t *, int *);
+static int lxsys_readdir_devices_zfsdir(lxsys_node_t *, uio_t *, int *);
 
-static int lxsys_readlink_class_net(lxsys_node_t *lnp, char *buf, size_t len);
+static int lxsys_readlink_class_net(lxsys_node_t *, char *, size_t);
+static int lxsys_readlink_block(lxsys_node_t *, char *, size_t);
 
 /*
  * The lx /sys vnode operations vector
@@ -111,17 +117,21 @@ const fs_operation_def_t lxsys_vnodeops_template[] = {
  * 1 - SYS_STATIC
  * 2 - SYS_CLASS_NET
  * 3 - SYS_DEVICES_NET
+ * 4 - SYS_BLOCK
+ * 5 - SYS_DEVICES_ZFS
  *
  * Static entries will have assigned INSTANCE identifiers:
- * - 0: /sys
- * - 1: /sys/class
- * - 2: /sys/devices
- * - 3: /sys/fs
- * - 4: /sys/class/net
- * - 5: /sys/devices/virtual
- * - 7: /sys/devices/system
- * - 8: /sys/fs/cgroup
- * - 9: /sys/devices/virtual/net
+ * - 0x00: /sys
+ * - 0x01: /sys/class
+ * - 0x02: /sys/devices
+ * - 0x03: /sys/fs
+ * - 0x04: /sys/class/net
+ * - 0x05: /sys/devices/virtual
+ * - 0x06: /sys/devices/system
+ * - 0x07: /sys/fs/cgroup
+ * - 0x08: /sys/devices/virtual/net
+ * - 0x09: /sys/block
+ * - 0x0a: /sys/devices/zfs
  *
  * Dynamic /sys/class/net/<interface> symlinks will use an INSTANCE derived
  * from the corresonding ifindex.
@@ -129,21 +139,30 @@ const fs_operation_def_t lxsys_vnodeops_template[] = {
  * Dynamic /sys/devices/virtual/net/<interface>/<entries> directories will use
  * an INSTANCE derived from the ifindex and statically assigned ENDPOINT IDs
  * for the contained entries.
+ *
+ * Dynamic /sys/block/<dev> symlinks will use an INSTANCE derived from the
+ * device major and instance from records listed in kstat or zvols.
+ *
+ * Dynamic /sys/devices/zfs/<dev> directories will use an INSTANCE derived from
+ * the emulated minor number.
  */
 
-#define	LXSYS_INST_CLASSDIR			1
-#define	LXSYS_INST_DEVICESDIR			2
-#define	LXSYS_INST_FSDIR			3
-#define	LXSYS_INST_CLASS_NETDIR			4
-#define	LXSYS_INST_DEVICES_VIRTUALDIR		5
-#define	LXSYS_INST_DEVICES_SYSTEMDIR		6
-#define	LXSYS_INST_FS_CGROUPDIR			7
-#define	LXSYS_INST_DEVICES_VIRTUAL_NETDIR	8
+#define	LXSYS_INST_CLASSDIR			0x1
+#define	LXSYS_INST_DEVICESDIR			0x2
+#define	LXSYS_INST_FSDIR			0x3
+#define	LXSYS_INST_CLASS_NETDIR			0x4
+#define	LXSYS_INST_DEVICES_VIRTUALDIR		0x5
+#define	LXSYS_INST_DEVICES_SYSTEMDIR		0x6
+#define	LXSYS_INST_FS_CGROUPDIR			0x7
+#define	LXSYS_INST_DEVICES_VIRTUAL_NETDIR	0x8
+#define	LXSYS_INST_BLOCKDIR			0x9
+#define	LXSYS_INST_DEVICES_ZFSDIR		0xa
 
 /*
  * file contents of an lx /sys directory.
  */
 static lxsys_dirent_t dirlist_root[] = {
+	{ LXSYS_INST_BLOCKDIR,		"block" },
 	{ LXSYS_INST_CLASSDIR,		"class" },
 	{ LXSYS_INST_DEVICESDIR,	"devices" },
 	{ LXSYS_INST_FSDIR,		"fs" }
@@ -157,7 +176,8 @@ static lxsys_dirent_t dirlist_fs[] = {
 };
 static lxsys_dirent_t dirlist_devices[] = {
 	{ LXSYS_INST_DEVICES_SYSTEMDIR,		"system" },
-	{ LXSYS_INST_DEVICES_VIRTUALDIR,	"virtual" }
+	{ LXSYS_INST_DEVICES_VIRTUALDIR,	"virtual" },
+	{ LXSYS_INST_DEVICES_ZFSDIR,		"zfs" }
 };
 static lxsys_dirent_t dirlist_devices_virtual[] = {
 	{ LXSYS_INST_DEVICES_VIRTUAL_NETDIR,	"net" }
@@ -172,6 +192,8 @@ static lxsys_dirent_t dirlist_devices_virtual[] = {
 #define	LXSYS_ENDP_NET_TXQLEN	6
 #define	LXSYS_ENDP_NET_TYPE	7
 
+#define	LXSYS_ENDP_BLOCK_DEVICE	1
+
 static lxsys_dirent_t dirlist_devices_virtual_net[] = {
 	{ LXSYS_ENDP_NET_ADDRESS,	"address" },
 	{ LXSYS_ENDP_NET_ADDRLEN,	"addr_len" },
@@ -180,6 +202,10 @@ static lxsys_dirent_t dirlist_devices_virtual_net[] = {
 	{ LXSYS_ENDP_NET_MTU,		"mtu" },
 	{ LXSYS_ENDP_NET_TXQLEN,	"tx_queue_len" },
 	{ LXSYS_ENDP_NET_TYPE,		"type" }
+};
+
+static lxsys_dirent_t dirlist_devices_zfs_block[] = {
+	{ LXSYS_ENDP_BLOCK_DEVICE,	"device" }
 };
 
 #define	SYSDIRLISTSZ(l)	(sizeof (l) / sizeof ((l)[0]))
@@ -204,6 +230,8 @@ static vnode_t *(*lxsys_lookup_function[LXSYS_MAXTYPE])() = {
 	lxsys_lookup_static,			/* LXSYS_STATIC		*/
 	lxsys_lookup_class_netdir,		/* LXSYS_CLASS_NET	*/
 	lxsys_lookup_devices_virtual_netdir,	/* LXSYS_DEVICES_NET	*/
+	lxsys_lookup_blockdir,			/* LXSYS_BLOCK		*/
+	lxsys_lookup_devices_zfsdir,		/* LXSYS_DEVICES_ZFS	*/
 };
 
 /*
@@ -214,6 +242,8 @@ static int (*lxsys_readdir_function[LXSYS_MAXTYPE])() = {
 	lxsys_readdir_static,			/* LXSYS_STATIC		*/
 	lxsys_readdir_class_netdir,		/* LXSYS_CLASS_NET	*/
 	lxsys_readdir_devices_virtual_netdir,	/* LXSYS_DEVICES_NET	*/
+	lxsys_readdir_blockdir,			/* LXSYS_BLOCK		*/
+	lxsys_readdir_devices_zfsdir,		/* LXSYS_DEVICES_ZFS	*/
 };
 
 /*
@@ -224,6 +254,8 @@ static int (*lxsys_read_function[LXSYS_MAXTYPE])() = {
 	NULL,					/* LXSYS_STATIC		*/
 	NULL,					/* LXSYS_CLASS_NET	*/
 	lxsys_read_devices_virtual_net,		/* LXSYS_DEVICES_NET	*/
+	NULL,					/* LXSYS_BLOCK		*/
+	lxsys_read_devices_zfs_block,		/* LXSYS_DEVICES_ZFS	*/
 };
 
 /*
@@ -234,9 +266,9 @@ static int (*lxsys_readlink_function[LXSYS_MAXTYPE])() = {
 	NULL,					/* LXSYS_STATIC		*/
 	lxsys_readlink_class_net,		/* LXSYS_CLASS_NET	*/
 	NULL,					/* LXSYS_DEVICES_NET	*/
+	lxsys_readlink_block,			/* LXSYS_BLOCK		*/
+	NULL,					/* LXSYS_DEVICES_ZFS	*/
 };
-
-
 
 /*
  * lxsys_open(): Vnode operation for VOP_OPEN()
@@ -409,6 +441,33 @@ lxsys_lookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
 	return ((*vpp == NULL) ? ENOENT : 0);
 }
 
+static lxsys_node_t *
+lxsys_lookup_disk(lxsys_node_t *ldp, char *comp, lxsys_nodetype_t type)
+{
+	lxsys_node_t *lnp = NULL;
+	lx_zone_data_t *lxzdata;
+	lx_virt_disk_t *vd;
+
+	lxzdata = ztolxzd(curproc->p_zone);
+	if (lxzdata == NULL)
+		return (NULL);
+	ASSERT(lxzdata->lxzd_vdisks != NULL);
+
+	vd = list_head(lxzdata->lxzd_vdisks);
+	while (vd != NULL) {
+		int inst = getminor(vd->lxvd_emul_dev) & 0xffff;
+
+		if (strcmp(vd->lxvd_name, comp) == 0 && inst != 0) {
+			lnp = lxsys_getnode(ldp->lxsys_vnode, type, inst, 0);
+			break;
+		}
+
+		vd = list_next(lxzdata->lxzd_vdisks, vd);
+	}
+
+	return (lnp);
+}
+
 static vnode_t *
 lxsys_lookup_static(lxsys_node_t *ldp, char *comp)
 {
@@ -433,11 +492,17 @@ lxsys_lookup_static(lxsys_node_t *ldp, char *comp)
 			lxsys_node_t *lnp;
 
 			switch (dirent[i].d_idnum) {
+			case LXSYS_INST_BLOCKDIR:
+				node_type = LXSYS_BLOCK;
+				break;
 			case LXSYS_INST_CLASS_NETDIR:
 				node_type = LXSYS_CLASS_NET;
 				break;
 			case LXSYS_INST_DEVICES_VIRTUAL_NETDIR:
 				node_type = LXSYS_DEVICES_NET;
+				break;
+			case LXSYS_INST_DEVICES_ZFSDIR:
+				node_type = LXSYS_DEVICES_ZFS;
 				break;
 			default:
 				/* Another static node */
@@ -554,6 +619,62 @@ lxsys_lookup_devices_virtual_netdir(lxsys_node_t *ldp, char *comp)
 	return (NULL);
 }
 
+static vnode_t *
+lxsys_lookup_blockdir(lxsys_node_t *ldp, char *comp)
+{
+	lxsys_node_t *lnp;
+
+	if (ldp->lxsys_instance == 0) {
+		/* top-level dev listing */
+		lnp = lxsys_lookup_disk(ldp, comp, LXSYS_BLOCK);
+
+		if (lnp != NULL) {
+			lnp->lxsys_vnode->v_type = VLNK;
+			return (lnp->lxsys_vnode);
+		}
+	}
+
+	return (NULL);
+}
+
+static vnode_t *
+lxsys_lookup_devices_zfsdir(lxsys_node_t *ldp, char *comp)
+{
+	lxsys_node_t *lnp;
+
+	if (ldp->lxsys_instance == 0) {
+		/* top-level dev listing */
+		lnp = lxsys_lookup_disk(ldp, comp, LXSYS_DEVICES_ZFS);
+
+		if (lnp != NULL) {
+			return (lnp->lxsys_vnode);
+		}
+	} else if (ldp->lxsys_endpoint == 0) {
+		/* disk-level sub-item listing */
+		int i, size;
+		lxsys_dirent_t *dirent;
+
+		/*
+		 * All of these entries currently look like regular files
+		 * but on a real Linux system some will be subdirs. This should
+		 * be fixed when we populate the directory for real.
+		 */
+		size = SYSDIRLISTSZ(dirlist_devices_zfs_block);
+		for (i = 0; i < size; i++) {
+			dirent = &dirlist_devices_zfs_block[i];
+			if (strncmp(comp, dirent->d_name, LXSNSIZ) == 0) {
+				lnp = lxsys_getnode(ldp->lxsys_vnode,
+				    ldp->lxsys_type, ldp->lxsys_instance,
+				    dirent->d_idnum);
+				lnp->lxsys_vnode->v_type = VREG;
+				lnp->lxsys_mode = 0444;
+				return (lnp->lxsys_vnode);
+			}
+		}
+	}
+
+	return (NULL);
+}
 
 static int
 lxsys_read_devices_virtual_net(lxsys_node_t *lnp, lxsys_uiobuf_t *luio)
@@ -628,6 +749,17 @@ lxsys_read_devices_virtual_net(lxsys_node_t *lnp, lxsys_uiobuf_t *luio)
 	return (error);
 }
 
+static int
+lxsys_read_devices_zfs_block(lxsys_node_t *lnp, lxsys_uiobuf_t *luio)
+{
+	uint_t dskindex = lnp->lxsys_instance;
+
+	if (dskindex == 0 || lnp->lxsys_endpoint == 0) {
+		return (EISDIR);
+	}
+
+	return (EIO);
+}
 /*
  * lxsys_readdir(): Vnode operation for VOP_READDIR()
  */
@@ -927,6 +1059,76 @@ lxsys_readdir_ifaces(lxsys_node_t *ldp, struct uio *uiop, int *eofp,
 	return (error);
 }
 
+static int
+lxsys_readdir_disks(lxsys_node_t *ldp, struct uio *uiop, int *eofp,
+    lxsys_nodetype_t type)
+{
+	longlong_t bp[DIRENT64_RECLEN(LXSNSIZ) / sizeof (longlong_t)];
+	dirent64_t *dirent = (dirent64_t *)bp;
+	ssize_t oresid, uresid;
+	int skip, error;
+	int reclen;
+	uint_t instance;
+	lx_zone_data_t *lxzdata;
+	lx_virt_disk_t *vd;
+
+	/* Emit "." and ".." entries */
+	oresid = uiop->uio_resid;
+	error = lxsys_readdir_common(ldp, uiop, eofp, NULL, 0);
+	if (error != 0 || *eofp == 0) {
+		return (error);
+	}
+
+	skip = (uiop->uio_offset/LXSYS_SDSIZE) - 2;
+
+	lxzdata = ztolxzd(curproc->p_zone);
+	if (lxzdata == NULL)
+		return (EINVAL);
+	ASSERT(lxzdata->lxzd_vdisks != NULL);
+
+	vd = list_head(lxzdata->lxzd_vdisks);
+	while (vd != NULL) {
+		if (skip > 0) {
+			skip--;
+			goto next;
+		}
+
+		if (strnlen(vd->lxvd_name, sizeof (vd->lxvd_name)) > LXSNSIZ)
+			goto next;
+
+		(void) strncpy(dirent->d_name, vd->lxvd_name, LXSNSIZ);
+
+		instance = getminor(vd->lxvd_emul_dev) & 0xffff;
+		if (instance == 0)
+			goto next;
+
+		dirent->d_ino = lxsys_inode(type, instance, 0);
+		reclen = DIRENT64_RECLEN(strlen(dirent->d_name));
+
+		uresid = uiop->uio_resid;
+		if (reclen > uresid) {
+			if (uresid == oresid) {
+				/* Not enough space for one record */
+				error = EINVAL;
+			}
+			break;
+		}
+		if ((error = lxsys_dirent_out(dirent, reclen, uiop)) != 0) {
+			break;
+		}
+
+next:
+		vd = list_next(lxzdata->lxzd_vdisks, vd);
+	}
+
+	/* Indicate EOF if we reached the end of the virtual disks. */
+	if (vd == NULL) {
+		*eofp = 1;
+	}
+
+	return (error);
+}
+
 
 static int
 lxsys_readdir_static(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
@@ -981,6 +1183,48 @@ lxsys_readdir_devices_virtual_netdir(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
 		    SYSDIRLISTSZ(dirlist_devices_virtual_net));
 	} else {
 		/* there shouldn't be subdirs below this */
+		error = ENOTDIR;
+	}
+
+	return (error);
+}
+
+static int
+lxsys_readdir_blockdir(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
+{
+	if (lnp->lxsys_type != LXSYS_BLOCK ||
+	    lnp->lxsys_instance != 0) {
+		/*
+		 * Since /sys/block contains only symlinks, readdir operations
+		 * should not be performed anywhere except the top level
+		 * (instance == 0).
+		 */
+		return (ENOTDIR);
+	}
+
+	return (lxsys_readdir_disks(lnp, uiop, eofp, LXSYS_BLOCK));
+}
+
+static int
+lxsys_readdir_devices_zfsdir(lxsys_node_t *lnp, uio_t *uiop, int *eofp)
+{
+	int error;
+
+	if (lnp->lxsys_instance == 0) {
+		/* top-level dev listing */
+		error = lxsys_readdir_disks(lnp, uiop, eofp,
+		    LXSYS_DEVICES_ZFS);
+	} else if (lnp->lxsys_endpoint == 0) {
+		/* disk-level sub-item listing */
+		error = lxsys_readdir_subdir(lnp, uiop, eofp,
+		    dirlist_devices_zfs_block,
+		    SYSDIRLISTSZ(dirlist_devices_zfs_block));
+	} else {
+		/*
+		 * Currently there shouldn't be subdirs below this but
+		 * on a real Linux system some will be subdirs. This should
+		 * be fixed when we populate the directory for real.
+		 */
 		error = ENOTDIR;
 	}
 
@@ -1052,6 +1296,38 @@ lxsys_readlink_class_net(lxsys_node_t *lnp, char *buf, size_t len)
 
 	rw_exit(&ipst->ips_ill_g_lock);
 	netstack_rele(ns);
+	return (error);
+}
+
+static int
+lxsys_readlink_block(lxsys_node_t *lnp, char *buf, size_t len)
+{
+	int inst, error = EINVAL;
+	lx_zone_data_t *lxzdata;
+	lx_virt_disk_t *vd;
+
+	if ((inst = lnp->lxsys_instance) == 0) {
+		return (error);
+	}
+
+	lxzdata = ztolxzd(curproc->p_zone);
+	if (lxzdata == NULL)
+		return (error);
+	ASSERT(lxzdata->lxzd_vdisks != NULL);
+
+	vd = list_head(lxzdata->lxzd_vdisks);
+	while (vd != NULL) {
+		int vinst = getminor(vd->lxvd_emul_dev) & 0xffff;
+
+		if (vinst == inst) {
+			(void) snprintf(buf, len,
+			    "../devices/zfs/%s", vd->lxvd_name);
+			error = 0;
+			break;
+		}
+		vd = list_next(lxzdata->lxzd_vdisks, vd);
+	}
+
 	return (error);
 }
 

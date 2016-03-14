@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2015, Joyent Inc. All rights reserved.
+ * Copyright 2016, Joyent Inc.
  */
 
 /*
@@ -2001,10 +2001,12 @@ zone_vfs_kstat_update(kstat_t *ksp, int rw)
 	zvp->zv_nread.value.ui64 = kiop->nread;
 	zvp->zv_reads.value.ui64 = kiop->reads;
 	zvp->zv_rtime.value.ui64 = kiop->rtime;
+	zvp->zv_rcnt.value.ui64 = kiop->rcnt;
 	zvp->zv_rlentime.value.ui64 = kiop->rlentime;
 	zvp->zv_nwritten.value.ui64 = kiop->nwritten;
 	zvp->zv_writes.value.ui64 = kiop->writes;
 	zvp->zv_wtime.value.ui64 = kiop->wtime;
+	zvp->zv_wcnt.value.ui64 = kiop->wcnt;
 	zvp->zv_wlentime.value.ui64 = kiop->wlentime;
 
 	scalehrtime((hrtime_t *)&zvp->zv_rtime.value.ui64);
@@ -2041,10 +2043,12 @@ zone_vfs_kstat_create(zone_t *zone)
 	kstat_named_init(&zvp->zv_nread, "nread", KSTAT_DATA_UINT64);
 	kstat_named_init(&zvp->zv_reads, "reads", KSTAT_DATA_UINT64);
 	kstat_named_init(&zvp->zv_rtime, "rtime", KSTAT_DATA_UINT64);
+	kstat_named_init(&zvp->zv_rcnt, "rcnt", KSTAT_DATA_UINT64);
 	kstat_named_init(&zvp->zv_rlentime, "rlentime", KSTAT_DATA_UINT64);
 	kstat_named_init(&zvp->zv_nwritten, "nwritten", KSTAT_DATA_UINT64);
 	kstat_named_init(&zvp->zv_writes, "writes", KSTAT_DATA_UINT64);
 	kstat_named_init(&zvp->zv_wtime, "wtime", KSTAT_DATA_UINT64);
+	kstat_named_init(&zvp->zv_wcnt, "wcnt", KSTAT_DATA_UINT64);
 	kstat_named_init(&zvp->zv_wlentime, "wlentime", KSTAT_DATA_UINT64);
 	kstat_named_init(&zvp->zv_10ms_ops, "10ms_ops", KSTAT_DATA_UINT64);
 	kstat_named_init(&zvp->zv_100ms_ops, "100ms_ops", KSTAT_DATA_UINT64);
@@ -2895,9 +2899,14 @@ zone_set_brand(zone_t *zone, const char *brand)
 		return (EINVAL);
 	}
 
-	/* set up the brand specific data */
+	/*
+	 * Set up the brand specific data.
+	 * Note that it's possible that the hook has to drop the
+	 * zone_status_lock and reaquire it before returning so we can't
+	 * assume the lock has been held the entire time.
+	 */
 	zone->zone_brand = bp;
-	ZBROP(zone)->b_init_brand_data(zone);
+	ZBROP(zone)->b_init_brand_data(zone, &zone_status_lock);
 
 	mutex_exit(&zone_status_lock);
 	return (0);
@@ -5002,8 +5011,7 @@ zone_create(const char *zone_name, const char *zone_root,
 	 */
 	if (curthread != pp->p_agenttp && !holdlwps(SHOLDFORK)) {
 		zone_free(zone);
-		if (rctls)
-			nvlist_free(rctls);
+		nvlist_free(rctls);
 		return (zone_create_error(error, 0, extended_error));
 	}
 
@@ -5013,8 +5021,7 @@ zone_create(const char *zone_name, const char *zone_root,
 			continuelwps(pp);
 		mutex_exit(&pp->p_lock);
 		zone_free(zone);
-		if (rctls)
-			nvlist_free(rctls);
+		nvlist_free(rctls);
 		return (zone_create_error(error, 0, extended_error));
 	}
 
@@ -5159,8 +5166,7 @@ zone_create(const char *zone_name, const char *zone_root,
 	 * The zone is fully visible, so we can let mounts progress.
 	 */
 	resume_mounts(zone);
-	if (rctls)
-		nvlist_free(rctls);
+	nvlist_free(rctls);
 
 	return (zoneid);
 
@@ -5175,8 +5181,7 @@ errout:
 	mutex_exit(&pp->p_lock);
 
 	resume_mounts(zone);
-	if (rctls)
-		nvlist_free(rctls);
+	nvlist_free(rctls);
 	/*
 	 * There is currently one reference to the zone, a cred_ref from
 	 * zone_kcred.  To free the zone, we call crfree, which will call
@@ -7270,16 +7275,15 @@ zone_shutdown_global(void)
 }
 
 /*
- * Returns true if the named dataset is visible in the current zone.
+ * Returns true if the named dataset is visible in the specified zone.
  * The 'write' parameter is set to 1 if the dataset is also writable.
  */
 int
-zone_dataset_visible(const char *dataset, int *write)
+zone_dataset_visible_inzone(zone_t *zone, const char *dataset, int *write)
 {
 	static int zfstype = -1;
 	zone_dataset_t *zd;
 	size_t len;
-	zone_t *zone = curproc->p_zone;
 	const char *name = NULL;
 	vfs_t *vfsp = NULL;
 
@@ -7347,7 +7351,8 @@ zone_dataset_visible(const char *dataset, int *write)
 	vfs_list_read_lock();
 	vfsp = zone->zone_vfslist;
 	do {
-		ASSERT(vfsp);
+		if (vfsp == NULL)
+			break;
 		if (vfsp->vfs_fstype == zfstype) {
 			name = refstr_value(vfsp->vfs_resource);
 
@@ -7381,6 +7386,18 @@ zone_dataset_visible(const char *dataset, int *write)
 
 	vfs_list_unlock();
 	return (0);
+}
+
+/*
+ * Returns true if the named dataset is visible in the current zone.
+ * The 'write' parameter is set to 1 if the dataset is also writable.
+ */
+int
+zone_dataset_visible(const char *dataset, int *write)
+{
+	zone_t *zone = curproc->p_zone;
+
+	return (zone_dataset_visible_inzone(zone, dataset, write));
 }
 
 /*
@@ -7525,8 +7542,7 @@ zone_remove_datalink(zoneid_t zoneid, datalink_id_t linkid)
 		err = ENXIO;
 	} else {
 		list_remove(&zone->zone_dl_list, zdl);
-		if (zdl->zdl_net != NULL)
-			nvlist_free(zdl->zdl_net);
+		nvlist_free(zdl->zdl_net);
 		kmem_free(zdl, sizeof (zone_dl_t));
 	}
 	mutex_exit(&zone->zone_lock);

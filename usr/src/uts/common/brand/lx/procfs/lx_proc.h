@@ -21,7 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2015 Joyent, Inc.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef	_LX_PROC_H
@@ -208,7 +208,10 @@ typedef enum lxpr_nodetype {
 	LXPR_SYS_KERNEL_PID_MAX,	/* /proc/sys/kernel/pid_max */
 	LXPR_SYS_KERNEL_RANDDIR,	/* /proc/sys/kernel/random */
 	LXPR_SYS_KERNEL_RAND_BOOTID, /* /proc/sys/kernel/random/boot_id */
-	LXPR_SYS_KERNEL_SHMMAX,	/* /proc/sys/kernel/shmmax */
+	LXPR_SYS_KERNEL_SEM,		/* /proc/sys/kernel/sem		*/
+	LXPR_SYS_KERNEL_SHMALL,		/* /proc/sys/kernel/shmall	*/
+	LXPR_SYS_KERNEL_SHMMAX,		/* /proc/sys/kernel/shmmax	*/
+	LXPR_SYS_KERNEL_SHMMNI,		/* /proc/sys/kernel/shmmni	*/
 	LXPR_SYS_KERNEL_THREADS_MAX,	/* /proc/sys/kernel/threads-max */
 	LXPR_SYS_NETDIR,		/* /proc/sys/net		*/
 	LXPR_SYS_NET_COREDIR,		/* /proc/sys/net/core		*/
@@ -220,6 +223,7 @@ typedef enum lxpr_nodetype {
 	LXPR_SYS_VM_SWAPPINESS,		/* /proc/sys/vm/swappiness	*/
 	LXPR_UPTIME,		/* /proc/uptime		*/
 	LXPR_VERSION,		/* /proc/version	*/
+	LXPR_VMSTAT,		/* /proc/vmstat		*/
 	LXPR_NFILES		/* number of lx /proc file types */
 } lxpr_nodetype_t;
 
@@ -272,13 +276,6 @@ typedef struct lxpr_mnt {
 	lxpr_node_t	*lxprm_node;	/* node at root of proc mount */
 	struct zone	*lxprm_zone;	/* zone for this mount */
 	ldi_ident_t	lxprm_li;	/* ident for ldi */
-
-	cred_t		*lxprm_rcred;	/* Cred for root in our zone. */
-
-	/* Used for ZFS LDI functions in lx_prsubr.c. */
-	boolean_t	lxprm_zfs_isopen;
-	major_t		lxprm_zfs_major;
-	ldi_handle_t	lxprm_zfs_lh;
 } lxpr_mnt_t;
 
 extern vnodeops_t	*lxpr_vnodeops;
@@ -314,25 +311,15 @@ extern void lxpr_uiobuf_write(lxpr_uiobuf_t *, const char *, size_t);
 extern void lxpr_uiobuf_printf(lxpr_uiobuf_t *, const char *, ...);
 extern void lxpr_uiobuf_seterr(lxpr_uiobuf_t *, int);
 
-extern void lxpr_zfs_init(void);
-extern void lxpr_zfs_fini(void);
-
-typedef struct lxpr_zfs_iter lxpr_zfs_iter_t;
-typedef struct lxpr_zfs_ds lxpr_zfs_ds_t;
-struct lxpr_zfs_iter {
-	list_t		it_list;
-	lxpr_zfs_ds_t	*it_ds;
-};
-extern int lxpr_zfs_list_pools(lxpr_mnt_t *, zfs_cmd_t *, nvlist_t **);
-extern int lxpr_zvol_dev(lxpr_mnt_t *, char *, major_t *, minor_t *);
-extern void lxpr_zfs_end_iter(lxpr_zfs_iter_t *);
-extern int lxpr_zfs_next_zvol(lxpr_mnt_t *, char *, zfs_cmd_t *,
-    lxpr_zfs_iter_t *);
-
 extern int lxpr_core_path_l2s(const char *, char *, size_t);
 extern int lxpr_core_path_s2l(const char *, char *, size_t);
 
-proc_t *lxpr_lock(pid_t);
+typedef enum lxpr_zombok {
+	NO_ZOMB = 0,
+	ZOMB_OK
+} zombok_t;
+
+proc_t *lxpr_lock(pid_t, zombok_t);
 void lxpr_unlock(proc_t *);
 
 #ifdef	__cplusplus
