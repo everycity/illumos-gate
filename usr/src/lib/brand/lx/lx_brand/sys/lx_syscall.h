@@ -52,8 +52,6 @@ extern long lx_unlinkat(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_renameat(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_symlinkat(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_readlinkat(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
-extern long lx_access(uintptr_t, uintptr_t);
-extern long lx_faccessat(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 
 extern long lx_stat(uintptr_t, uintptr_t);
 extern long lx_fstat(uintptr_t, uintptr_t);
@@ -75,10 +73,6 @@ extern long lx_fadvise64(uintptr_t, off64_t, uintptr_t, uintptr_t);
 extern long lx_fadvise64_64(uintptr_t, off64_t, off64_t, uintptr_t);
 
 extern long lx_socketcall(uintptr_t, uintptr_t);
-extern long lx_accept(int, void *, int *);
-extern long lx_accept4(int, void *, int *, int);
-extern long lx_getpeername(int, void *, int *);
-extern long lx_getsockname(int, void *, int *);
 extern long lx_listen(int, int);
 extern long lx_shutdown(int, int);
 extern long lx_socketpair(int, int, int, int *);
@@ -142,13 +136,11 @@ extern long lx_llseek(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_lseek(uintptr_t, uintptr_t, uintptr_t);
 extern long lx_sysfs(uintptr_t, uintptr_t, uintptr_t);
 
-extern long lx_getcwd(uintptr_t, uintptr_t);
 extern long lx_uname(uintptr_t);
 extern long lx_reboot(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 extern long lx_getgroups16(uintptr_t, uintptr_t);
 extern long lx_setgroups(uintptr_t, uintptr_t);
 extern long lx_setgroups16(uintptr_t, uintptr_t);
-extern long lx_personality(uintptr_t);
 
 extern long lx_query_module(uintptr_t, uintptr_t, uintptr_t, uintptr_t,
     uintptr_t);

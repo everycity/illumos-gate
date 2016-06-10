@@ -12,8 +12,8 @@
 #
 # Copyright 2011, Richard Lowe
 # Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
-# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 # Copyright 2016 Joyent, Inc.
+# Copyright 2016 Garrett D'Amore <garrett@damore.org>
 #
 
 include		$(SRC)/Makefile.master
@@ -233,6 +233,7 @@ i386_MANFILES=	ahci.7d		\
 		rwn.7d		\
 		sda.7d		\
 		sdhost.7d	\
+		sfxge.7d	\
 		si3124.7d	\
  	 	skd.7d		\
 		smbios.7d	\

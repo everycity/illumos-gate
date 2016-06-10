@@ -23,7 +23,7 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright 2015, Joyent, Inc.  All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 /*
@@ -91,6 +91,7 @@ typedef struct pargs_data {
 	uintptr_t *pd_argv;
 	char **pd_argv_strs;
 	size_t pd_envc;
+	size_t pd_envc_curr;
 	uintptr_t *pd_envp;
 	char **pd_envp_strs;
 	size_t pd_auxc;
@@ -641,6 +642,10 @@ build_env(void *data, struct ps_prochandle *pr, uintptr_t addr, const char *str)
 	pargs_data_t *datap = data;
 
 	if (datap->pd_envp != NULL) {
+		/* env has more items than last time, skip the newer ones */
+		if (datap->pd_envc > datap->pd_envc_curr)
+			return (0);
+
 		datap->pd_envp[datap->pd_envc] = addr;
 		if (str == NULL)
 			datap->pd_envp_strs[datap->pd_envc] = NULL;
@@ -660,6 +665,7 @@ get_env(pargs_data_t *datap)
 
 	datap->pd_envc = 0;
 	(void) Penv_iter(pr, build_env, datap);
+	datap->pd_envc_curr = datap->pd_envc;
 
 	datap->pd_envp = safe_zalloc(sizeof (uintptr_t) * datap->pd_envc);
 	datap->pd_envp_strs = safe_zalloc(sizeof (char *) * datap->pd_envc);
@@ -822,7 +828,8 @@ static struct aux_id aux_arr[] = {
 	{ AT_SUN_BRAND_AUX1,	"AT_SUN_BRAND_AUX1",	at_null	},
 	{ AT_SUN_BRAND_AUX2,	"AT_SUN_BRAND_AUX2",	at_null	},
 	{ AT_SUN_BRAND_AUX3,	"AT_SUN_BRAND_AUX3",	at_null	},
-	{ AT_SUN_BRAND_AUX4,	"AT_SUN_BRAND_AUX4",	at_null	}
+	{ AT_SUN_BRAND_AUX4,	"AT_SUN_BRAND_AUX4",	at_null	},
+	{ AT_SUN_COMMPAGE,	"AT_SUN_COMMPAGE",	at_null	}
 };
 
 #define	N_AT_ENTS (sizeof (aux_arr) / sizeof (struct aux_id))

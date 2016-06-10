@@ -22,7 +22,7 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2015 Joyent, Inc.  All rights reserved.
+ * Copyright 2016 Joyent, Inc.  All rights reserved.
  */
 
 #include <errno.h>
@@ -107,6 +107,7 @@ lx_vfork(void)
 	lx_sighandlers_t saved;
 	ucontext_t vforkuc;
 	ucontext_t *ucp;
+	lx_tsd_t *lx_tsd = lx_get_tsd();
 
 	ucp = lx_syscall_regs();
 
@@ -126,11 +127,11 @@ lx_vfork(void)
 	_sigoff();
 	lx_stack_prefork();
 	lx_sighandlers_save(&saved);
-	lx_is_vforked++;
+	lx_tsd->lxtsd_is_vforked++;
 	ret = vfork();
 	if (ret != 0) {
 		/* parent/error */
-		lx_is_vforked--;
+		lx_tsd->lxtsd_is_vforked--;
 		lx_sighandlers_restore(&saved);
 	}
 
@@ -141,9 +142,14 @@ lx_vfork(void)
 		return (-errno);
 
 	case 0:
-		/* child */
-		lx_stack_postfork();
-
+		/*
+		 * child
+		 * Unlike the regular fork case where the child also calls
+		 * lx_stack_postfork(), we only do that in the parent once it
+		 * resumes execution. This is required there to wake any other
+		 * threads in that process that are  blocked on the lock taken
+		 * in lx_stack_prefork().
+		 */
 		bcopy(ucp, &vforkuc, sizeof (vforkuc));
 		vforkuc.uc_brand_data[1] -= LX_NATIVE_STACK_VFORK_GAP;
 		vforkuc.uc_link = NULL;
@@ -168,6 +174,7 @@ lx_vfork(void)
 
 	default:
 		/* parent - child should have exited or exec-ed by now */
+		lx_stack_postfork();
 		lx_ptrace_stop_if_option(LX_PTRACE_O_TRACEVFORK, B_FALSE,
 		    (ulong_t)ret, NULL);
 		_sigon();

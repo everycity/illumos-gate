@@ -25,7 +25,8 @@
 # Copyright 2008, 2010, Richard Lowe
 # Copyright 2012 Marcel Telka <marcel@telka.sk>
 # Copyright 2014 Bart Coddens <bart.coddens@gmail.com>
-# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2016 Nexenta Systems, Inc.
+# Copyright 2016 Joyent, Inc.
 #
 
 #
@@ -294,20 +295,20 @@ function remote_mkdirs
 			    "cannot create temporary file for batch file"
 			return 1
 		fi
-                OLDIFS=$IFS
-                IFS=/
+		OLDIFS=$IFS
+		IFS=/
 		typeset dir
-                for dir in ${dirs_mk}; do
+		for dir in ${dirs_mk}; do
 			#
 			# Use the '-' prefix to ignore mkdir errors in order
 			# to avoid an error in case the directory already
 			# exists. We check the directory with chdir to be sure
 			# there is one.
 			#
-                        print -- "-mkdir ${dir}" >> ${batch_file_mkdir}
-                        print "chdir ${dir}" >> ${batch_file_mkdir}
-                done
-                IFS=$OLDIFS
+			print -- "-mkdir ${dir}" >> ${batch_file_mkdir}
+			print "chdir ${dir}" >> ${batch_file_mkdir}
+		done
+		IFS=$OLDIFS
 		typeset -r sftp_err_msg=$( $MKTEMP /tmp/webrev_scp_err.XXXXXX )
 		if [[ -z ${sftp_err_msg} ]]; then
 			print "\nERROR: remote_mkdirs:" \
@@ -891,7 +892,7 @@ sdiff_to_html()
 	print "$HTML<head>$STDHEAD"
 	print "<title>$WNAME Sdiff $TPATH/$TNAME</title>"
 	print "</head><body id=\"SUNWwebrev\">"
-        print "<a class=\"print\" href=\"javascript:print()\">Print this page</a>"
+	print "<a class=\"print\" href=\"javascript:print()\">Print this page</a>"
 	print "<pre>$COMMENT</pre>\n"
 	print "<table><tr valign=\"top\">"
 	print "<td><pre>"
@@ -969,10 +970,10 @@ function framed_sdiff
 	  <frame src="${RTOP}ancnav.html" scrolling="no" marginwidth="0"
 	   marginheight="0" name="nav"></frame>
 	  <noframes>
-            <body id="SUNWwebrev">
+	    <body id="SUNWwebrev">
 	      Alas 'frames' webrev requires that your browser supports frames
 	      and has the feature enabled.
-            </body>
+	    </body>
 	  </noframes>
 	  </frameset>
 	</html>
@@ -1110,20 +1111,20 @@ function insert_anchors
 #
 function relative_dir
 {
-        typeset cur="${1##$2?(/)}"
+	typeset cur="${1##$2?(/)}"
 
-        #
-        # If the first path was specified absolutely, and it does
-        # not start with the second path, it's an error.
-        #
-        if [[ "$cur" = "/${1#/}" ]]; then
-                # Should never happen.
-                print -u2 "\nWARNING: relative_dir: \"$1\" not relative "
-                print -u2 "to \"$2\".  Check input paths.  Framed webrev "
-                print -u2 "will not be relocatable!"
-                print $2
-                return
-        fi
+	#
+	# If the first path was specified absolutely, and it does
+	# not start with the second path, it's an error.
+	#
+	if [[ "$cur" = "/${1#/}" ]]; then
+		# Should never happen.
+		print -u2 "\nWARNING: relative_dir: \"$1\" not relative "
+		print -u2 "to \"$2\".  Check input paths.  Framed webrev "
+		print -u2 "will not be relocatable!"
+		print $2
+		return
+	fi
 
 	#
 	# This is kind of ugly.  The sed script will do the following:
@@ -1157,22 +1158,23 @@ function frame_nav_js
 {
 cat << \EOF
 var myInt;
-var scrolling=0;
+var scrolling = 0;
 var sfactor = 3;
-var scount=10;
+var scount = 10;
 
-function scrollByPix() {
-	if (scount<=0) {
-		sfactor*=1.2;
-		scount=10;
+function scrollByPix()
+{
+	if (scount <= 0) {
+		sfactor *= 1.2;
+		scount = 10;
 	}
-	parent.lhs.scrollBy(0,sfactor);
-	parent.rhs.scrollBy(0,sfactor);
+	parent.lhs.scrollBy(0, sfactor);
+	parent.rhs.scrollBy(0, sfactor);
 	scount--;
 }
 
-function scrollToAnc(num) {
-
+function scrollToAnc(num)
+{
 	// Update the value of the anchor in the form which we use as
 	// storage for this value.  setAncValue() will take care of
 	// correcting for overflow and underflow of the value and return
@@ -1189,8 +1191,8 @@ function scrollToAnc(num) {
 	parent.lhs.location.replace(parent.lhs.location.pathname + "#" + num);
 	parent.rhs.location.replace(parent.rhs.location.pathname + "#" + num);
 
-	parent.lhs.scrollBy(0,-30);
-	parent.rhs.scrollBy(0,-30);
+	parent.lhs.scrollBy(0, -30);
+	parent.rhs.scrollBy(0, -30);
 }
 
 function getAncValue()
@@ -1226,50 +1228,54 @@ function setAncValue(val)
 	return (val);
 }
 
-function stopScroll() {
-	if (scrolling==1) {
+function stopScroll()
+{
+	if (scrolling == 1) {
 		clearInterval(myInt);
-		scrolling=0;
+		scrolling = 0;
 	}
 }
 
-function startScroll() {
+function startScroll()
+{
 	stopScroll();
-	scrolling=1;
-	myInt=setInterval("scrollByPix()",10);
+	scrolling = 1;
+	myInt = setInterval("scrollByPix()", 10);
 }
 
-function handlePress(b) {
-
+function handlePress(b)
+{
 	switch (b) {
-	    case 1 :
+	case 1:
 		scrollToAnc(-1);
 		break;
-	    case 2 :
+	case 2:
 		scrollToAnc(getAncValue() - 1);
 		break;
-	    case 3 :
-		sfactor=-3;
+	case 3:
+		sfactor = -3;
 		startScroll();
 		break;
-	    case 4 :
-		sfactor=3;
+	case 4:
+		sfactor = 3;
 		startScroll();
 		break;
-	    case 5 :
+	case 5:
 		scrollToAnc(getAncValue() + 1);
 		break;
-	    case 6 :
+	case 6:
 		scrollToAnc(999999);
 		break;
 	}
 }
 
-function handleRelease(b) {
+function handleRelease(b)
+{
 	stopScroll();
 }
 
-function keypress(ev) {
+function keypress(ev)
+{
 	var keynum;
 	var keychar;
 
@@ -1288,10 +1294,15 @@ function keypress(ev) {
 		handlePress(5);
 		return (0);
 	}
+
 	return (1);
 }
 
-function ValidateDiffNum(){
+function ValidateDiffNum()
+{
+	var val;
+	var i;
+
 	val = parent.nav.document.diff.display.value;
 	if (val == "EOF") {
 		scrollToAnc(999999);
@@ -1303,15 +1314,15 @@ function ValidateDiffNum(){
 		return;
 	}
 
-        i=parseInt(val);
-        if (isNaN(i)) {
-                parent.nav.document.diff.display.value = getAncValue();
-        } else {
-                scrollToAnc(i);
-        }
-        return false;
-}
+	i = parseInt(val);
+	if (isNaN(i)) {
+		parent.nav.document.diff.display.value = getAncValue();
+	} else {
+		scrollToAnc(i);
+	}
 
+	return (false);
+}
 EOF
 }
 
@@ -1582,8 +1593,8 @@ function difflines
 	/^[0-9]*,[0-9]*c$/ {
 		n=split(substr($1,1,length($1)-1), counts, ",");
 		if (n != 2) {
-		    error=2
-		    exit;
+			error=2
+			exit;
 		}
 		#
 		# 3,5c means lines 3 , 4 and 5 are changed, a total of 3 lines.
@@ -1766,9 +1777,10 @@ function git_wxfile
 
 	TMPFLIST=/tmp/$$.active
 	$PERL -e 'my (%files, %realfiles, $msg);
-	my $branch = $ARGV[0];
+	my $parent = $ARGV[0];
+	my $child = $ARGV[1];
 	 
-	open(F, "git diff -M --name-status $branch |");
+	open(F, "git diff -M --name-status $parent..$child |");
 	while (<F>) {
 	    chomp;
 	    if (/^R(\d+)\s+([^ ]+)\s+([^ ]+)/) { # rename
@@ -1786,7 +1798,7 @@ function git_wxfile
 	close(F);
 	 
 	my $state = 1;		    # 0|comments, 1|files
-	open(F, "git whatchanged --pretty=format:%B $branch.. |");
+	open(F, "git whatchanged --pretty=format:%B $parent..$child |");
 	while (<F>) {
 	    chomp;
 	    if (/^:[0-9]{6}/) {
@@ -1811,7 +1823,7 @@ function git_wxfile
 	    } else {
 		print "$_\n$files{$_}\n\n"
 	    }
-	}' ${parent} > $TMPFLIST
+	}' ${parent} ${child} > $TMPFLIST
 
 	wxfile=$TMPFLIST
 }
@@ -2000,25 +2012,25 @@ function build_old_new_git
 	if [[ "$PDIR" == "." ]]; then
 		file="$PF"
 	else
-	       file="$PDIR/$PF"
+		file="$PDIR/$PF"
 	fi
 
 	if [[ -n $parent_webrev && -e $PWS/$PDIR/$PF ]]; then
 		cp $PWS/$PDIR/$PF $olddir/$PDIR/$PF
 	else
-                $GIT ls-tree $GIT_PARENT $file | read o_mode type o_object junk
-                $GIT cat-file $type $o_object > $olddir/$file 2>/dev/null
-                 
-                if (( $? != 0 )); then
-                        rm -f $olddir/$file
-                elif [[ -n $o_mode ]]; then
-                        # Strip the first 3 digits, to get a regular octal mode
-                        o_mode=${o_mode/???/}
-                        chmod $o_mode $olddir/$file
-                else
-                        # should never happen
-                        print -u2 "ERROR: set mode of $olddir/$file"
-                fi
+		$GIT ls-tree $GIT_PARENT $file | read o_mode type o_object junk
+		$GIT cat-file $type $o_object > $olddir/$file 2>/dev/null
+
+		if (( $? != 0 )); then
+			rm -f $olddir/$file
+		elif [[ -n $o_mode ]]; then
+			# Strip the first 3 digits, to get a regular octal mode
+			o_mode=${o_mode/???/}
+			chmod $o_mode $olddir/$file
+		else
+			# should never happen
+			print -u2 "ERROR: set mode of $olddir/$file"
+		fi
 	fi
 
 	#
@@ -2032,8 +2044,8 @@ function build_old_new_git
 	rm -rf $newdir/$file
 
         if [[ -e $CWS/$DIR/$F ]]; then
-            cp $CWS/$DIR/$F $newdir/$DIR/$F
-            chmod $(get_file_mode $CWS/$DIR/$F) $newdir/$DIR/$F
+		cp $CWS/$DIR/$F $newdir/$DIR/$F
+		chmod $(get_file_mode $CWS/$DIR/$F) $newdir/$DIR/$F
         fi
 	cd $OWD
 }
@@ -2122,8 +2134,10 @@ function usage
 	webrev [common-options] -w <wx file>
 
 Options:
+	-c <revision>: generate webrev for single revision (git only)
 	-C <filename>: Use <filename> for the information tracking configuration.
 	-D: delete remote webrev
+	-h <revision>: specify "head" revision for comparison (git only)
 	-i <filename>: Include <filename> in the index.html file.
 	-I <filename>: Use <filename> for the information tracking registry.
 	-n: do not generate the webrev (useful with -U)
@@ -2213,10 +2227,12 @@ typeset -r DEFAULT_REMOTE_HOST="cr.opensolaris.org"
 typeset -r rsync_prefix="rsync://"
 typeset -r ssh_prefix="ssh://"
 
+cflag=
 Cflag=
 Dflag=
 flist_mode=
 flist_file=
+hflag=
 iflag=
 Iflag=
 lflag=
@@ -2235,13 +2251,20 @@ remote_target=
 # NOTE: when adding/removing options it is necessary to sync the list
 #	with usr/src/tools/onbld/hgext/cdm.py
 #
-while getopts "C:Di:I:lnNo:Op:t:Uw" opt
+while getopts "c:C:Dh:i:I:lnNo:Op:t:Uw" opt
 do
 	case $opt in
+	c)	cflag=1
+		codemgr_head=$OPTARG
+		codemgr_parent=$OPTARG~1;;
+
 	C)	Cflag=1
 		ITSCONF=$OPTARG;;
 
 	D)	Dflag=1;;
+
+	h)	hflag=1
+		codemgr_head=$OPTARG;;
 
 	i)	iflag=1
 		INCLUDE_FILE=$OPTARG;;
@@ -2317,7 +2340,7 @@ if [[ $SCM_MODE == "mercurial" ]]; then
 			exit 1
 		fi
 	else
-	        testparent=${CODEMGR_WS}
+		testparent=${CODEMGR_WS}
 	fi
 	[[ -z $codemgr_ws && -n $testparent ]] && \
 	    codemgr_ws=$(hg root -R $testparent 2>/dev/null)
@@ -2331,7 +2354,7 @@ elif [[ $SCM_MODE == "git" ]]; then
 	#
 	[[ -z $codemgr_ws && -n $CODEMGR_WS ]] && \
 	    codemgr_ws=$($GIT --git-dir=$CODEMGR_WS/.git rev-parse --git-dir \
-                2>/dev/null)
+		2>/dev/null)
 	[[ -z $codemgr_ws ]] && \
 	    codemgr_ws=$($GIT rev-parse --git-dir 2>/dev/null)
 
@@ -2571,11 +2594,21 @@ if [[ $SCM_MODE == "mercurial" ]]; then
 	    2>/dev/null)
 	PRETTY_CWS="${CWS} (at ${cnode})"}
 elif [[ $SCM_MODE == "git" ]]; then
-	#
+	# Check that "head" revision specified with -c or -h is sane
+	if [[ -n $cflag || -n $hflag ]]; then
+		head_rev=$($GIT rev-parse --verify --quiet "$codemgr_head")
+		if [[ -z $head_rev ]]; then
+			print -u2 "Error: bad revision ${codemgr_head}"
+			exit 1
+		fi
+	fi
+
+	if [[ -z $codemgr_head ]]; then
+		codemgr_head="HEAD";
+	fi
+
 	# Parent can either be specified with -p, or specified with
 	# CODEMGR_PARENT in the environment.
-	#
-
 	if [[ -z $codemgr_parent && -n $CODEMGR_PARENT ]]; then
 		codemgr_parent=$CODEMGR_PARENT
 	fi
@@ -2585,13 +2618,16 @@ elif [[ $SCM_MODE == "git" ]]; then
 	this_branch=$($GIT branch | nawk '$1 == "*" { print $2 }')
 	par_branch="origin/master"
 
-        # If we're not on a branch there's nothing we can do
-        if [[ $this_branch != "(no branch)" ]]; then
-                $GIT for-each-ref                                                 \
-                    --format='%(refname:short) %(upstream:short)' refs/heads/ |   \
-                    while read local remote; do                                   \
-                	[[ "$local" == "$this_branch" ]] && par_branch="$remote"; \
-                    done
+	# If we're not on a branch there's nothing we can do
+	if [[ $this_branch != "(no branch)" ]]; then
+		$GIT for-each-ref					\
+		    --format='%(refname:short) %(upstream:short)'	\
+		    refs/heads/ |					\
+		    while read local remote; do
+			if [[ "$local" == "$this_branch" ]]; then
+				par_branch="$remote"
+			fi
+		done
 	fi
 
 	if [[ -z $codemgr_parent ]]; then
@@ -2610,7 +2646,7 @@ elif [[ $SCM_MODE == "git" ]]; then
 	fi
 
 	if [[ -z $flist_done ]]; then
-		flist_from_git "$CWS" "$real_parent"
+		flist_from_git "$codemgr_head" "$real_parent"
 		flist_done=1
 	fi
 
@@ -2628,12 +2664,12 @@ elif [[ $SCM_MODE == "git" ]]; then
 	#
 	if [[ -z $wxfile ]]; then
 		print "  Comments from: git...\c"
-		git_wxfile "$CWS" "$real_parent"
+		git_wxfile "$codemgr_head" "$real_parent"
 		print " Done."
 	fi
 
 	if [[ -z $GIT_PARENT ]]; then
-		GIT_PARENT=$($GIT merge-base "$real_parent" HEAD)
+		GIT_PARENT=$($GIT merge-base "$real_parent" "$codemgr_head")
 	fi
 	if [[ -z $GIT_PARENT ]]; then
 		print -u2 "Error: Cannot discover parent revision"
@@ -2642,18 +2678,27 @@ elif [[ $SCM_MODE == "git" ]]; then
 
 	pnode=$(trim_digest $GIT_PARENT)
 
-	if [[ $real_parent == */* ]]; then
+	if [[ -n $cflag ]]; then
+		PRETTY_PWS="previous revision (at ${pnode})"
+	elif [[ $real_parent == */* ]]; then
 		origin=$(echo $real_parent | cut -d/ -f1)
 		origin=$($GIT remote -v | \
 		    $AWK '$1 == "'$origin'" { print $2; exit }')
 		PRETTY_PWS="${PWS} (${origin} at ${pnode})"
+	elif [[ -n $pflag && -z $parent_webrev ]]; then
+		PRETTY_PWS="${CWS} (explicit revision ${pnode})"
 	else
 		PRETTY_PWS="${PWS} (at ${pnode})"
 	fi
 
-	cnode=$($GIT --git-dir=${codemgr_ws}/.git rev-parse --short=12 HEAD \
-	    2>/dev/null)
-	PRETTY_CWS="${CWS} (at ${cnode})"
+	cnode=$($GIT --git-dir=${codemgr_ws}/.git rev-parse --short=12 \
+	    ${codemgr_head} 2>/dev/null)
+
+	if [[ -n $cflag || -n $hflag ]]; then
+		PRETTY_CWS="${CWS} (explicit head at ${cnode})"
+	else
+		PRETTY_CWS="${CWS} (at ${cnode})"
+	fi
 elif [[ $SCM_MODE == "subversion" ]]; then
 
 	#
@@ -2666,26 +2711,28 @@ elif [[ $SCM_MODE == "subversion" ]]; then
 		flist_from_subversion $CWS $OLDPWD
 	fi
 else
-    if [[ $SCM_MODE == "unknown" ]]; then
-	print -u2 "    Unknown type of SCM in use"
-    else
-	print -u2 "    Unsupported SCM in use: $SCM_MODE"
-    fi
+	if [[ $SCM_MODE == "unknown" ]]; then
+		print -u2 "    Unknown type of SCM in use"
+	else
+		print -u2 "    Unsupported SCM in use: $SCM_MODE"
+	fi
 
-    env_from_flist
+	env_from_flist
 
-    if [[ -z $CODEMGR_WS ]]; then
-	print -u2 "SCM not detected/supported and CODEMGR_WS not specified"
-	exit 1
-    fi
+	if [[ -z $CODEMGR_WS ]]; then
+		print -u2 "SCM not detected/supported and " \
+		    "CODEMGR_WS not specified"
+		exit 1
+		fi
 
-    if [[ -z $CODEMGR_PARENT ]]; then
-	print -u2 "SCM not detected/supported and CODEMGR_PARENT not specified"
-	exit 1
-    fi
+	if [[ -z $CODEMGR_PARENT ]]; then
+		print -u2 "SCM not detected/supported and " \
+		    "CODEMGR_PARENT not specified"
+		exit 1
+	fi
 
-    CWS=$CODEMGR_WS
-    PWS=$CODEMGR_PARENT
+	CWS=$CODEMGR_WS
+	PWS=$CODEMGR_PARENT
 fi
 
 #
@@ -3042,7 +3089,7 @@ do
 
 		F=${P##*/}
 
-        else
+	else
 		DIR=${P%/*}
 		if [[ "$DIR" == "$P" ]]; then
 			DIR="."   # File at root of workspace
@@ -3078,8 +3125,22 @@ do
 	#
 	OWD=$PWD
 	cd $WDIR/raw_files
-	ofile=old/$PDIR/$PF
-	nfile=new/$DIR/$F
+
+	#
+	# The "git apply" command does not tolerate the spurious
+	# "./" that we otherwise insert; be careful not to include
+	# it in the paths that we pass to diff(1).
+	#
+	if [[ $PDIR == "." ]]; then
+		ofile=old/$PF
+	else
+		ofile=old/$PDIR/$PF
+	fi
+	if [[ $DIR == "." ]]; then
+		nfile=new/$F
+	else
+		nfile=new/$DIR/$F
+	fi
 
 	mv_but_nodiff=
 	cmp $ofile $nfile > /dev/null 2>&1
@@ -3094,7 +3155,7 @@ do
 	#	- renames must be handled specially: we emit a 'remove'
 	#	  diff and an 'add' diff
 	#	- new files and deleted files must be handled specially
-	#       - GNU patch doesn't interpret the output of illumos diff
+	#	- GNU patch doesn't interpret the output of illumos diff
 	#	  properly when it comes to adds and deletes.  We need to
 	#	  do some "cleansing" transformations:
 	#	    [to add a file] @@ -1,0 +X,Y @@  -->  @@ -0,0 +X,Y @@

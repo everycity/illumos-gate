@@ -422,29 +422,6 @@ lx_close_fh(FILE *file)
 
 extern int set_l10n_alternate_root(char *path);
 
-#if defined(_LP64)
-static void *
-map_vdso()
-{
-	int fd;
-	mmapobj_result_t	mpp[10]; /* we know the size of our lib */
-	mmapobj_result_t	*smpp = mpp;
-	uint_t			mapnum = 10;
-
-	if ((fd = open("/native/usr/lib/brand/lx/amd64/lx_vdso.so.1",
-	    O_RDONLY)) == -1)
-		lx_err_fatal("couldn't open lx_vdso.so.1");
-
-	if (mmapobj(fd, MMOBJ_INTERPRET, smpp, &mapnum, NULL) == -1)
-		lx_err_fatal("couldn't mmapobj lx_vdso.so.1");
-
-	(void) close(fd);
-
-	/* assume first segment is the base of the mapping */
-	return (smpp->mr_addr);
-}
-#endif
-
 /*
  * Initialize the thread specific data for this thread.
  */
@@ -592,12 +569,8 @@ lx_init(int argc, char *argv[], char *envp[])
 	lx_elf_data_t	edp;
 	lx_brand_registration_t reg;
 	lx_tsd_t	*lxtsd;
-#if defined(_LP64)
-	void		*vdso_hdr;
-#endif
 
 	bzero(&reg, sizeof (reg));
-
 	stack_size = 2 * sysconf(_SC_PAGESIZE);
 
 	/*
@@ -685,18 +658,6 @@ lx_init(int argc, char *argv[], char *envp[])
 
 	if (lx_statfs_init() != 0)
 		lx_err_fatal("failed to setup the statfs translator");
-
-#if defined(_LP64)
-	vdso_hdr = map_vdso();
-	edp.ed_vdso = (uintptr_t)vdso_hdr;
-	/*
-	 * Notify the kernel of this mapping location to keep its
-	 * representation of the auxv consistent with reality.
-	 */
-	(void) syscall(SYS_brand, B_NOTIFY_VDSO_LOC, (void *)vdso_hdr);
-#else
-	edp.ed_vdso = 0;
-#endif
 
 	/*
 	 * Find the aux vector on the stack.
@@ -984,7 +945,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/*  18: pwrite64 */
 	NULL,				/*  19: readv */
 	NULL,				/*  20: writev */
-	lx_access,			/*  21: access */
+	NULL,				/*  21: access */
 	NULL,				/*  22: pipe */
 	NULL,				/*  23: select */
 	NULL,				/*  24: sched_yield */
@@ -1006,7 +967,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_sendfile64,			/*  40: sendfile */
 	NULL,				/*  41: socket */
 	NULL,				/*  42: connect */
-	lx_accept,			/*  43: accept */
+	NULL,				/*  43: accept */
 	NULL,				/*  44: sendto */
 	NULL,				/*  45: recvfrom */
 	NULL,				/*  46: sendmsg */
@@ -1014,8 +975,8 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_shutdown,			/*  48: shutdown */
 	NULL,				/*  49: bind */
 	lx_listen,			/*  50: listen */
-	lx_getsockname,			/*  51: getsockname */
-	lx_getpeername,			/*  52: getpeername */
+	NULL,				/*  51: getsockname */
+	NULL,				/*  52: getpeername */
 	lx_socketpair,			/*  53: socketpair */
 	NULL,				/*  54: setsockopt */
 	NULL,				/*  55: getsockopt */
@@ -1042,7 +1003,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_truncate,			/*  76: truncate */
 	lx_ftruncate,			/*  77: ftruncate */
 	NULL,				/*  78: getdents */
-	lx_getcwd,			/*  79: getcwd */
+	NULL,				/*  79: getcwd */
 	lx_chdir,			/*  80: chdir */
 	lx_fchdir,			/*  81: fchdir */
 	lx_rename,			/*  82: rename */
@@ -1098,7 +1059,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_utime,			/* 132: utime */
 	lx_mknod,			/* 133: mknod */
 	NULL,				/* 134: uselib */
-	lx_personality,			/* 135: personality */
+	NULL,				/* 135: personality */
 	NULL,				/* 136: ustat */
 	lx_statfs,			/* 137: statfs */
 	lx_fstatfs,			/* 138: fstatfs */
@@ -1232,7 +1193,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_symlinkat,			/* 266: symlinkat */
 	lx_readlinkat,			/* 267: readlinkat */
 	NULL,				/* 268: fchmodat */
-	lx_faccessat,			/* 269: faccessat */
+	NULL,				/* 269: faccessat */
 	NULL,				/* 270: pselect6 */
 	NULL,				/* 271: ppoll */
 	NULL,				/* 272: unshare */
@@ -1251,7 +1212,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/* 285: fallocate */
 	lx_timerfd_settime,		/* 286: timerfd_settime */
 	lx_timerfd_gettime,		/* 287: timerfd_gettime */
-	lx_accept4,			/* 288: accept4 */
+	NULL,				/* 288: accept4 */
 	lx_signalfd4,			/* 289: signalfd4 */
 	lx_eventfd2,			/* 290: eventfd2 */
 	NULL,				/* 291: epoll_create1 */
@@ -1327,7 +1288,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_utime,			/*  30: utime */
 	NULL,				/*  31: stty */
 	NULL,				/*  32: gtty */
-	lx_access,			/*  33: access */
+	NULL,				/*  33: access */
 	lx_nice,			/*  34: nice */
 	NULL,				/*  35: ftime */
 	lx_sync,			/*  36: sync */
@@ -1430,7 +1391,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_fchdir,			/* 133: fchdir */
 	NULL,				/* 134: bdflush */
 	lx_sysfs,			/* 135: sysfs */
-	lx_personality,			/* 136: personality */
+	NULL,				/* 136: personality */
 	NULL,				/* 137: afs_syscall */
 	lx_setfsuid16,			/* 138: setfsuid16 */
 	lx_setfsgid16,			/* 139: setfsgid16 */
@@ -1477,7 +1438,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	NULL,				/* 180: pread64 */
 	NULL,				/* 181: pwrite64 */
 	NULL,				/* 182: chown16 */
-	lx_getcwd,			/* 183: getcwd */
+	NULL,				/* 183: getcwd */
 	lx_capget,			/* 184: capget */
 	lx_capset,			/* 185: capset */
 	lx_sigaltstack,			/* 186: sigaltstack */
@@ -1601,7 +1562,7 @@ static lx_syscall_handler_t lx_handlers[] = {
 	lx_symlinkat,			/* 304: symlinkat */
 	lx_readlinkat,			/* 305: readlinkat */
 	NULL,				/* 306: fchmodat */
-	lx_faccessat,			/* 307: faccessat */
+	NULL,				/* 307: faccessat */
 	NULL,				/* 308: pselect6 */
 	NULL,				/* 309: ppoll */
 	NULL,				/* 310: unshare */

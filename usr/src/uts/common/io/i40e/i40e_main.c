@@ -520,6 +520,16 @@ i40e_device_find(i40e_t *i40e, dev_info_t *parent, uint_t bus, uint_t device)
 	return (idp);
 }
 
+static void
+i40e_link_state_set(i40e_t *i40e, link_state_t state)
+{
+	if (i40e->i40e_link_state == state)
+		return;
+
+	i40e->i40e_link_state = state;
+	mac_link_update(i40e->i40e_mac_hdl, i40e->i40e_link_state);
+}
+
 /*
  * This is a basic link check routine. Mostly we're using this just to see
  * if we can get any accurate information about the state of the link being
@@ -580,14 +590,12 @@ i40e_link_check(i40e_t *i40e)
 		 * current speed.
 		 */
 		i40e->i40e_link_duplex = LINK_DUPLEX_FULL;
-		i40e->i40e_link_state = LINK_STATE_UP;
+		i40e_link_state_set(i40e, LINK_STATE_UP);
 	} else {
 		i40e->i40e_link_speed = 0;
 		i40e->i40e_link_duplex = 0;
-		i40e->i40e_link_state = LINK_STATE_DOWN;
+		i40e_link_state_set(i40e, LINK_STATE_DOWN);
 	}
-
-	mac_link_update(i40e->i40e_mac_hdl, i40e->i40e_link_state);
 }
 
 static void
@@ -647,6 +655,7 @@ i40e_check_dma_handle(ddi_dma_handle_t handle)
 /*
  * Fault service error handling callback function.
  */
+/* ARGSUSED */
 static int
 i40e_fm_error_cb(dev_info_t *dip, ddi_fm_error_t *err, const void *impl_data)
 {
@@ -749,6 +758,7 @@ i40e_get_vsi_id(i40e_t *i40e)
 	uint16_t next = 0;
 	int rc;
 
+	/* LINTED: E_BAD_PTR_CAST_ALIGN */
 	sw_config = (struct i40e_aqc_get_switch_config_resp *)aq_buf;
 	rc = i40e_aq_get_switch_config(hw, sw_config, sizeof (aq_buf), &next,
 	    NULL);
@@ -887,7 +897,8 @@ static boolean_t
 i40e_get_available_resources(i40e_t *i40e)
 {
 	dev_info_t *parent;
-	uint_t bus, device, func, nregs;
+	uint16_t bus, device, func;
+	uint_t nregs;
 	int *regs, i;
 	i40e_device_t *idp;
 	i40e_hw_t *hw = &i40e->i40e_hw_space;
@@ -1089,11 +1100,14 @@ i40e_free_trqpairs(i40e_t *i40e)
 		i40e->i40e_trqpairs = NULL;
 	}
 
+	cv_destroy(&i40e->i40e_rx_pending_cv);
+	mutex_destroy(&i40e->i40e_rx_pending_lock);
 	mutex_destroy(&i40e->i40e_general_lock);
 }
 
 /*
- * Allocate receive & transmit rings.
+ * Allocate transmit and receive rings, as well as other data structures that we
+ * need.
  */
 static boolean_t
 i40e_alloc_trqpairs(i40e_t *i40e)
@@ -1106,6 +1120,8 @@ i40e_alloc_trqpairs(i40e_t *i40e)
 	 * all relevant locks.
 	 */
 	mutex_init(&i40e->i40e_general_lock, NULL, MUTEX_DRIVER, mutexpri);
+	mutex_init(&i40e->i40e_rx_pending_lock, NULL, MUTEX_DRIVER, mutexpri);
+	cv_init(&i40e->i40e_rx_pending_cv, NULL, CV_DRIVER, NULL);
 
 	i40e->i40e_trqpairs = kmem_zalloc(sizeof (i40e_trqpair_t) *
 	    i40e->i40e_num_trqpairs, KM_SLEEP);
@@ -1131,6 +1147,7 @@ i40e_alloc_trqpairs(i40e_t *i40e)
  * However, at the moment, we cap all of these resources as we only support a
  * single receive ring and a single group.
  */
+/* ARGSUSED */
 static void
 i40e_hw_to_instance(i40e_t *i40e, i40e_hw_t *hw)
 {
@@ -1247,9 +1264,15 @@ i40e_common_code_init(i40e_t *i40e, i40e_hw_t *hw)
 		return (B_FALSE);
 	}
 
-	i40e_aq_stop_lldp(hw, TRUE, NULL);
+	(void) i40e_aq_stop_lldp(hw, TRUE, NULL);
 
-	i40e_get_mac_addr(hw, hw->mac.addr);
+	rc = i40e_get_mac_addr(hw, hw->mac.addr);
+	if (rc != I40E_SUCCESS) {
+		i40e_error(i40e, "failed to retrieve hardware mac address: %d",
+		    rc);
+		return (B_FALSE);
+	}
+
 	rc = i40e_validate_mac_addr(hw->mac.addr);
 	if (rc != 0) {
 		i40e_error(i40e, "failed to validate internal mac address: "
@@ -1257,7 +1280,12 @@ i40e_common_code_init(i40e_t *i40e, i40e_hw_t *hw)
 		return (B_FALSE);
 	}
 	bcopy(hw->mac.addr, hw->mac.perm_addr, ETHERADDRL);
-	i40e_get_port_mac_addr(hw, hw->mac.port_addr);
+	if ((rc = i40e_get_port_mac_addr(hw, hw->mac.port_addr)) !=
+	    I40E_SUCCESS) {
+		i40e_error(i40e, "failed to retrieve port mac address: %d",
+		    rc);
+		return (B_FALSE);
+	}
 
 	/*
 	 * We need to obtain the Virtual Station ID (VSI) before we can
@@ -1496,6 +1524,11 @@ i40e_init_properties(i40e_t *i40e)
 		    I40E_DESC_ALIGN);
 	}
 
+	i40e->i40e_tx_block_thresh = i40e_get_prop(i40e, "tx_resched_threshold",
+	    I40E_MIN_TX_BLOCK_THRESH,
+	    i40e->i40e_tx_ring_size - I40E_TX_MAX_COOKIE,
+	    I40E_DEF_TX_BLOCK_THRESH);
+
 	i40e->i40e_rx_ring_size = i40e_get_prop(i40e, "rx_ring_size",
 	    I40E_MIN_RX_RING_SIZE, I40E_MAX_RX_RING_SIZE,
 	    I40E_DEF_RX_RING_SIZE);
@@ -1513,6 +1546,23 @@ i40e_init_properties(i40e_t *i40e)
 
 	i40e->i40e_rx_hcksum_enable = i40e_get_prop(i40e, "rx_hcksum_enable",
 	    B_FALSE, B_TRUE, B_TRUE);
+
+	i40e->i40e_rx_dma_min = i40e_get_prop(i40e, "rx_dma_threshold",
+	    I40E_MIN_RX_DMA_THRESH, I40E_MAX_RX_DMA_THRESH,
+	    I40E_DEF_RX_DMA_THRESH);
+
+	i40e->i40e_tx_dma_min = i40e_get_prop(i40e, "tx_dma_threshold",
+	    I40E_MIN_TX_DMA_THRESH, I40E_MAX_TX_DMA_THRESH,
+	    I40E_DEF_TX_DMA_THRESH);
+
+	i40e->i40e_tx_itr = i40e_get_prop(i40e, "tx_intr_throttle",
+	    I40E_MIN_ITR, I40E_MAX_ITR, I40E_DEF_TX_ITR);
+
+	i40e->i40e_rx_itr = i40e_get_prop(i40e, "rx_intr_throttle",
+	    I40E_MIN_ITR, I40E_MAX_ITR, I40E_DEF_RX_ITR);
+
+	i40e->i40e_other_itr = i40e_get_prop(i40e, "other_intr_throttle",
+	    I40E_MIN_ITR, I40E_MAX_ITR, I40E_DEF_OTHER_ITR);
 
 	if (!i40e->i40e_mr_enable) {
 		i40e->i40e_num_trqpairs = I40E_TRQPAIR_NOMSIX;
@@ -1743,8 +1793,9 @@ i40e_add_intr_handlers(i40e_t *i40e)
 		}
 		break;
 	default:
-		panic("i40e_intr_type %p contains an unknown type: %d", i40e,
-		    i40e->i40e_intr_type);
+		/* Cast to pacify lint */
+		panic("i40e_intr_type %p contains an unknown type: %d",
+		    (void *)i40e, i40e->i40e_intr_type);
 	}
 
 	return (B_TRUE);
@@ -1779,7 +1830,7 @@ i40e_get_hw_state(i40e_t *i40e, i40e_hw_t *hw)
 
 	ASSERT(MUTEX_HELD(&i40e->i40e_general_lock));
 
-	i40e_aq_get_link_info(hw, TRUE, NULL, NULL);
+	(void) i40e_aq_get_link_info(hw, TRUE, NULL, NULL);
 	i40e_link_check(i40e);
 
 	/*
@@ -1826,6 +1877,7 @@ i40e_get_hw_state(i40e_t *i40e, i40e_hw_t *hw)
  * implementing this yet, we're keeping this around for when we add reset
  * capabilities, so this isn't forgotten.
  */
+/* ARGSUSED */
 static void
 i40e_init_macaddrs(i40e_t *i40e, i40e_hw_t *hw)
 {
@@ -1855,7 +1907,7 @@ i40e_config_vsi(i40e_t *i40e, i40e_hw_t *hw)
 	 * Set the queue and traffic class bits.  Keep it simple for now.
 	 */
 	context.info.valid_sections = I40E_AQ_VSI_PROP_QUEUE_MAP_VALID;
-	context.info.mapping_flags |= I40E_AQ_VSI_QUE_MAP_CONTIG;
+	context.info.mapping_flags = I40E_AQ_VSI_QUE_MAP_CONTIG;
 	context.info.queue_mapping[0] = I40E_ASSIGN_ALL_QUEUES;
 	context.info.tc_mapping[0] = I40E_TRAFFIC_CLASS_NO_QUEUES;
 
@@ -2450,12 +2502,9 @@ i40e_stop(i40e_t *i40e, boolean_t free_allocations)
 
 	i40e_stat_vsi_fini(i40e);
 
-	if (i40e->i40e_link_state == LINK_STATE_UP) {
-		i40e->i40e_link_state = LINK_STATE_UNKNOWN;
-		mac_link_update(i40e->i40e_mac_hdl, i40e->i40e_link_state);
-	}
 	i40e->i40e_link_speed = 0;
 	i40e->i40e_link_duplex = 0;
+	i40e_link_state_set(i40e, LINK_STATE_UNKNOWN);
 
 	if (free_allocations) {
 		i40e_free_ring_mem(i40e, B_FALSE);
@@ -2555,6 +2604,27 @@ done:
 	}
 
 	return (rc);
+}
+
+/*
+ * We may have loaned up descriptors to the stack. As such, if we still have
+ * them outstanding, then we will not continue with detach.
+ */
+static boolean_t
+i40e_drain_rx(i40e_t *i40e)
+{
+	mutex_enter(&i40e->i40e_rx_pending_lock);
+	while (i40e->i40e_rx_pending > 0) {
+		if (cv_reltimedwait(&i40e->i40e_rx_pending_cv,
+		    &i40e->i40e_rx_pending_lock,
+		    drv_usectohz(I40E_DRAIN_RX_WAIT), TR_CLOCK_TICK) == -1) {
+			mutex_exit(&i40e->i40e_rx_pending_lock);
+			return (B_FALSE);
+		}
+	}
+	mutex_exit(&i40e->i40e_rx_pending_lock);
+
+	return (B_TRUE);
 }
 
 static int
@@ -2702,11 +2772,12 @@ i40e_detach(dev_info_t *devinfo, ddi_detach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
-	/*
-	 * When we add support for DMA binding, we'll need to make sure that we
-	 * take care of draining any outstanding packets that are still up in
-	 * the kernel.
-	 */
+	if (i40e_drain_rx(i40e) == B_FALSE) {
+		i40e_log(i40e, "timed out draining DMA resources, %d buffers "
+		    "remain", i40e->i40e_rx_pending);
+		return (DDI_FAILURE);
+	}
+
 	mutex_enter(&i40e_glock);
 	list_remove(&i40e_glist, i40e);
 	mutex_exit(&i40e_glock);
@@ -2715,7 +2786,6 @@ i40e_detach(dev_info_t *devinfo, ddi_detach_cmd_t cmd)
 
 	return (DDI_SUCCESS);
 }
-
 
 static struct cb_ops i40e_cb_ops = {
 	nulldev,		/* cb_open */

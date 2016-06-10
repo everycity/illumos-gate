@@ -23,7 +23,7 @@
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 2014 Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include "lint.h"
@@ -105,6 +105,7 @@ uberdata_t __uberdata = {
 	{ DEFAULTMUTEX, NULL, 0 },
 	{ DEFAULTMUTEX, NULL, 0 }},
 	{ RECURSIVEMUTEX, NULL, NULL },		/* atexit_root */
+	{ RECURSIVEMUTEX, NULL },		/* quickexit_root */
 	{ DEFAULTMUTEX, 0, 0, NULL },		/* tsd_metadata */
 	{ DEFAULTMUTEX, {0, 0}, {0, 0} },	/* tls_metadata */
 	0,			/* primary_map */
@@ -138,6 +139,7 @@ uberdata_t __uberdata = {
 	NULL,			/* robustlist */
 	NULL,			/* progname */
 	NULL,			/* ub_broot */
+	NULL,			/* ub_comm_page */
 	NULL,			/* __tdb_bootstrap */
 	{			/* tdb */
 		NULL,		/* tdb_sync_addr_hash */
@@ -558,7 +560,7 @@ find_lwp(thread_t tid)
 
 int
 _thrp_create(void *stk, size_t stksize, void *(*func)(void *), void *arg,
-	long flags, thread_t *new_thread, size_t guardsize)
+    long flags, thread_t *new_thread, size_t guardsize)
 {
 	ulwp_t *self = curthread;
 	uberdata_t *udp = self->ul_uberdata;
@@ -721,7 +723,7 @@ _thrp_create(void *stk, size_t stksize, void *(*func)(void *), void *arg,
 
 int
 thr_create(void *stk, size_t stksize, void *(*func)(void *), void *arg,
-	long flags, thread_t *new_thread)
+    long flags, thread_t *new_thread)
 {
 	return (_thrp_create(stk, stksize, func, arg, flags, new_thread, 0));
 }
@@ -1222,18 +1224,23 @@ extern void __proc64id(void);
 #endif
 
 static void
-init_brandroot(uberdata_t *udp)
+init_auxv_data(uberdata_t *udp)
 {
 	Dl_argsinfo_t args;
 
 	udp->ub_broot = NULL;
+	udp->ub_comm_page = NULL;
 	if (dlinfo(RTLD_SELF, RTLD_DI_ARGSINFO, &args) < 0)
 		return;
 
 	while (args.dla_auxv->a_type != AT_NULL) {
-		if (args.dla_auxv->a_type == AT_SUN_BRAND_NROOT) {
+		switch (args.dla_auxv->a_type) {
+		case AT_SUN_BRAND_NROOT:
 			udp->ub_broot = args.dla_auxv->a_un.a_ptr;
-			return;
+			break;
+		case AT_SUN_COMMPAGE:
+			udp->ub_comm_page = args.dla_auxv->a_un.a_ptr;
+			break;
 		}
 		args.dla_auxv++;
 	}
@@ -1275,11 +1282,12 @@ libc_init(void)
 	(void) _atexit(__cleanup);
 
 	/*
-	 * Every libc, regardless of link map, needs to go through and check its
-	 * aux vectors so as to indicate whether or not this has been given a
-	 * brand root with which we use to qualify various other data.
+	 * Every libc, regardless of link map, needs to go through and check
+	 * its aux vectors.  Doing so will indicate whether or not this has
+	 * been given a brand root (used to qualify various other data) or a
+	 * comm page (to optimize certain system actions).
 	 */
-	init_brandroot(udp);
+	init_auxv_data(udp);
 
 	/*
 	 * We keep our uberdata on one of (a) the first alternate link map

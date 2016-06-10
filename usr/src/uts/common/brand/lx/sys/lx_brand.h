@@ -59,12 +59,17 @@ extern "C" {
 #define	LX_LIB_PATH32	"/native/usr/lib/lx_brand.so.1"
 #define	LX_LIB_PATH64	"/native/usr/lib/amd64/lx_brand.so.1"
 
+#define	LX_VDSO_PATH32	"/native/usr/lib/brand/lx/lx_vdso.so.1"
+#define	LX_VDSO_PATH64	"/native/usr/lib/brand/lx/amd64/lx_vdso.so.1"
+
 #if defined(_LP64)
 #define	LX_LIB_PATH		LX_LIB_PATH64
 #define	LX_UNAME_MACHINE	LX_UNAME_MACHINE64
+#define	LX_VDSO_PATH		LX_VDSO_PATH64
 #else
 #define	LX_LIB_PATH		LX_LIB_PATH32
 #define	LX_UNAME_MACHINE	LX_UNAME_MACHINE32
+#define	LX_VDSO_PATH		LX_VDSO_PATH32
 #endif
 
 /*
@@ -103,7 +108,8 @@ extern "C" {
 #define	B_SET_NATIVE_STACK	147
 #define	B_SIGEV_THREAD_ID	148
 #define	B_OVERRIDE_KERN_VER	149
-#define	B_NOTIFY_VDSO_LOC	150
+/* formerly B_NOTIFY_VDSO_LOC	150 */
+#define	B_GET_PERSONALITY	151
 
 #ifndef _ASM
 /*
@@ -228,7 +234,6 @@ typedef struct lx_elf_data64 {
 	uintptr_t	ed_entry;
 	uintptr_t	ed_base;
 	uintptr_t	ed_ldentry;
-	uintptr_t	ed_vdso;
 } lx_elf_data64_t;
 
 typedef struct lx_elf_data32 {
@@ -238,7 +243,6 @@ typedef struct lx_elf_data32 {
 	uint32_t	ed_entry;
 	uint32_t	ed_base;
 	uint32_t	ed_ldentry;
-	uint32_t	ed_vdso;
 } lx_elf_data32_t;
 
 #if defined(_LP64)
@@ -270,8 +274,6 @@ typedef enum lx_proc_flags {
 /*
  * Entry points for cgroup integration.
  */
-extern void (*lx_cgrp_forklwp)(vfs_t *, uint_t, pid_t);
-extern void (*lx_cgrp_proc_exit)(vfs_t *, uint_t, pid_t);
 extern void (*lx_cgrp_initlwp)(vfs_t *, uint_t, id_t, pid_t);
 extern void (*lx_cgrp_freelwp)(vfs_t *, uint_t, id_t, pid_t);
 
@@ -292,6 +294,7 @@ typedef struct {
 typedef struct lx_proc_data {
 	uintptr_t l_handler;	/* address of user-space handler */
 	pid_t l_ppid;		/* pid of originating parent proc */
+	uid_t l_loginuid;	/* /proc/{pid}/loginuid */
 	int64_t l_ptrace;	/* count of process lwps observed by ptrace */
 	lx_elf_data_t l_elf_data; /* ELF data for linux executable */
 	/* signal to deliver to parent when this thread group dies */
@@ -310,9 +313,34 @@ typedef struct lx_proc_data {
 	/* Override zone-wide settings for uname release and version */
 	char l_uname_release[LX_KERN_RELEASE_MAX];
 	char l_uname_version[LX_KERN_VERSION_MAX];
+
+	/* Linux process personality */
+	unsigned int l_personality;
+
+	/* VDSO location */
+	uintptr_t l_vdso;
 } lx_proc_data_t;
 
 #endif	/* _KERNEL */
+
+/*
+ * Linux process personality(2) flags stored in l_personality
+ */
+#define	LX_PER_UNAME26			0x0020000
+#define	LX_PER_ADDR_NO_RANDOMIZE	0x0040000
+#define	LX_PER_FDPIC_FUNCPTRS		0x0080000
+#define	LX_PER_MMAP_PAGE_ZERO		0x0100000
+#define	LX_PER_ADDR_COMPAT_LAYOUT	0x0200000
+#define	LX_PER_READ_IMPLIES_EXEC	0x0400000
+#define	LX_PER_ADDR_LIMIT_32BIT		0x0800000
+#define	LX_PER_SHORT_INODE		0x1000000
+#define	LX_PER_WHOLE_SECONDS		0x2000000
+#define	LX_PER_STICKY_TIMEOUTS		0x4000000
+#define	LX_PER_ADDR_LIMIT_3GB		0x8000000
+
+#define	LX_PER_LINUX	0x00
+#define	LX_PER_SUNOS	(0x06 | LX_PER_STICKY_TIMEOUTS)
+#define	LX_PER_MASK	0xff
 
 /*
  * A data type big enough to bitmap all Linux possible cpus.

@@ -32,20 +32,21 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
+#include <sys/timerfd.h>
 #include <sys/lx_misc.h>
 #include <sys/lx_syscall.h>
 #include <lx_signum.h>
 
 /*
- * Translating from the Linux clock types to the Illumos types is a bit of a
+ * Translating from the Linux clock types to the illumos types is a bit of a
  * mess.
  *
  * Linux uses different values for it clock identifiers, so we have to do basic
- * translations between the two.  Thankfully, both Linux and Illumos implement
+ * translations between the two.  Thankfully, both Linux and illumos implement
  * the same POSIX SUSv3 clock types, so the semantics should be identical.
  *
  * However, CLOCK_REALTIME and CLOCK_HIGHRES (CLOCK_MONOTONIC) are the only two
- * clock backends currently implemented on Illumos. Functions in the kernel
+ * clock backends currently implemented on illumos. Functions in the kernel
  * that use the CLOCK_BACKEND macro will return an error for any clock type
  * that does not exist in the clock_backend array. These functions are
  * clock_settime, clock_gettime, clock_getres and timer_create.
@@ -59,14 +60,18 @@
  *    3	CLOCK_REALTIME			valid ptr.
  *    4	CLOCK_MONOTONIC (CLOCK_HIGHRES)	valid ptr.
  *    5	CLOCK_PROCESS_CPUTIME_ID	NULL
- *
- * See the comment on clock_highres_timer_create for full details but a zone
- * needs the proc_clock_highres privilege to use the CLOCK_HIGHRES clock so it
- * will generally be unusable by lx for timer_create.
  */
 
 #define	CLOCK_RT_SLOT	0
 
+#define	LX_CLOCK_REALTIME	0
+#define	LX_CLOCK_MONOTONIC	1
+
+/*
+ * Limits for a minimum interval are enforced when creating timers from the
+ * CLOCK_HIGHRES source. Values below this minimum will be clamped if the
+ * process lacks the proc_clock_highres privilege.
+ */
 static int ltos_clock[] = {
 	CLOCK_REALTIME,			/* LX_CLOCK_REALTIME */
 	CLOCK_HIGHRES,			/* LX_CLOCK_MONOTONIC */
@@ -77,23 +82,7 @@ static int ltos_clock[] = {
 	CLOCK_HIGHRES			/* LX_CLOCK_MONOTONIC_COARSE */
 };
 
-/*
- * Since the Illumos CLOCK_HIGHRES clock requires elevated privs, which can
- * lead to a DOS, we use the only other option (CLOCK_REALTIME) when given
- * LX_CLOCK_MONOTONIC.
- */
-static int ltos_timer[] = {
-	CLOCK_REALTIME,
-	CLOCK_REALTIME,
-	CLOCK_THREAD_CPUTIME_ID,	/* XXX thread, not process but fails */
-	CLOCK_THREAD_CPUTIME_ID,
-	CLOCK_REALTIME,
-	CLOCK_REALTIME,
-	CLOCK_REALTIME
-};
-
 #define	LX_CLOCK_MAX	(sizeof (ltos_clock) / sizeof (ltos_clock[0]))
-#define	LX_TIMER_MAX	(sizeof (ltos_timer) / sizeof (ltos_timer[0]))
 
 #define	LX_SIGEV_PAD_SIZE	((64 - \
 	(sizeof (int) * 2 + sizeof (union sigval))) / sizeof (int))
@@ -185,14 +174,13 @@ lx_sigev_thread_id(union sigval sival)
 
 
 /*
- * The Illumos timer_create man page says it accepts the following clocks:
+ * The illumos timer_create man page says it accepts the following clocks:
  *   CLOCK_REALTIME (3)	wall clock
  *   CLOCK_VIRTUAL (1)	user CPU usage clock - No Backend
  *   CLOCK_PROF (2)	user and system CPU usage clock - No Backend
  *   CLOCK_HIGHRES (4)	non-adjustable, high-resolution clock
- * However, in reality the Illumos timer_create only accepts CLOCK_REALTIME
- * and CLOCK_HIGHRES, and since we can't use CLOCK_HIGHRES in a zone, we're
- * down to one clock.
+ * However, in reality the illumos timer_create only accepts CLOCK_REALTIME
+ * and CLOCK_HIGHRES.
  *
  * Linux has complicated support for clock IDs. For example, the
  * clock_getcpuclockid() function can return a negative clock_id. See the Linux
@@ -214,10 +202,10 @@ lx_timer_create(int clock, struct sigevent *lx_sevp, timer_t *tid)
 		clock = CLOCK_RT_SLOT;	/* force our use of CLOCK_REALTIME */
 	}
 
-	if (clock >= LX_TIMER_MAX)
+	if (clock >= LX_CLOCK_MAX)
 		return (-EINVAL);
 
-	/* We have to convert the Linux sigevent layout to the Illumos layout */
+	/* We have to convert the Linux sigevent layout to the illumos layout */
 	if (uucopy(lx_sevp, &lev, sizeof (lev)) < 0)
 		return (-EFAULT);
 
@@ -287,7 +275,7 @@ lx_timer_create(int clock, struct sigevent *lx_sevp, timer_t *tid)
 		sev.sigev_value.sival_ptr = lev_copy;
 	}
 
-	return ((timer_create(ltos_timer[clock], &sev, tid) < 0) ? -errno : 0);
+	return ((timer_create(ltos_clock[clock], &sev, tid) < 0) ? -errno : 0);
 }
 
 long
@@ -316,4 +304,41 @@ long
 lx_timer_delete(timer_t tid)
 {
 	return ((timer_delete(tid) < 0) ? -errno : 0);
+}
+
+long
+lx_timerfd_create(int clockid, int flags)
+{
+	int r;
+
+	/* These are the only two valid values. LTP tests for this. */
+	if (clockid != LX_CLOCK_REALTIME && clockid != LX_CLOCK_MONOTONIC)
+		return (-EINVAL);
+
+	r = timerfd_create(ltos_clock[clockid], flags);
+	/*
+	 * As with the eventfd case, we return a slightly less jarring
+	 * error condition if we cannot open /dev/timerfd.
+	 */
+	if (r == -1 && errno == ENOENT)
+		return (-ENOTSUP);
+
+	return (r == -1 ? -errno : r);
+}
+
+long
+lx_timerfd_settime(int fd, int flags, const struct itimerspec *value,
+    struct itimerspec *ovalue)
+{
+	int r = timerfd_settime(fd, flags, value, ovalue);
+
+	return (r == -1 ? -errno : r);
+}
+
+long
+lx_timerfd_gettime(int fd, struct itimerspec *value)
+{
+	int r = timerfd_gettime(fd, value);
+
+	return (r == -1 ? -errno : r);
 }

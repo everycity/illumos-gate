@@ -22,16 +22,12 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
- * Copyright 2015 Joyent, Inc.  All rights reserved.
  * Copyright (c) 2014 Integros [integros.com]
+ * Copyright 2016 Joyent, Inc.
  */
 
 /* Portions Copyright 2007 Jeremy Teo */
 /* Portions Copyright 2010 Robert Milkowski */
-
-/*
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
- */
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -2119,6 +2115,7 @@ top:
 	dmu_tx_hold_zap(tx, zfsvfs->z_unlinkedobj, FALSE, NULL);
 	zfs_sa_upgrade_txholds(tx, zp);
 	zfs_sa_upgrade_txholds(tx, dzp);
+	dmu_tx_mark_netfree(tx);
 	error = dmu_tx_assign(tx, waited ? TXG_WAITED : TXG_NOWAIT);
 	if (error) {
 		rw_exit(&zp->z_parent_lock);
@@ -2837,8 +2834,11 @@ top:
 			return (err);
 		}
 
-		if (vap->va_size == 0)
+		if (vap->va_size == 0) {
 			vnevent_truncate(ZTOV(zp), ct);
+		} else {
+			vnevent_resize(ZTOV(zp), ct);
+		}
 	}
 
 	if (mask & (AT_ATIME|AT_MTIME) ||
@@ -3453,7 +3453,7 @@ zfs_rename(vnode_t *sdvp, char *snm, vnode_t *tdvp, char *tnm, cred_t *cr,
 	dmu_tx_t	*tx;
 	zfs_zlock_t	*zl;
 	int		cmp, serr, terr;
-	int		error = 0;
+	int		error = 0, rm_err = 0;
 	int		zflg = 0;
 	boolean_t	waited = B_FALSE;
 
@@ -3718,7 +3718,7 @@ top:
 	}
 
 	if (tzp)	/* Attempt to remove the existing target */
-		error = zfs_link_destroy(tdl, tzp, tx, zflg, NULL);
+		error = rm_err = zfs_link_destroy(tdl, tzp, tx, zflg, NULL);
 
 	if (error == 0) {
 		error = zfs_link_create(tdl, szp, tx, ZRENAMING);
@@ -3761,10 +3761,11 @@ top:
 
 	dmu_tx_commit(tx);
 
+	if (tzp && rm_err == 0)
+		vnevent_rename_dest(ZTOV(tzp), tdvp, tnm, ct);
+
 	if (error == 0) {
 		vnevent_rename_src(ZTOV(szp), sdvp, snm, ct);
-		if (tzp)
-			vnevent_rename_dest(ZTOV(tzp), tdvp, tnm, ct);
 		vnevent_rename_dest_dir(tdvp, ZTOV(szp), tnm, ct);
 	}
 out:
@@ -4859,8 +4860,13 @@ zfs_space(vnode_t *vp, int cmd, flock64_t *bfp, int flag,
 
 	error = zfs_freesp(zp, off, len, flag, TRUE);
 
-	if (error == 0 && off == 0 && len == 0)
-		vnevent_truncate(ZTOV(zp), ct);
+	if (error == 0 && len == 0) {
+		if (off == 0) {
+			vnevent_truncate(ZTOV(zp), ct);
+		} else {
+			vnevent_resize(ZTOV(zp), ct);
+		}
+	}
 
 	ZFS_EXIT(zfsvfs);
 	return (error);

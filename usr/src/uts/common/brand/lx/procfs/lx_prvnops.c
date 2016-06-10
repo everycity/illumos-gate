@@ -55,6 +55,7 @@
 #include <sys/pool_pset.h>
 #include <sys/pset.h>
 #include <sys/zone.h>
+#include <sys/fcntl.h>
 #include <sys/pghw.h>
 #include <sys/vfs_opreg.h>
 #include <sys/param.h>
@@ -62,6 +63,7 @@
 #include <sys/rctl.h>
 #include <sys/kstat.h>
 #include <sys/lx_misc.h>
+#include <sys/lx_types.h>
 #include <sys/brand.h>
 #include <sys/cred_impl.h>
 #include <sys/tihdr.h>
@@ -101,6 +103,10 @@ static int lxpr_create(struct vnode *, char *, struct vattr *, enum vcexcl,
     int, struct vnode **, struct cred *, int, caller_context_t *, vsecattr_t *);
 static int lxpr_read(vnode_t *, uio_t *, int, cred_t *, caller_context_t *);
 static int lxpr_write(vnode_t *, uio_t *, int, cred_t *, caller_context_t *);
+static int lxpr_space(vnode_t *, int, flock64_t *, int, offset_t, cred_t *,
+    caller_context_t *);
+static int lxpr_setattr(vnode_t *, vattr_t *, int, cred_t *,
+    caller_context_t *);
 static int lxpr_getattr(vnode_t *, vattr_t *, int, cred_t *,
     caller_context_t *);
 static int lxpr_access(vnode_t *, int, int, cred_t *, caller_context_t *);
@@ -127,6 +133,7 @@ static vnode_t *lxpr_lookup_sys_kerneldir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_sys_kdir_randdir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_sys_netdir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_sys_net_coredir(vnode_t *, char *);
+static vnode_t *lxpr_lookup_sys_net_ipv4dir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_sys_vmdir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_taskdir(vnode_t *, char *);
 static vnode_t *lxpr_lookup_task_tid_dir(vnode_t *, char *);
@@ -143,6 +150,7 @@ static int lxpr_readdir_sys_kerneldir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_sys_kdir_randdir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_sys_netdir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_sys_net_coredir(lxpr_node_t *, uio_t *, int *);
+static int lxpr_readdir_sys_net_ipv4dir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_sys_vmdir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_taskdir(lxpr_node_t *, uio_t *, int *);
 static int lxpr_readdir_task_tid_dir(lxpr_node_t *, uio_t *, int *);
@@ -151,6 +159,7 @@ static void lxpr_read_invalid(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_empty(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_cgroups(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_cpuinfo(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_devices(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_diskstats(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_isdir(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_fd(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -172,9 +181,11 @@ static void lxpr_read_pid_cmdline(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_comm(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_env(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_limits(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_pid_loginuid(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_maps(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_mountinfo(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_oom_scr_adj(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_pid_personality(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_stat(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_statm(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_pid_status(lxpr_node_t *, lxpr_uiobuf_t *);
@@ -224,13 +235,35 @@ static void lxpr_read_sys_kernel_shmmax(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_shmmni(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_kernel_threads_max(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_net_core_somaxc(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_net_ipv4_ip_lport_range(lxpr_node_t *,
+    lxpr_uiobuf_t *);
+static void lxpr_read_sys_net_ipv4_tcp_fin_to(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_net_ipv4_tcp_ka_int(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_net_ipv4_tcp_ka_tim(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_net_ipv4_tcp_sack(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_net_ipv4_tcp_winscale(lxpr_node_t *, lxpr_uiobuf_t *);
+static void lxpr_read_sys_vm_max_map_cnt(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_vm_minfr_kb(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_vm_nhpages(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_vm_overcommit_mem(lxpr_node_t *, lxpr_uiobuf_t *);
 static void lxpr_read_sys_vm_swappiness(lxpr_node_t *, lxpr_uiobuf_t *);
 
+static int lxpr_write_pid_loginuid(lxpr_node_t *, uio_t *, cred_t *,
+    caller_context_t *);
 static int lxpr_write_sys_net_core_somaxc(lxpr_node_t *, uio_t *, cred_t *,
     caller_context_t *);
+static int lxpr_write_sys_net_ipv4_ip_lport_range(lxpr_node_t *, uio_t *,
+    cred_t *, caller_context_t *);
+static int lxpr_write_sys_net_ipv4_tcp_fin_to(lxpr_node_t *, uio_t *, cred_t *,
+    caller_context_t *);
+static int lxpr_write_sys_net_ipv4_tcp_ka_int(lxpr_node_t *, uio_t *,
+    cred_t *, caller_context_t *);
+static int lxpr_write_sys_net_ipv4_tcp_ka_tim(lxpr_node_t *, uio_t *,
+    cred_t *, caller_context_t *);
+static int lxpr_write_sys_net_ipv4_tcp_sack(lxpr_node_t *, uio_t *,
+    cred_t *, caller_context_t *);
+static int lxpr_write_sys_net_ipv4_tcp_winscale(lxpr_node_t *, uio_t *,
+    cred_t *, caller_context_t *);
 static int lxpr_write_sys_kernel_corepatt(lxpr_node_t *, uio_t *, cred_t *,
     caller_context_t *);
 
@@ -272,6 +305,8 @@ const fs_operation_def_t lxpr_vnodeops_template[] = {
 	VOPNAME_CREATE,		{ .vop_create = lxpr_create },
 	VOPNAME_READDIR,	{ .vop_readdir = lxpr_readdir },
 	VOPNAME_READLINK,	{ .vop_readlink = lxpr_readlink },
+	VOPNAME_SPACE,		{ .vop_space = lxpr_space },
+	VOPNAME_SETATTR,	{ .vop_setattr = lxpr_setattr },
 	VOPNAME_FSYNC,		{ .error = lxpr_sync },
 	VOPNAME_SEEK,		{ .error = lxpr_sync },
 	VOPNAME_INACTIVE,	{ .vop_inactive = lxpr_inactive },
@@ -326,10 +361,12 @@ static lxpr_dirent_t piddir[] = {
 	{ LXPR_PID_ENV,		"environ" },
 	{ LXPR_PID_EXE,		"exe" },
 	{ LXPR_PID_LIMITS,	"limits" },
+	{ LXPR_PID_LOGINUID,	"loginuid" },
 	{ LXPR_PID_MAPS,	"maps" },
 	{ LXPR_PID_MEM,		"mem" },
 	{ LXPR_PID_MOUNTINFO,	"mountinfo" },
 	{ LXPR_PID_OOM_SCR_ADJ,	"oom_score_adj" },
+	{ LXPR_PID_PERSONALITY,	"personality" },
 	{ LXPR_PID_ROOTDIR,	"root" },
 	{ LXPR_PID_STAT,	"stat" },
 	{ LXPR_PID_STATM,	"statm" },
@@ -353,10 +390,12 @@ static lxpr_dirent_t tiddir[] = {
 	{ LXPR_PID_ENV,		"environ" },
 	{ LXPR_PID_EXE,		"exe" },
 	{ LXPR_PID_LIMITS,	"limits" },
+	{ LXPR_PID_LOGINUID,	"loginuid" },
 	{ LXPR_PID_MAPS,	"maps" },
 	{ LXPR_PID_MEM,		"mem" },
 	{ LXPR_PID_MOUNTINFO,	"mountinfo" },
 	{ LXPR_PID_TID_OOM_SCR_ADJ,	"oom_score_adj" },
+	{ LXPR_PID_PERSONALITY,	"personality" },
 	{ LXPR_PID_ROOTDIR,	"root" },
 	{ LXPR_PID_TID_STAT,	"stat" },
 	{ LXPR_PID_STATM,	"statm" },
@@ -496,6 +535,7 @@ static lxpr_dirent_t sys_randdir[] = {
  */
 static lxpr_dirent_t sys_netdir[] = {
 	{ LXPR_SYS_NET_COREDIR,		"core" },
+	{ LXPR_SYS_NET_IPV4DIR,		"ipv4" },
 };
 
 #define	SYS_NETDIRFILES (sizeof (sys_netdir) / sizeof (sys_netdir[0]))
@@ -511,9 +551,27 @@ static lxpr_dirent_t sys_net_coredir[] = {
 	(sizeof (sys_net_coredir) / sizeof (sys_net_coredir[0]))
 
 /*
+ * contents of /proc/sys/net/ipv4 directory
+ * See the Linux ip(7) & tcp(7) man pages for descriptions and the illumos
+ * ip(7p) & tcp(7p) man pages for the native descriptions.
+ */
+static lxpr_dirent_t sys_net_ipv4dir[] = {
+	{ LXPR_SYS_NET_IPV4_IP_LPORT_RANGE, "ip_local_port_range" },
+	{ LXPR_SYS_NET_IPV4_TCP_FIN_TO,	"tcp_fin_timeout" },
+	{ LXPR_SYS_NET_IPV4_TCP_KA_INT,	"tcp_keepalive_intvl" },
+	{ LXPR_SYS_NET_IPV4_TCP_KA_TIM,	"tcp_keepalive_time" },
+	{ LXPR_SYS_NET_IPV4_TCP_SACK,	"tcp_sack" },
+	{ LXPR_SYS_NET_IPV4_TCP_WINSCALE, "tcp_window_scaling" },
+};
+
+#define	SYS_NET_IPV4DIRFILES \
+	(sizeof (sys_net_ipv4dir) / sizeof (sys_net_ipv4dir[0]))
+
+/*
  * contents of /proc/sys/vm directory
  */
 static lxpr_dirent_t sys_vmdir[] = {
+	{ LXPR_SYS_VM_MAX_MAP_CNT,	"max_map_count" },
 	{ LXPR_SYS_VM_MINFR_KB,		"min_free_kbytes" },
 	{ LXPR_SYS_VM_NHUGEP,		"nr_hugepages" },
 	{ LXPR_SYS_VM_OVERCOMMIT_MEM,	"overcommit_memory" },
@@ -521,6 +579,57 @@ static lxpr_dirent_t sys_vmdir[] = {
 };
 
 #define	SYS_VMDIRFILES (sizeof (sys_vmdir) / sizeof (sys_vmdir[0]))
+
+/*
+ * Table for standard writable files. Non-standard writable files not in this
+ * table can be handled explicitly as special cases.
+ * This table drives lxpr_is_writable, lxpr_write, and lxpr_create.
+ * Note that the entries LXPR_PID_FD_FD and LXPR_PID_TID_FD_FD exist in the
+ * table both to verify writability and to satisfy opening with O_CREATE.
+ */
+typedef struct wftab {
+	lxpr_nodetype_t	wft_type;	/* file entry type */
+	int		(*wft_wrf)(lxpr_node_t *, struct uio *, cred_t *,
+			    caller_context_t *); /* write function */
+} wftab_t;
+
+static wftab_t wr_tab[] = {
+	{LXPR_PID_FD_FD, NULL},
+	{LXPR_PID_LOGINUID, lxpr_write_pid_loginuid},
+	{LXPR_PID_OOM_SCR_ADJ, NULL},
+	{LXPR_PID_TID_FD_FD, NULL},
+	{LXPR_PID_TID_OOM_SCR_ADJ, NULL},
+	{LXPR_SYS_KERNEL_COREPATT, lxpr_write_sys_kernel_corepatt},
+	{LXPR_SYS_KERNEL_SHMALL, NULL},
+	{LXPR_SYS_KERNEL_SHMMAX, NULL},
+	{LXPR_SYS_NET_CORE_SOMAXCON, lxpr_write_sys_net_core_somaxc},
+	{LXPR_SYS_NET_IPV4_IP_LPORT_RANGE,
+	    lxpr_write_sys_net_ipv4_ip_lport_range},
+	{LXPR_SYS_NET_IPV4_TCP_FIN_TO, lxpr_write_sys_net_ipv4_tcp_fin_to},
+	{LXPR_SYS_NET_IPV4_TCP_KA_INT, lxpr_write_sys_net_ipv4_tcp_ka_int},
+	{LXPR_SYS_NET_IPV4_TCP_KA_TIM, lxpr_write_sys_net_ipv4_tcp_ka_tim},
+	{LXPR_SYS_NET_IPV4_TCP_SACK, lxpr_write_sys_net_ipv4_tcp_sack},
+	{LXPR_SYS_NET_IPV4_TCP_WINSCALE, lxpr_write_sys_net_ipv4_tcp_winscale},
+	{LXPR_SYS_VM_OVERCOMMIT_MEM, NULL},
+	{LXPR_SYS_VM_SWAPPINESS, NULL},
+	{LXPR_INVALID, NULL}
+};
+
+/*
+ * Centralized test for the standard writable proc files. Other non-standard
+ * writable files might be handled separately.
+ */
+boolean_t
+lxpr_is_writable(lxpr_nodetype_t type)
+{
+	int i;
+
+	for (i = 0; wr_tab[i].wft_type != LXPR_INVALID; i++) {
+		if (wr_tab[i].wft_type == type)
+			return (B_TRUE);
+	}
+	return (B_FALSE);
+}
 
 /*
  * lxpr_open(): Vnode operation for VOP_OPEN()
@@ -534,23 +643,9 @@ lxpr_open(vnode_t **vpp, int flag, cred_t *cr, caller_context_t *ct)
 	vnode_t		*rvp;
 	int		error = 0;
 
-	if (flag & FWRITE) {
-		/* Restrict writes to certain files */
-		switch (type) {
-		case LXPR_PID_OOM_SCR_ADJ:
-		case LXPR_PID_TID_OOM_SCR_ADJ:
-		case LXPR_SYS_KERNEL_COREPATT:
-		case LXPR_SYS_KERNEL_SHMALL:
-		case LXPR_SYS_KERNEL_SHMMAX:
-		case LXPR_SYS_NET_CORE_SOMAXCON:
-		case LXPR_SYS_VM_OVERCOMMIT_MEM:
-		case LXPR_SYS_VM_SWAPPINESS:
-		case LXPR_PID_FD_FD:
-		case LXPR_PID_TID_FD_FD:
-			break;
-		default:
-			return (EPERM);
-		}
+	/* Restrict writes to certain files */
+	if ((flag & FWRITE) && !lxpr_is_writable(type)) {
+		return (EPERM);
 	}
 
 	/*
@@ -616,6 +711,7 @@ lxpr_close(vnode_t *vp, int flag, int count, offset_t offset, cred_t *cr,
 }
 
 static void (*lxpr_read_function[LXPR_NFILES])() = {
+	NULL,				/* invalid		*/
 	lxpr_read_isdir,		/* /proc		*/
 	lxpr_read_isdir,		/* /proc/<pid>		*/
 	lxpr_read_pid_auxv,		/* /proc/<pid>/auxv	*/
@@ -627,10 +723,12 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_pid_env,		/* /proc/<pid>/environ	*/
 	lxpr_read_invalid,		/* /proc/<pid>/exe	*/
 	lxpr_read_pid_limits,		/* /proc/<pid>/limits	*/
+	lxpr_read_pid_loginuid,		/* /proc/<pid>/loginuid	*/
 	lxpr_read_pid_maps,		/* /proc/<pid>/maps	*/
 	lxpr_read_empty,		/* /proc/<pid>/mem	*/
 	lxpr_read_pid_mountinfo,	/* /proc/<pid>/mountinfo */
 	lxpr_read_pid_oom_scr_adj,	/* /proc/<pid>/oom_score_adj */
+	lxpr_read_pid_personality,	/* /proc/<pid>/personality */
 	lxpr_read_invalid,		/* /proc/<pid>/root	*/
 	lxpr_read_pid_stat,		/* /proc/<pid>/stat	*/
 	lxpr_read_pid_statm,		/* /proc/<pid>/statm	*/
@@ -648,10 +746,12 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_pid_env,		/* /proc/<pid>/task/<tid>/environ */
 	lxpr_read_invalid,		/* /proc/<pid>/task/<tid>/exe	*/
 	lxpr_read_pid_limits,		/* /proc/<pid>/task/<tid>/limits */
+	lxpr_read_pid_loginuid,		/* /proc/<pid>/task/<tid>/loginuid */
 	lxpr_read_pid_maps,		/* /proc/<pid>/task/<tid>/maps	*/
 	lxpr_read_empty,		/* /proc/<pid>/task/<tid>/mem	*/
 	lxpr_read_pid_mountinfo,	/* /proc/<pid>/task/<tid>/mountinfo */
 	lxpr_read_pid_oom_scr_adj,	/* /proc/<pid>/task/<tid>/oom_scr_adj */
+	lxpr_read_pid_personality,	/* /proc/<pid>/task/<tid>/personality */
 	lxpr_read_invalid,		/* /proc/<pid>/task/<tid>/root	*/
 	lxpr_read_pid_tid_stat,		/* /proc/<pid>/task/<tid>/stat	*/
 	lxpr_read_pid_statm,		/* /proc/<pid>/task/<tid>/statm	*/
@@ -661,7 +761,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_cgroups,		/* /proc/cgroups	*/
 	lxpr_read_empty,		/* /proc/cmdline	*/
 	lxpr_read_cpuinfo,		/* /proc/cpuinfo	*/
-	lxpr_read_empty,		/* /proc/devices	*/
+	lxpr_read_devices,		/* /proc/devices	*/
 	lxpr_read_diskstats,		/* /proc/diskstats	*/
 	lxpr_read_empty,		/* /proc/dma		*/
 	lxpr_read_filesystems,		/* /proc/filesystems	*/
@@ -724,7 +824,15 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_invalid,		/* /proc/sys/net	*/
 	lxpr_read_invalid,		/* /proc/sys/net/core	*/
 	lxpr_read_sys_net_core_somaxc,	/* /proc/sys/net/core/somaxconn	*/
+	lxpr_read_invalid,		/* /proc/sys/net/ipv4	*/
+	lxpr_read_sys_net_ipv4_ip_lport_range, /* ../ipv4/ip_local_port_range */
+	lxpr_read_sys_net_ipv4_tcp_fin_to, /* .../ipv4/tcp_fin_timeout */
+	lxpr_read_sys_net_ipv4_tcp_ka_int, /* .../ipv4/tcp_keepalive_intvl */
+	lxpr_read_sys_net_ipv4_tcp_ka_tim, /* .../ipv4/tcp_keepalive_time */
+	lxpr_read_sys_net_ipv4_tcp_sack, /* .../ipv4/tcp_sack */
+	lxpr_read_sys_net_ipv4_tcp_winscale, /* .../ipv4/tcp_window_scaling */
 	lxpr_read_invalid,		/* /proc/sys/vm	*/
+	lxpr_read_sys_vm_max_map_cnt,	/* /proc/sys/vm/max_map_count */
 	lxpr_read_sys_vm_minfr_kb,	/* /proc/sys/vm/min_free_kbytes */
 	lxpr_read_sys_vm_nhpages,	/* /proc/sys/vm/nr_hugepages */
 	lxpr_read_sys_vm_overcommit_mem, /* /proc/sys/vm/overcommit_memory */
@@ -738,6 +846,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
  * Array of lookup functions, indexed by lx /proc file type.
  */
 static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
+	NULL,				/* invalid		*/
 	lxpr_lookup_procdir,		/* /proc		*/
 	lxpr_lookup_piddir,		/* /proc/<pid>		*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/auxv	*/
@@ -749,10 +858,12 @@ static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/environ	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/exe	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/limits	*/
+	lxpr_lookup_not_a_dir,		/* /proc/<pid>/loginuid	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/maps	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/mem	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/mountinfo */
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/oom_score_adj */
+	lxpr_lookup_not_a_dir,		/* /proc/<pid>/personality */
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/root	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/stat	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/statm	*/
@@ -770,10 +881,12 @@ static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/environ */
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/exe	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/limits */
+	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/loginuid */
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/maps	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/mem	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/mountinfo */
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/oom_scr_adj */
+	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/personality */
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/root	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/stat	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/task/<tid>/statm	*/
@@ -846,7 +959,15 @@ static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
 	lxpr_lookup_sys_netdir,		/* /proc/sys/net */
 	lxpr_lookup_sys_net_coredir,	/* /proc/sys/net/core */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/net/core/somaxconn */
+	lxpr_lookup_sys_net_ipv4dir,	/* /proc/sys/net/ipv4 */
+	lxpr_lookup_not_a_dir,		/* .../net/ipv4/ip_local_port_range */
+	lxpr_lookup_not_a_dir,		/* .../net/ipv4/tcp_fin_timeout */
+	lxpr_lookup_not_a_dir,		/* .../net/ipv4/tcp_keepalive_intvl */
+	lxpr_lookup_not_a_dir,		/* .../net/ipv4/tcp_keepalive_time */
+	lxpr_lookup_not_a_dir,		/* .../net/ipv4/tcp_sack */
+	lxpr_lookup_not_a_dir,		/* .../net/ipv4/tcp_window_scaling */
 	lxpr_lookup_sys_vmdir,		/* /proc/sys/vm */
+	lxpr_lookup_not_a_dir,		/* /proc/sys/vm/max_map_count */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/vm/min_free_kbytes */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/vm/nr_hugepages */
 	lxpr_lookup_not_a_dir,		/* /proc/sys/vm/overcommit_memory */
@@ -860,6 +981,7 @@ static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
  * Array of readdir functions, indexed by /proc file type.
  */
 static int (*lxpr_readdir_function[LXPR_NFILES])() = {
+	NULL,				/* invalid		*/
 	lxpr_readdir_procdir,		/* /proc		*/
 	lxpr_readdir_piddir,		/* /proc/<pid>		*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/auxv	*/
@@ -871,10 +993,12 @@ static int (*lxpr_readdir_function[LXPR_NFILES])() = {
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/environ	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/exe	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/limits	*/
+	lxpr_readdir_not_a_dir,		/* /proc/<pid>/loginuid	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/maps	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/mem	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/mountinfo */
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/oom_score_adj */
+	lxpr_readdir_not_a_dir,		/* /proc/<pid>/personality */
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/root	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/stat	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/statm	*/
@@ -892,10 +1016,12 @@ static int (*lxpr_readdir_function[LXPR_NFILES])() = {
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/environ */
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/exe	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/limits */
+	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/loginuid */
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/maps	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/mem	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/mountinfo */
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid/oom_scr_adj */
+	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid/personality */
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/root	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/stat	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/task/<tid>/statm	*/
@@ -968,7 +1094,15 @@ static int (*lxpr_readdir_function[LXPR_NFILES])() = {
 	lxpr_readdir_sys_netdir,	/* /proc/sys/net */
 	lxpr_readdir_sys_net_coredir,	/* /proc/sys/net/core */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/net/core/somaxconn */
+	lxpr_readdir_sys_net_ipv4dir,	/* /proc/sys/net/ipv4 */
+	lxpr_readdir_not_a_dir,		/* .../net/ipv4/ip_local_port_range */
+	lxpr_readdir_not_a_dir,		/* .../net/ipv4/tcp_fin_timeout */
+	lxpr_readdir_not_a_dir,		/* .../net/ipv4/tcp_keepalive_intvl */
+	lxpr_readdir_not_a_dir,		/* .../net/ipv4/tcp_keepalive_time */
+	lxpr_readdir_not_a_dir,		/* .../net/ipv4/tcp_sack */
+	lxpr_readdir_not_a_dir,		/* .../net/ipv4/tcp_window_scaling */
 	lxpr_readdir_sys_vmdir,		/* /proc/sys/vm */
+	lxpr_readdir_not_a_dir,		/* /proc/sys/vm/max_map_count */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/vm/min_free_kbytes */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/vm/nr_hugepages */
 	lxpr_readdir_not_a_dir,		/* /proc/sys/vm/overcommit_memory */
@@ -1401,12 +1535,40 @@ lxpr_read_pid_limits(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 }
 
 /*
+ * lxpr_read_pid_loginuid(): loginuid file
+ */
+static void
+lxpr_read_pid_loginuid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	proc_t *p;
+	lx_proc_data_t *pd;
+	uid_t lu = 0;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_PID_LOGINUID ||
+	    lxpnp->lxpr_type == LXPR_PID_TID_LOGINUID);
+
+	p = lxpr_lock(lxpnp->lxpr_pid, NO_ZOMB);
+	if (p == NULL) {
+		lxpr_uiobuf_seterr(uiobuf, ENXIO);
+		return;
+	}
+
+	if ((pd = ptolxproc(p)) != NULL) {
+		lu = pd->l_loginuid;
+	}
+	lxpr_unlock(p);
+
+	lxpr_uiobuf_printf(uiobuf, "%d", lu);
+}
+
+/*
  * lxpr_read_pid_maps(): memory map file
  */
 static void
 lxpr_read_pid_maps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
 	proc_t *p;
+	lx_proc_data_t *lxpd;
 	struct as *as;
 	struct seg *seg;
 	char *buf;
@@ -1418,6 +1580,7 @@ lxpr_read_pid_maps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		char prot[5];
 		uintptr_t offset;
 		vnode_t *vp;
+		char *name_override;
 		struct print_data *next;
 	} *print_head = NULL;
 	struct print_data **print_tail = &print_head;
@@ -1432,6 +1595,7 @@ lxpr_read_pid_maps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	}
 
 	as = p->p_as;
+	lxpd = ptolxproc(p);
 
 	if (as == &kas) {
 		lxpr_unlock(p);
@@ -1476,6 +1640,15 @@ lxpr_read_pid_maps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 		pbuf->offset = SEGOP_GETOFFSET(seg, (caddr_t)pbuf->saddr);
 
+		pbuf->name_override = NULL;
+		if (lxpd != NULL) {
+			if (pbuf->saddr == lxpd->l_vdso) {
+				pbuf->name_override = "[vdso]";
+			} else if (pbuf->saddr == p->p_user.u_commpagep) {
+				pbuf->name_override = "[vvar]";
+			}
+		}
+
 		pbuf->next = NULL;
 		*print_tail = pbuf;
 		print_tail = &pbuf->next;
@@ -1497,7 +1670,9 @@ lxpr_read_pid_maps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		ino_t inode = 0;
 
 		*buf = '\0';
-		if (pbuf->vp != NULL) {
+		if (pbuf->name_override != NULL) {
+			(void) strncpy(buf, pbuf->name_override, buflen);
+		} else if (pbuf->vp != NULL) {
 			vattr.va_mask = AT_FSID | AT_NODEID;
 			if (VOP_GETATTR(pbuf->vp, &vattr, 0, CRED(),
 			    NULL) == 0) {
@@ -1814,6 +1989,33 @@ lxpr_read_pid_oom_scr_adj(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "0\n");
 }
 
+/*
+ * lxpr_read_pid_personality(): read personality for process
+ */
+static void
+lxpr_read_pid_personality(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	proc_t *p;
+	lx_proc_data_t *lxpd;
+	unsigned int personality;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_PID_PERSONALITY);
+
+	p = lxpr_lock(lxpnp->lxpr_pid, ZOMB_OK);
+	if (p == NULL) {
+		lxpr_uiobuf_seterr(uiobuf, EINVAL);
+		return;
+	}
+	if ((lxpd = ptolxproc(p)) != NULL) {
+		personality = lxpd->l_personality;
+	} else {
+		/* Report native processes as having the SunOS personality */
+		personality = LX_PER_SUNOS;
+	}
+	lxpr_unlock(p);
+
+	lxpr_uiobuf_printf(uiobuf, "%08x\n", personality);
+}
 
 /*
  * lxpr_read_pid_statm(): memory status file
@@ -2152,6 +2354,21 @@ lxpr_read_pid_tid_status(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 }
 
 /*
+ * Same logic as the lx devfs lxd_pts_devt_translator.
+ */
+static dev_t
+lxpr_xlate_pts_dev(dev_t dev)
+{
+	minor_t min = getminor(dev);
+	int lx_maj, lx_min;
+
+	lx_maj = LX_PTS_MAJOR_MIN + (min / LX_MAXMIN);
+	lx_min = min % LX_MAXMIN;
+
+	return (LX_MAKEDEVICE(lx_maj, lx_min));
+}
+
+/*
  * pid/tid common code to read stat file
  */
 static void
@@ -2167,10 +2384,10 @@ lxpr_read_stat_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	dev_t psdev;
 	size_t rss, vsize;
 	int nice, pri, lwpcnt;
-	caddr_t wchan;
+	caddr_t wchan, stackbase;
 	processorid_t cpu;
 	pid_t real_pid;
-	clock_t utime, stime, cutime, cstime, ticks;
+	clock_t utime, stime, cutime, cstime, ticks, boottime;
 	char buf_comm[MAXCOMLEN + 1];
 	rlim64_t vmem_ctl;
 
@@ -2219,7 +2436,7 @@ lxpr_read_stat_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 		mutex_enter(&p->p_splock);
 		mutex_enter(&p->p_sessp->s_lock);
 		spid = p->p_sessp->s_sid;
-		psdev = p->p_sessp->s_dev;
+		psdev = lxpr_xlate_pts_dev(p->p_sessp->s_dev);
 		if (p->p_sessp->s_cred)
 			psgid = crgetgid(p->p_sessp->s_cred);
 		else
@@ -2229,8 +2446,21 @@ lxpr_read_stat_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 		mutex_exit(&p->p_splock);
 	}
 
+	if ((p->p_stat == SZOMB) || (p->p_flag & (SSYS | SEXITING)) ||
+	    (p->p_as == &kas)) {
+		stackbase = 0;
+	} else {
+		/* from prgetstackbase() */
+		stackbase = p->p_usrstack - p->p_stksize;
+	}
+
+	utime = stime = 0;
 	t = lxpr_get_thread(p, lookup_id);
 	if (t != NULL) {
+		klwp_t *lwp = ttolwp(t);
+		struct mstate *ms = &lwp->lwp_mstate;
+		hrtime_t utm, stm;
+
 		switch (t->t_state) {
 		case TS_SLEEP:
 			stat = 'S';
@@ -2256,7 +2486,19 @@ lxpr_read_stat_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 		pri = t->t_pri;
 		wchan = t->t_wchan;
 		cpu = t->t_cpu->cpu_id;
+
+		utm = ms->ms_acct[LMS_USER];
+		stm = ms->ms_acct[LMS_SYSTEM];
+
 		thread_unlock(t);
+
+		/* convert unscaled high-res time to nanoseconds */
+		scalehrtime(&utm);
+		scalehrtime(&stm);
+
+		/* Linux /proc expects these values in ticks */
+		utime = (clock_t)NSEC_TO_TICK(utm);
+		stime = (clock_t)NSEC_TO_TICK(stm);
 	} else {
 		if (lookup_id != 0) {
 			/* we can't find this specific thread */
@@ -2285,47 +2527,56 @@ lxpr_read_stat_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	}
 	mutex_enter(&p->p_lock);
 
-	utime = p->p_utime;
-	stime = p->p_stime;
+	if (lookup_id == 0) {
+		/* process */
+		utime = p->p_utime;
+		stime = p->p_stime;
+	} else {
+		/* tid: utime & stime for the thread set in block above */
+	}
 	cutime = p->p_cutime;
 	cstime = p->p_cstime;
 	lwpcnt = p->p_lwpcnt;
 	vmem_ctl = p->p_vmem_ctl;
 	strlcpy(buf_comm, p->p_user.u_comm, sizeof (buf_comm));
-	ticks = p->p_user.u_ticks;
+	ticks = p->p_user.u_ticks;	/* lbolt at process start */
+	/* adjust ticks to account for zone boot time */
+	boottime = LXPTOZ(lxpnp)->zone_zsched->p_user.u_ticks;
+	ticks -= boottime;
 	lxpr_unlock(p);
 
 	lxpr_uiobuf_printf(uiobuf,
-	    "%d (%s) %c %d %d %d %d %d "
-	    "%lu %lu %lu %lu %lu "
-	    "%lu %lu %ld %ld "
-	    "%d %d %d "
-	    "%lu "
-	    "%lu "
-	    "%lu %ld %llu "
-	    "%lu %lu %u "
-	    "%lu %lu "
-	    "%lu %lu %lu %lu "
-	    "%lu "
-	    "%lu %lu "
-	    "%d "
-	    "%d"
+	    "%d "					/* 1 */
+	    "(%s) %c %d %d %d %d %d "			/* 2-8 */
+	    "%lu %lu %lu %lu %lu "			/* 9-13 */
+	    "%lu %lu %ld %ld "				/* 14-17 */
+	    "%d %d %d "					/* 18-20 */
+	    "%lu "					/* 21 */
+	    "%lu "					/* 22 */
+	    "%lu %ld %llu "				/* 23-25 */
+	    "%lu %lu %llu "				/* 26-28 */
+	    "%lu %lu "					/* 29-30 */
+	    "%lu %lu %lu %lu "				/* 31-34 */
+	    "%lu "					/* 35 */
+	    "%lu %lu "					/* 36-37 */
+	    "%d "					/* 38 */
+	    "%d"					/* 39 */
 	    "\n",
-	    (lookup_id == 0) ? pid : lxpnp->lxpr_desc,
-	    buf_comm, stat, ppid, pgpid, spid, psdev, psgid,
+	    (lookup_id == 0) ? pid : lxpnp->lxpr_desc,	/* 1 */
+	    buf_comm, stat, ppid, pgpid, spid, psdev, psgid, /* 2-8 */
 	    0l, 0l, 0l, 0l, 0l, /* flags, minflt, cminflt, majflt, cmajflt */
-	    utime, stime, cutime, cstime,
-	    pri, nice, lwpcnt,
-	    0l, /* itrealvalue (time before next SIGALRM) */
-	    ticks,
-	    vsize, rss, vmem_ctl,
-	    0l, 0l, USRSTACK, /* startcode, endcode, startstack */
-	    0l, 0l, /* kstkesp, kstkeip */
-	    0l, 0l, 0l, 0l, /* signal, blocked, sigignore, sigcatch */
-	    wchan,
-	    0l, 0l, /* nswap, cnswap */
-	    0, /* exit_signal */
-	    cpu);
+	    utime, stime, cutime, cstime,		/* 14-17 */
+	    pri, nice, lwpcnt,				/* 18-20 */
+	    0l, /* itrealvalue (time before next SIGALRM) 21 */
+	    ticks,					/* 22 */
+	    vsize, rss, vmem_ctl,			/* 23-25 */
+	    0l, 0l, stackbase, /* startcode, endcode, startstack 26-28 */
+	    0l, 0l,				/* kstkesp, kstkeip 29-30 */
+	    0l, 0l, 0l, 0l, /* signal, blocked, sigignore, sigcatch 31-34 */
+	    wchan,					/* 35 */
+	    0l, 0l,					/* nswap,cnswap 36-37 */
+	    0,						/* exit_signal	38 */
+	    cpu						/* 39 */);
 }
 
 /*
@@ -3449,7 +3700,7 @@ lxpr_read_meminfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
 	zone_t *zone = LXPTOZ(lxpnp);
 	int global = zone == global_zone;
-	long total_mem, free_mem, total_swap, used_swap;
+	long total_mem, free_mem, total_swap;
 
 	ASSERT(lxpnp->lxpr_type == LXPR_MEMINFO);
 
@@ -3463,14 +3714,19 @@ lxpr_read_meminfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 	if (global || zone->zone_max_swap_ctl == UINT64_MAX) {
 		total_swap = k_anoninfo.ani_max * PAGESIZE;
-		used_swap = k_anoninfo.ani_phys_resv * PAGESIZE;
 	} else {
 		mutex_enter(&zone->zone_mem_lock);
 		total_swap = zone->zone_max_swap_ctl;
-		used_swap = zone->zone_max_swap;
 		mutex_exit(&zone->zone_mem_lock);
 	}
 
+	/*
+	 * SwapFree
+	 * On illumos we reserve swap up front, whereas on Linux they just
+	 * wing it and kill a random process if they run out of backing store
+	 * for virtual memory. Our swap reservation doesn't translate to that
+	 * model, so just inform the caller that no swap is being used.
+	 */
 	lxpr_uiobuf_printf(uiobuf,
 	    "MemTotal:  %8lu kB\n"
 	    "MemFree:   %8lu kB\n"
@@ -3499,7 +3755,7 @@ lxpr_read_meminfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	    btok(total_mem),				/* LowTotal */
 	    btok(free_mem),				/* LowFree */
 	    btok(total_swap),				/* SwapTotal */
-	    btok(total_swap - used_swap));		/* SwapFree */
+	    btok(total_swap));				/* SwapFree */
 }
 
 /*
@@ -3606,6 +3862,31 @@ lxpr_read_partitions(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		    0, vd->lxvd_name);
 		vd = list_next(lxzd->lxzd_vdisks, vd);
 	}
+}
+
+/*
+ * There aren't many actual devices inside a zone but we want to provide the
+ * major numbers for the pseudo devices that do exist, including  our pts/ptm
+ * device, as well as the zvol virtual disk device. We simply hardcode the
+ * emulated major numbers that are used elsewhere in the code and that match
+ * the expected Linux major numbers. See lx devfs where some of the major
+ * numbers have no defined constants.
+ */
+/* ARGSUSED */
+static void
+lxpr_read_devices(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_DEVICES);
+
+	lxpr_uiobuf_printf(uiobuf, "Character devices:\n");
+	lxpr_uiobuf_printf(uiobuf, "%3d /dev/tty\n", LX_TTY_MAJOR);
+	lxpr_uiobuf_printf(uiobuf, "%3d /dev/console\n", LX_TTY_MAJOR);
+	lxpr_uiobuf_printf(uiobuf, "%3d /dev/ptmx\n", LX_TTY_MAJOR);
+	lxpr_uiobuf_printf(uiobuf, "%3d ptm\n", LX_PTM_MAJOR);
+	lxpr_uiobuf_printf(uiobuf, "%3d pts\n", LX_PTS_MAJOR_MIN);
+
+	lxpr_uiobuf_printf(uiobuf, "\nBlock devices:\n");
+	lxpr_uiobuf_printf(uiobuf, "%3d zvol\n", LX_MAJOR_DISK);
 }
 
 /*
@@ -4010,7 +4291,8 @@ lxpr_read_stat(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  *
  * We don't support swap files or partitions, but some programs like to look
  * here just to check we have some swap on the system, so we lie and show
- * our entire swap cap as one swap partition.
+ * our entire swap cap as one swap partition. See lxpr_read_meminfo for an
+ * explanation on why we report 0 used swap.
  *
  * It is important to use formatting identical to the Linux implementation
  * so that consumers do not break. See swap_show() in mm/swapfile.c.
@@ -4022,11 +4304,15 @@ lxpr_read_swaps(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	zone_t *zone = curzone;
 	uint64_t totswap, usedswap;
 
-	mutex_enter(&zone->zone_mem_lock);
-	/* Uses units of 1 kb (2^10). */
-	totswap = zone->zone_max_swap_ctl >> 10;
-	usedswap = zone->zone_max_swap >> 10;
-	mutex_exit(&zone->zone_mem_lock);
+	if (zone == global_zone || zone->zone_max_swap_ctl == UINT64_MAX) {
+		totswap = (k_anoninfo.ani_max * PAGESIZE) >> 10;
+	} else {
+		mutex_enter(&zone->zone_mem_lock);
+		/* Uses units of 1 kb (2^10). */
+		totswap = zone->zone_max_swap_ctl >> 10;
+		mutex_exit(&zone->zone_mem_lock);
+	}
+	usedswap = 0;
 
 	lxpr_uiobuf_printf(uiobuf,
 	    "Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n");
@@ -4337,6 +4623,199 @@ lxpr_read_sys_net_core_somaxc(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	tcps = ns->netstack_tcp;
 	lxpr_uiobuf_printf(uiobuf, "%d\n", tcps->tcps_conn_req_max_q);
 	netstack_rele(ns);
+}
+
+/*
+ * ip_local_port_range
+ *
+ * The low & high port number range.
+ * integers; default: 32768 61000
+ *
+ * illumos: tcp_smallest_anon_port & tcp_largest_anon_port
+ * Not in tcp(7p) man page.
+ */
+static void
+lxpr_read_sys_net_ipv4_ip_lport_range(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	netstack_t *ns;
+	tcp_stack_t	*tcps;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_IP_LPORT_RANGE);
+
+	ns = netstack_get_current();
+	if (ns == NULL) {
+		lxpr_uiobuf_seterr(uiobuf, ENXIO);
+		return;
+	}
+
+	tcps = ns->netstack_tcp;
+	lxpr_uiobuf_printf(uiobuf, "%d\t%d\n",
+	    tcps->tcps_smallest_anon_port, tcps->tcps_largest_anon_port);
+	netstack_rele(ns);
+}
+
+/*
+ * tcp_fin_timeout
+ *
+ * This specifies how many seconds to wait for a final FIN packet before the
+ * socket is forcibly closed. This is strictly a violation of the TCP
+ * specification, but required to prevent denial-of-service attacks.
+ * integer; default: 60;
+ *
+ * illumos: tcp_fin_wait_2_flush_interval
+ * Not in tcp(7p) man page but see comment in uts/common/inet/tcp/tcp_input.c
+ * in the tcp_input_data() function on the use of tcp_fin_wait_2_flush_interval.
+ * The value is in milliseconds.
+ */
+static void
+lxpr_read_sys_net_ipv4_tcp_fin_to(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	netstack_t *ns;
+	tcp_stack_t	*tcps;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_FIN_TO);
+
+	ns = netstack_get_current();
+	if (ns == NULL) {
+		lxpr_uiobuf_seterr(uiobuf, ENXIO);
+		return;
+	}
+
+	tcps = ns->netstack_tcp;
+	lxpr_uiobuf_printf(uiobuf, "%d\n",
+	    tcps->tcps_fin_wait_2_flush_interval / 1000);
+	netstack_rele(ns);
+}
+
+/*
+ * tcp_keepalive_intvl
+ *
+ * The number of seconds between TCP keep-alive probes. default: 75
+ * Linux retries tcp_keepalive_probes (9) times before timing out.
+ *
+ * illumos:
+ * We have tcp_ka_rinterval but there is no corresponding tcps_* tunable for
+ * this. The closest is tcps_keepalive_abort_interval which specifies the
+ * time threshold for aborting a TCP connection in milliseconds. Linux retries
+ * 9 times (giving a total of 11.25 minutes) so we emulate this by dividing out
+ * tcps_keepalive_abort_interval by 9.
+ */
+static void
+lxpr_read_sys_net_ipv4_tcp_ka_int(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	netstack_t *ns;
+	tcp_stack_t	*tcps;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_KA_INT);
+
+	ns = netstack_get_current();
+	if (ns == NULL) {
+		lxpr_uiobuf_seterr(uiobuf, ENXIO);
+		return;
+	}
+
+	tcps = ns->netstack_tcp;
+	lxpr_uiobuf_printf(uiobuf, "%d\n",
+	    (tcps->tcps_keepalive_abort_interval / 1000) / 9);
+	netstack_rele(ns);
+}
+
+/*
+ * tcp_keepalive_time
+ *
+ * The number of seconds a connection needs to be idle before TCP begins
+ * sending out keep-alive probes. The default value is 7200 seconds (2 hours).
+ *
+ * illumos: tcp_keepalive_interval
+ * The interval for sending out the first probe in milliseconds. The default is
+ * two hours.
+ */
+static void
+lxpr_read_sys_net_ipv4_tcp_ka_tim(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	netstack_t *ns;
+	tcp_stack_t	*tcps;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_KA_TIM);
+
+	ns = netstack_get_current();
+	if (ns == NULL) {
+		lxpr_uiobuf_seterr(uiobuf, ENXIO);
+		return;
+	}
+
+	tcps = ns->netstack_tcp;
+	lxpr_uiobuf_printf(uiobuf, "%d\n",
+	    (tcps->tcps_keepalive_interval / 1000));
+	netstack_rele(ns);
+}
+
+/*
+ * tcp_sack
+ *
+ * Enable RFC 2018 TCP Selective Acknowledgements. Boolean, default: enabled
+ *
+ * illumos: tcp_sack_permitted
+ * tcp_sack_permitted 0 == disabled, 1 == no initiate but accept,
+ * 2 == initiate and accept. default is 2.
+ */
+static void
+lxpr_read_sys_net_ipv4_tcp_sack(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	netstack_t *ns;
+	tcp_stack_t	*tcps;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_SACK);
+
+	ns = netstack_get_current();
+	if (ns == NULL) {
+		lxpr_uiobuf_seterr(uiobuf, ENXIO);
+		return;
+	}
+
+	tcps = ns->netstack_tcp;
+	lxpr_uiobuf_printf(uiobuf, "%d\n",
+	    (tcps->tcps_sack_permitted  == 0 ? 0 : 1));
+	netstack_rele(ns);
+}
+
+/*
+ * tcp_window_scaling
+ *
+ * RFC 1323 TCP window scaling. This feature allows the use of a large window
+ * (> 64K) on a TCP connection. Boolean; default: enabled
+ *
+ * illumos: tcp_wscale_always
+ * tcp_wscale_always is set to 1, the window scale option will always be
+ * set when connecting to a remote system. If tcp_wscale_always is 0, the
+ * window scale option will be set only if the user has requested a send or
+ * receive window larger than 64K. The default value of is 1.
+ */
+static void
+lxpr_read_sys_net_ipv4_tcp_winscale(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	netstack_t *ns;
+	tcp_stack_t	*tcps;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_WINSCALE);
+
+	ns = netstack_get_current();
+	if (ns == NULL) {
+		lxpr_uiobuf_seterr(uiobuf, ENXIO);
+		return;
+	}
+
+	tcps = ns->netstack_tcp;
+	lxpr_uiobuf_printf(uiobuf, "%d\n", tcps->tcps_wscale_always);
+	netstack_rele(ns);
+}
+
+static void
+lxpr_read_sys_vm_max_map_cnt(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_VM_MAX_MAP_CNT);
+	/* We don't limit mappings, just say we have a large limit. */
+	lxpr_uiobuf_printf(uiobuf, "%d\n", 16777215);
 }
 
 static void
@@ -4792,23 +5271,9 @@ lxpr_access(vnode_t *vp, int mode, int flags, cred_t *cr, caller_context_t *ct)
 	int shift = 0;
 	proc_t *tp;
 
-	/* lx /proc is a read only file system */
-	if (mode & VWRITE) {
-		switch (type) {
-		case LXPR_PID_OOM_SCR_ADJ:
-		case LXPR_PID_TID_OOM_SCR_ADJ:
-		case LXPR_SYS_KERNEL_COREPATT:
-		case LXPR_SYS_KERNEL_SHMALL:
-		case LXPR_SYS_KERNEL_SHMMAX:
-		case LXPR_SYS_NET_CORE_SOMAXCON:
-		case LXPR_SYS_VM_OVERCOMMIT_MEM:
-		case LXPR_SYS_VM_SWAPPINESS:
-		case LXPR_PID_FD_FD:
-		case LXPR_PID_TID_FD_FD:
-			break;
-		default:
-			return (EROFS);
-		}
+	/* lx /proc is primarily a read only file system */
+	if ((mode & VWRITE) && !lxpr_is_writable(type)) {
+		return (EROFS);
 	}
 
 	/*
@@ -5218,6 +5683,14 @@ lxpr_lookup_sys_net_coredir(vnode_t *dp, char *comp)
 	ASSERT(VTOLXP(dp)->lxpr_type == LXPR_SYS_NET_COREDIR);
 	return (lxpr_lookup_common(dp, comp, NULL, sys_net_coredir,
 	    SYS_NET_COREDIRFILES));
+}
+
+static vnode_t *
+lxpr_lookup_sys_net_ipv4dir(vnode_t *dp, char *comp)
+{
+	ASSERT(VTOLXP(dp)->lxpr_type == LXPR_SYS_NET_IPV4DIR);
+	return (lxpr_lookup_common(dp, comp, NULL, sys_net_ipv4dir,
+	    SYS_NET_IPV4DIRFILES));
 }
 
 static vnode_t *
@@ -5936,6 +6409,14 @@ lxpr_readdir_sys_net_coredir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 }
 
 static int
+lxpr_readdir_sys_net_ipv4dir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4DIR);
+	return (lxpr_readdir_common(lxpnp, uiop, eofp, sys_net_ipv4dir,
+	    SYS_NET_IPV4DIRFILES));
+}
+
+static int
 lxpr_readdir_sys_vmdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 {
 	ASSERT(lxpnp->lxpr_type == LXPR_SYS_VMDIR);
@@ -5943,9 +6424,52 @@ lxpr_readdir_sys_vmdir(lxpr_node_t *lxpnp, uio_t *uiop, int *eofp)
 	    SYS_VMDIRFILES));
 }
 
+#define	isdigit(c)	((c) >= '0' && (c) <= '9')
+#define	isspace(c)	((c) == ' ' || (c) == '\t' || (c) == '\n')
+
+/*
+ * Obtain a numeric value from the null-terminated input string.
+ * We don't have strtok in the kernel, so tokenize this ourselves and
+ * validate the input.
+ */
 static int
-lxpr_write_sys_net_core_somaxc(lxpr_node_t *lxpnp, struct uio *uio,
-    struct cred *cr, caller_context_t *ct)
+lxpr_tokenize_num(char *str, long *pv, char **ep)
+{
+	char *pstart, *pc, c, *endptr;
+	long v;
+
+	for (pc = str; isspace(*pc); pc++)
+		;
+
+	for (pstart = pc; isdigit(*pc); pc++)
+		;
+	if (pc == pstart || (!isspace(*pc) && *pc != '\0'))
+		return (EINVAL);
+	c = *pc;
+	*pc = '\0';
+
+	if (ddi_strtol(pstart, &endptr, 10, &v) != 0) {
+		*pc = c;
+		return (EINVAL);
+	}
+	if (*endptr != '\0') {
+		*pc = c;
+		return (EINVAL);
+	}
+
+	if (pv != NULL)
+		*pv = v;
+	if (ep != NULL)
+		*ep = ++pc;
+
+	return (0);
+}
+
+/* ARGSUSED */
+static int
+lxpr_write_tcp_property(lxpr_node_t *lxpnp, struct uio *uio,
+    struct cred *cr, caller_context_t *ct, char *prop,
+    int (*xlate)(char *, int))
 {
 	int error;
 	int res = 0;
@@ -5954,8 +6478,6 @@ lxpr_write_sys_net_core_somaxc(lxpr_node_t *lxpnp, struct uio *uio,
 	netstack_t *ns;
 	mod_prop_info_t *ptbl = NULL;
 	mod_prop_info_t *pinfo = NULL;
-
-	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_CORE_SOMAXCON);
 
 	if (uio->uio_loffset != 0)
 		return (EINVAL);
@@ -5982,13 +6504,200 @@ lxpr_write_sys_net_core_somaxc(lxpr_node_t *lxpnp, struct uio *uio,
 	if (ns == NULL)
 		return (EINVAL);
 
+	if (xlate != NULL && xlate(val, sizeof (val)) != 0) {
+		netstack_rele(ns);
+		return (EINVAL);
+	}
+
 	ptbl = ns->netstack_tcp->tcps_propinfo_tbl;
-	pinfo = mod_prop_lookup(ptbl, "_conn_req_max_q", MOD_PROTO_TCP);
+	pinfo = mod_prop_lookup(ptbl, prop, MOD_PROTO_TCP);
 	if (pinfo == NULL || pinfo->mpi_setf(ns, cr, pinfo, NULL, val, 0) != 0)
 		res = EINVAL;
 
 	netstack_rele(ns);
 	return (res);
+}
+
+static int
+lxpr_write_sys_net_core_somaxc(lxpr_node_t *lxpnp, struct uio *uio,
+    struct cred *cr, caller_context_t *ct)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_CORE_SOMAXCON);
+	return (lxpr_write_tcp_property(lxpnp, uio, cr, ct,
+	    "_conn_req_max_q", NULL));
+}
+
+static int
+lxpr_xlate_sec2ms(char *val, int size)
+{
+	long sec;
+	char *ep;
+
+	if (lxpr_tokenize_num(val, &sec, &ep) != 0)
+		return (EINVAL);
+	if (*ep != '\0')
+		return (EINVAL);
+	if (snprintf(val, size, "%ld", sec * 1000) >= size)
+		return (EINVAL);
+	return (0);
+}
+
+static int
+lxpr_xlate_ka_intvl(char *val, int size)
+{
+	long sec;
+	char *ep;
+
+	if (lxpr_tokenize_num(val, &sec, &ep) != 0)
+		return (EINVAL);
+	if (*ep != '\0')
+		return (EINVAL);
+	if (snprintf(val, size, "%ld", sec * 1000 * 9) >= size)
+		return (EINVAL);
+	return (0);
+}
+
+static int
+lxpr_xlate_sack(char *val, int size)
+{
+	long flag;
+	char *ep;
+
+	if (lxpr_tokenize_num(val, &flag, &ep) != 0)
+		return (EINVAL);
+	if (*ep != '\0')
+		return (EINVAL);
+	if (flag != 0 && flag != 1)
+		return (EINVAL);
+	/* see comment on lxpr_read_sys_net_ipv4_tcp_sack */
+	if (snprintf(val, size, "%d", (flag == 0 ? 0 : 2)) >= size)
+		return (EINVAL);
+	return (0);
+}
+
+/*
+ * We expect two port numbers on a line as input for the range, and we have to
+ * set two properties on the netstack_tcp, so we can't reuse
+ * lxpr_write_tcp_property.
+ */
+static int
+lxpr_write_sys_net_ipv4_ip_lport_range(lxpr_node_t *lxpnp, struct uio *uio,
+    struct cred *cr, caller_context_t *ct)
+{
+	int res;
+	size_t olen;
+	char vals[32];	/* big enough for a line w/ 2 16-bit numeric strings */
+	char *ep;
+	long low, high;
+	netstack_t *ns;
+	tcp_stack_t *tcps;
+	mod_prop_info_t *ptbl = NULL;
+	mod_prop_info_t *pinfo = NULL;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_IP_LPORT_RANGE);
+
+	if (uio->uio_loffset != 0)
+		return (EINVAL);
+
+	if (uio->uio_resid == 0)
+		return (0);
+
+	olen = uio->uio_resid;
+	if (olen > sizeof (vals) - 1)
+		return (EINVAL);
+
+	bzero(vals, sizeof (vals));
+	res = uiomove(vals, olen, UIO_WRITE, uio);
+	if (res != 0)
+		return (res);
+
+	if (lxpr_tokenize_num(vals, &low, &ep) != 0)
+		return (EINVAL);
+
+	if (lxpr_tokenize_num(ep, &high, &ep) != 0)
+		return (EINVAL);
+
+	if (*ep != '\0') {
+		/* make sure no other tokens on the line */
+		*ep++ = '\0';
+		for (; isspace(*ep); ep++)
+			;
+		if (*ep != '\0')
+			return (EINVAL);
+	}
+
+	if (low > high || high > 65535)
+		return (EINVAL);
+
+	ns = netstack_get_current();
+	if (ns == NULL)
+		return (EINVAL);
+
+	tcps = ns->netstack_tcp;
+	if (low < tcps->tcps_smallest_nonpriv_port) {
+		netstack_rele(ns);
+		return (EINVAL);
+	}
+
+	ptbl = ns->netstack_tcp->tcps_propinfo_tbl;
+
+	(void) snprintf(vals, sizeof (vals), "%ld", low);
+	pinfo = mod_prop_lookup(ptbl, "smallest_anon_port", MOD_PROTO_TCP);
+	if (pinfo == NULL || pinfo->mpi_setf(ns, cr, pinfo, NULL, vals, 0) != 0)
+		res = EINVAL;
+
+	(void) snprintf(vals, sizeof (vals), "%ld", high);
+	pinfo = mod_prop_lookup(ptbl, "largest_anon_port", MOD_PROTO_TCP);
+	if (pinfo == NULL || pinfo->mpi_setf(ns, cr, pinfo, NULL, vals, 0) != 0)
+		res = EINVAL;
+
+	netstack_rele(ns);
+	return (res);
+}
+
+static int
+lxpr_write_sys_net_ipv4_tcp_fin_to(lxpr_node_t *lxpnp, struct uio *uio,
+    struct cred *cr, caller_context_t *ct)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_FIN_TO);
+	return (lxpr_write_tcp_property(lxpnp, uio, cr, ct,
+	    "_fin_wait_2_flush_interval", lxpr_xlate_sec2ms));
+}
+
+static int
+lxpr_write_sys_net_ipv4_tcp_ka_int(lxpr_node_t *lxpnp, struct uio *uio,
+    struct cred *cr, caller_context_t *ct)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_KA_INT);
+	return (lxpr_write_tcp_property(lxpnp, uio, cr, ct,
+	    "_keepalive_abort_interval", lxpr_xlate_ka_intvl));
+}
+
+static int
+lxpr_write_sys_net_ipv4_tcp_ka_tim(lxpr_node_t *lxpnp, struct uio *uio,
+    struct cred *cr, caller_context_t *ct)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_KA_TIM);
+	return (lxpr_write_tcp_property(lxpnp, uio, cr, ct,
+	    "_keepalive_interval", lxpr_xlate_sec2ms));
+}
+
+static int
+lxpr_write_sys_net_ipv4_tcp_sack(lxpr_node_t *lxpnp, struct uio *uio,
+    struct cred *cr, caller_context_t *ct)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_SACK);
+	return (lxpr_write_tcp_property(lxpnp, uio, cr, ct, "sack",
+	    lxpr_xlate_sack));
+}
+
+static int
+lxpr_write_sys_net_ipv4_tcp_winscale(lxpr_node_t *lxpnp, struct uio *uio,
+    struct cred *cr, caller_context_t *ct)
+{
+	ASSERT(lxpnp->lxpr_type == LXPR_SYS_NET_IPV4_TCP_WINSCALE);
+	return (lxpr_write_tcp_property(lxpnp, uio, cr, ct, "_wscale_always",
+	    NULL));
 }
 
 /* ARGSUSED */
@@ -6048,6 +6757,52 @@ lxpr_write_sys_kernel_corepatt(lxpr_node_t *lxpnp, struct uio *uio,
 
 	if (rp != NULL)
 		refstr_rele(rp);
+
+	return (0);
+}
+
+/* ARGSUSED */
+static int
+lxpr_write_pid_loginuid(lxpr_node_t *lxpnp, struct uio *uio, struct cred *cr,
+    caller_context_t *ct)
+{
+	int error;
+	size_t olen;
+	char val[16];	/* big enough for a uint numeric string */
+	char *ep;
+	long u;
+	proc_t *p;
+	lx_proc_data_t *pd;
+
+	ASSERT(lxpnp->lxpr_type == LXPR_PID_LOGINUID);
+
+	if (uio->uio_loffset != 0)
+		return (EINVAL);
+
+	if (uio->uio_resid == 0)
+		return (0);
+
+	olen = uio->uio_resid;
+	if (olen > sizeof (val) - 1)
+		return (EINVAL);
+
+	bzero(val, sizeof (val));
+	error = uiomove(val, olen, UIO_WRITE, uio);
+	if (error != 0)
+		return (error);
+
+	if (lxpr_tokenize_num(val, &u, &ep) != 0)
+		return (EINVAL);
+	if (*ep != '\0')
+		return (EINVAL);
+
+	if ((p = lxpr_lock(lxpnp->lxpr_pid, NO_ZOMB)) == NULL)
+		return (ENXIO);
+
+	if ((pd = ptolxproc(p)) != NULL) {
+		pd->l_loginuid = (uid_t)u;
+	}
+	lxpr_unlock(p);
 
 	return (0);
 }
@@ -6213,29 +6968,64 @@ lxpr_write(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
 {
 	lxpr_node_t	*lxpnp = VTOLXP(vp);
 	lxpr_nodetype_t	type = lxpnp->lxpr_type;
+	int i;
 
-	switch (type) {
-	case LXPR_SYS_KERNEL_COREPATT:
-		return (lxpr_write_sys_kernel_corepatt(lxpnp, uiop, cr, ct));
-	case LXPR_SYS_NET_CORE_SOMAXCON:
-		return (lxpr_write_sys_net_core_somaxc(lxpnp, uiop, cr, ct));
-
-	default:
-		/* pretend we wrote the whole thing */
-		uiop->uio_offset += uiop->uio_resid;
-		uiop->uio_resid = 0;
-		return (0);
+	for (i = 0; wr_tab[i].wft_type != LXPR_INVALID; i++) {
+		if (wr_tab[i].wft_type == type) {
+			if (wr_tab[i].wft_wrf != NULL) {
+				return (wr_tab[i].wft_wrf(lxpnp, uiop, cr, ct));
+			}
+			break;
+		}
 	}
+
+	/* pretend we wrote the whole thing */
+	uiop->uio_offset += uiop->uio_resid;
+	uiop->uio_resid = 0;
+	return (0);
+}
+
+/* Needed for writable files which are first "truncated" */
+static int
+lxpr_space(vnode_t *vp, int cmd, flock64_t *bfp, int flag, offset_t offset,
+    cred_t *cred, caller_context_t *ct)
+{
+	int error;
+
+	if (cmd != F_FREESP)
+		return (EINVAL);
+	if ((error = lxpr_access(vp, VWRITE, 0, cred, ct)) != 0)
+		return (error);
+
+	return (0);
 }
 
 /*
- * We need to allow open with O_CREAT for the oom_score_adj file.
+ * Needed for writable files which are first "truncated". We only support
+ * truncation.
+ */
+static int
+lxpr_setattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
+    caller_context_t *ct)
+{
+	int error;
+
+	if (vap->va_mask != AT_SIZE)
+		return (EINVAL);
+	if ((error = lxpr_access(vp, VWRITE, 0, cr, ct)) != 0)
+		return (error);
+
+	return (0);
+}
+
+/*
+ * We need to allow open with O_CREAT for the writable files.
  */
 /*ARGSUSED7*/
 static int
-lxpr_create(struct vnode *dvp, char *nm, struct vattr *vap,
-    enum vcexcl exclusive, int mode, struct vnode **vpp, struct cred *cred,
-    int flag, caller_context_t *ct, vsecattr_t *vsecp)
+lxpr_create(vnode_t *dvp, char *nm, vattr_t *vap, enum vcexcl exclusive,
+    int mode, vnode_t **vpp, cred_t *cr, int flag, caller_context_t *ct,
+    vsecattr_t *vsecp)
 {
 	lxpr_node_t *lxpnp = VTOLXP(dvp);
 	lxpr_nodetype_t type = lxpnp->lxpr_type;
@@ -6247,7 +7037,7 @@ lxpr_create(struct vnode *dvp, char *nm, struct vattr *vap,
 	/*
 	 * restrict create permission to owner or root
 	 */
-	if ((error = lxpr_access(dvp, VEXEC, 0, cred, ct)) != 0) {
+	if ((error = lxpr_access(dvp, VEXEC, 0, cr, ct)) != 0) {
 		return (error);
 	}
 
@@ -6261,73 +7051,23 @@ lxpr_create(struct vnode *dvp, char *nm, struct vattr *vap,
 		return (EEXIST);
 
 	/*
-	 * We're currently restricting O_CREAT to:
-	 * - /proc/<pid>/fd/<num>
-	 * - /proc/<pid>/oom_score_adj
-	 * - /proc/<pid>/task/<tid>/fd/<num>
-	 * - /proc/<pid>/task/<tid>/oom_score_adj
-	 * - /proc/sys/kernel/core_pattern
-	 * - /proc/sys/kernel/shmall
-	 * - /proc/sys/kernel/shmmax
-	 * - /proc/sys/net/core/somaxconn
-	 * - /proc/sys/vm/overcommit_memory
-	 * - /proc/sys/vm/swappiness
+	 * No writable files in top-level proc dir. We check this to avoid
+	 * getting a non-proc node via "..".
 	 */
-	switch (type) {
-	case LXPR_PIDDIR:
-	case LXPR_PID_TASK_IDDIR:
-		if (strcmp(nm, "oom_score_adj") == 0) {
-			proc_t *p;
-			p = lxpr_lock(lxpnp->lxpr_pid, ZOMB_OK);
-			if (p != NULL) {
-				vp = lxpr_lookup_common(dvp, nm, p, piddir,
-				    PIDDIRFILES);
-			}
-			lxpr_unlock(p);
+	if (type != LXPR_PROCDIR &&
+	    lxpr_lookup(dvp, nm, &vp, NULL, 0, NULL, cr, ct, NULL, NULL) == 0) {
+		lxpr_nodetype_t ftype = VTOLXP(vp)->lxpr_type;
+		if (!lxpr_is_writable(ftype)) {
+			VN_RELE(vp);
+			vp = NULL;
 		}
-		break;
-
-	case LXPR_SYS_NET_COREDIR:
-		if (strcmp(nm, "somaxconn") == 0) {
-			vp = lxpr_lookup_common(dvp, nm, NULL, sys_net_coredir,
-			    SYS_NET_COREDIRFILES);
-		}
-		break;
-
-	case LXPR_SYS_KERNELDIR:
-		if (strcmp(nm, "core_pattern") == 0 ||
-		    strcmp(nm, "shmall") == 0 ||
-		    strcmp(nm, "shmmax") == 0) {
-			vp = lxpr_lookup_common(dvp, nm, NULL, sys_kerneldir,
-			    SYS_KERNELDIRFILES);
-		}
-		break;
-
-	case LXPR_SYS_VMDIR:
-		if (strcmp(nm, "overcommit_memory") == 0 ||
-		    strcmp(nm, "swappiness") == 0) {
-			vp = lxpr_lookup_common(dvp, nm, NULL, sys_vmdir,
-			    SYS_VMDIRFILES);
-		}
-		break;
-
-	case LXPR_PID_FDDIR:
-	case LXPR_PID_TID_FDDIR:
-		vp = lxpr_lookup_fdnode(dvp, nm);
-		break;
-
-	default:
-		vp = NULL;
-		break;
 	}
 
 	if (vp != NULL) {
-		/* Creating an existing file, allow it for regular files. */
-		if (vp->v_type == VDIR)
-			return (EISDIR);
+		ASSERT(vp->v_type != VDIR);
 
 		/* confirm permissions against existing file */
-		if ((error = lxpr_access(vp, mode, 0, cred, ct)) != 0) {
+		if ((error = lxpr_access(vp, mode, 0, cr, ct)) != 0) {
 			VN_RELE(vp);
 			return (error);
 		}

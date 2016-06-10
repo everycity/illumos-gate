@@ -22,7 +22,7 @@
 #
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-# Copyright 2015 Joyent, Inc.
+# Copyright 2016 Joyent, Inc.
 #
 
 default: all
@@ -32,8 +32,8 @@ include Makefile.lx
 # Build everything in parallel; use .WAIT for dependencies
 .PARALLEL:
 
-SUBDIRS=	cmd librtld_db lx_support lx_init lx_brand netfiles \
-		zone lx_vdso cgrpmgr testing .WAIT
+SUBDIRS=	librtld_db lx_support lx_init lx_brand netfiles \
+		zone lx_vdso testing .WAIT
 MSGSUBDIRS=	lx_brand lx_support zone
 
 all :=		TARGET= all

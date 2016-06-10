@@ -198,6 +198,7 @@ lxpr_lock(pid_t pid, zombok_t zombie_ok)
 	proc_t *p;
 	kmutex_t *mp;
 	pid_t find_pid;
+	uint_t flags;
 
 	ASSERT(!MUTEX_HELD(&pidlock));
 
@@ -241,8 +242,21 @@ lxpr_lock(pid_t pid, zombok_t zombie_ok)
 			return (NULL);
 		}
 
-		if (!(p->p_proc_flag & P_PR_LOCK))
+		flags = p->p_proc_flag & (P_PR_LOCK | P_PR_EXEC);
+		if (flags == 0) {
 			break;
+		} else if (flags == P_PR_EXEC && p == curproc) {
+			/*
+			 * Forward progress with (only) the PR_EXEC flag is
+			 * safe if a process is accessing resources in its own
+			 * piddir.  Executing its own /proc/<pid>/exe symlink
+			 * is one potential example.
+			 *
+			 * For all other processes, it is necessary to wait
+			 * until the exec is completed.
+			 */
+			break;
+		}
 
 		cv_wait(&pr_pid_cv[p->p_slot], mp);
 		mutex_exit(mp);
@@ -417,6 +431,15 @@ lxpr_getnode(vnode_t *dp, lxpr_nodetype_t type, proc_t *p, int desc)
 	/*
 	 * Do node specific stuff
 	 */
+	if (lxpr_is_writable(type)) {
+		/* These two have different modes; handled later. */
+		if (type != LXPR_PID_FD_FD && type != LXPR_PID_TID_FD_FD) {
+			vp->v_type = VREG;
+			lxpnp->lxpr_mode = 0644;
+			return (lxpnp);
+		}
+	}
+
 	switch (type) {
 	case LXPR_PROCDIR:
 		vp->v_flag |= VROOT;
@@ -494,6 +517,7 @@ lxpr_getnode(vnode_t *dp, lxpr_nodetype_t type, proc_t *p, int desc)
 		break;
 
 	case LXPR_PID_FD_FD:
+	case LXPR_PID_TID_FD_FD:
 		ASSERT(p != NULL);
 		/* lxpr_realvp is set after we return */
 		lxpnp->lxpr_mode = 0700;	/* read-write-exe owner only */
@@ -521,6 +545,7 @@ lxpr_getnode(vnode_t *dp, lxpr_nodetype_t type, proc_t *p, int desc)
 	case LXPR_SYS_KERNEL_RANDDIR:
 	case LXPR_SYS_NETDIR:
 	case LXPR_SYS_NET_COREDIR:
+	case LXPR_SYS_NET_IPV4DIR:
 	case LXPR_SYS_VMDIR:
 		vp->v_type = VDIR;
 		lxpnp->lxpr_mode = 0555;	/* read-search by all */
@@ -533,18 +558,6 @@ lxpr_getnode(vnode_t *dp, lxpr_nodetype_t type, proc_t *p, int desc)
 	case LXPR_KCORE:
 		vp->v_type = VREG;
 		lxpnp->lxpr_mode = 0400;	/* read-only by owner only */
-		break;
-
-	case LXPR_PID_OOM_SCR_ADJ:
-	case LXPR_PID_TID_OOM_SCR_ADJ:
-	case LXPR_SYS_KERNEL_COREPATT:
-	case LXPR_SYS_KERNEL_SHMALL:
-	case LXPR_SYS_KERNEL_SHMMAX:
-	case LXPR_SYS_NET_CORE_SOMAXCON:
-	case LXPR_SYS_VM_OVERCOMMIT_MEM:
-	case LXPR_SYS_VM_SWAPPINESS:
-		vp->v_type = VREG;
-		lxpnp->lxpr_mode = 0644;
 		break;
 
 	default:

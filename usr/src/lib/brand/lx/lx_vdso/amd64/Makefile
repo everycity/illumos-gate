@@ -10,13 +10,18 @@
 #
 
 #
-# Copyright 2014 Joyent, Inc.  All rights reserved.
+# Copyright 2016 Joyent, Inc.
 #
 
 ISASRCDIR=.
+TARGET_ARCH=$(MACH64)
 
 include ../Makefile.com
 include $(SRC)/lib/Makefile.lib.64
+
+ASFLAGS += -D__$(MACH64)
+
+SONAME = linux-vdso.so.1
 
 #
 # You might ask, why aren't we overriding BUILD.SO in Makefile.com.

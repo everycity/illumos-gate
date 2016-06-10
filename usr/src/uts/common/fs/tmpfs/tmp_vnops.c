@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2016, Joyent, Inc.
  * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
@@ -794,8 +794,13 @@ tmp_setattr(
 		rw_exit(&tp->tn_contents);
 		rw_exit(&tp->tn_rwlock);
 
-		if (error == 0 && vap->va_size == 0)
-			vnevent_truncate(vp, ct);
+		if (error == 0) {
+			if (vap->va_size == 0) {
+				vnevent_truncate(vp, ct);
+			} else {
+				vnevent_resize(vp, ct);
+			}
+		}
 
 		goto out1;
 	}
@@ -1195,7 +1200,7 @@ tmp_rename(
 	struct tmpnode *fromparent;
 	struct tmpnode *toparent;
 	struct tmpnode *fromtp = NULL;	/* source tmpnode */
-	struct tmpnode *totp = NULL;	/* target tmpnode */
+	struct tmpnode *totp;		/* target tmpnode */
 	struct tmount *tm = (struct tmount *)VTOTM(odvp);
 	int error;
 	int samedir = 0;	/* set if odvp == ndvp */
@@ -1254,13 +1259,17 @@ tmp_rename(
 			goto done;
 	}
 
-	if (tdirlookup(toparent, nnm, &totp, cred) == 0)
+	if (tdirlookup(toparent, nnm, &totp, cred) == 0) {
 		vnevent_pre_rename_dest(TNTOV(totp), ndvp, nnm, ct);
+		tmpnode_rele(totp);
+	}
 
 	/* Notify the target dir. if not the same as the source dir. */
 	if (ndvp != odvp) {
 		vnevent_pre_rename_dest_dir(ndvp, TNTOV(fromtp), nnm, ct);
 	}
+
+	vnevent_pre_rename_src(TNTOV(fromtp), odvp, onm, ct);
 
 	/*
 	 * Link source to new target
@@ -1281,8 +1290,6 @@ tmp_rename(
 			error = 0;
 		goto done;
 	}
-
-	vnevent_pre_rename_src(TNTOV(fromtp), odvp, onm, ct);
 
 	/*
 	 * Unlink from source.
@@ -1308,14 +1315,14 @@ tmp_rename(
 
 	if (error == 0) {
 		vnevent_rename_src(TNTOV(fromtp), odvp, onm, ct);
-		/* vnevent_rename_dest event emitted in tdirenter(). */
+		/*
+		 * vnevent_rename_dest is called in tdirenter().
+		 */
 		vnevent_rename_dest_dir(ndvp, TNTOV(fromtp), nnm, ct);
 	}
 
 done:
 	tmpnode_rele(fromtp);
-	if (totp != NULL)
-		tmpnode_rele(totp);
 	mutex_exit(&tm->tm_renamelck);
 
 	TRACE_5(TR_FAC_TMPFS, TR_TMPFS_RENAME,
@@ -2381,8 +2388,13 @@ tmp_space(
 			return (EFBIG);
 		error = tmp_freesp(vp, bfp, flag);
 
-		if (error == 0 && bfp->l_start == 0)
-			vnevent_truncate(vp, ct);
+		if (error == 0) {
+			if (bfp->l_start == 0) {
+				vnevent_truncate(vp, ct);
+			} else {
+				vnevent_resize(vp, ct);
+			}
+		}
 	}
 	return (error);
 }

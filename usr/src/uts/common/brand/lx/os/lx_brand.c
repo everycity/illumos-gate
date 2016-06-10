@@ -149,6 +149,7 @@
 #include <sys/lx_misc.h>
 #include <sys/lx_futex.h>
 #include <sys/lx_brand.h>
+#include <sys/lx_types.h>
 #include <sys/param.h>
 #include <sys/termios.h>
 #include <sys/sunddi.h>
@@ -212,8 +213,6 @@ static int lx_systrace_enabled;
 /*
  * cgroup file system maintenance functions which are set when cgroups loads.
  */
-void (*lx_cgrp_forklwp)(vfs_t *, uint_t, pid_t);
-void (*lx_cgrp_proc_exit)(vfs_t *, uint_t, pid_t);
 void (*lx_cgrp_initlwp)(vfs_t *, uint_t, id_t, pid_t);
 void (*lx_cgrp_freelwp)(vfs_t *, uint_t, id_t, pid_t);
 
@@ -225,12 +224,6 @@ void (*lx_cgrp_freelwp)(vfs_t *, uint_t, id_t, pid_t);
 #define	LX_MAXSTACK64	0x7ffffff00000
 
 uint64_t lx_maxstack64 = LX_MAXSTACK64;
-
-/*
- * Certain Linux tools care deeply about major/minor number mapping.
- * Map virtual disks (zfs datasets, zvols, etc) into a safe reserved range.
- */
-#define	LX_MAJOR_DISK	203
 
 static int lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
     struct intpdata *idata, int level, long *execsz, int setid,
@@ -300,10 +293,11 @@ struct brand_ops lx_brops = {
 	lx_sendsig,			/* b_sendsig */
 	lx_setid_clear,			/* b_setid_clear */
 #if defined(_LP64)
-	lx_pagefault			/* b_pagefault */
+	lx_pagefault,			/* b_pagefault */
 #else
-	NULL
+	NULL,
 #endif
+	B_FALSE				/* b_intp_parse_arg */
 };
 
 struct brand_mach_ops lx_mops = {
@@ -337,23 +331,6 @@ lx_proc_exit(proc_t *p)
 {
 	lx_proc_data_t *lxpd;
 	proc_t *cp;
-	lx_zone_data_t *lxzdata;
-	vfs_t *cgrp;
-
-	/* cgroup integration */
-	lxzdata = ztolxzd(p->p_zone);
-	mutex_enter(&lxzdata->lxzd_lock);
-	cgrp = lxzdata->lxzd_cgroup;
-	if (cgrp != NULL) {
-		VFS_HOLD(cgrp);
-		mutex_exit(&lxzdata->lxzd_lock);
-		lx_lwp_data_t *lwpd = lwptolxlwp(ttolwp(curthread));
-		ASSERT(lx_cgrp_proc_exit != NULL);
-		(*lx_cgrp_proc_exit)(cgrp, lwpd->br_cgroupid, p->p_pid);
-		VFS_RELE(cgrp);
-	} else {
-		mutex_exit(&lxzdata->lxzd_lock);
-	}
 
 	mutex_enter(&p->p_lock);
 	VERIFY(lxpd = ptolxproc(p));
@@ -1381,7 +1358,6 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 			led32.ed_entry = (int)pd->l_elf_data.ed_entry;
 			led32.ed_base = (int)pd->l_elf_data.ed_base;
 			led32.ed_ldentry = (int)pd->l_elf_data.ed_ldentry;
-			led32.ed_vdso = 0;
 			mutex_exit(&p->p_lock);
 
 			if (copyout(&led32, (void *)arg1,
@@ -1815,28 +1791,14 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		return (0);
 	}
 
-	case B_NOTIFY_VDSO_LOC: {
-#if defined(_LP64)
-		if (get_udatamodel() == DATAMODEL_NATIVE) {
-			int i;
+	case B_GET_PERSONALITY: {
+		unsigned int result;
 
-			mutex_enter(&p->p_lock);
-			pd = ptolxproc(p);
-			pd->l_elf_data.ed_vdso = arg1;
-			/* overwrite the auxv data too */
-			for (i = 0; i < __KERN_NAUXV_IMPL; i++) {
-				if (p->p_user.u_auxv[i].a_type ==
-				    AT_SUN_BRAND_LX_SYSINFO_EHDR) {
-					p->p_user.u_auxv[i].a_un.a_val = arg1;
-					break;
-				}
-			}
-			mutex_exit(&p->p_lock);
-			return (0);
-		}
-#endif /* defined(_LP64) */
-		/* This is not valid for 32bit processes */
-		return (EINVAL);
+		mutex_enter(&p->p_lock);
+		pd = ptolxproc(p);
+		result = pd->l_personality;
+		mutex_exit(&p->p_lock);
+		return (result);
 	}
 
 	}
@@ -1980,6 +1942,63 @@ extern int elfexec(vnode_t *, execa_t *, uarg_t *, intpdata_t *, int,
 extern int elf32exec(struct vnode *, execa_t *, uarg_t *, intpdata_t *, int,
     long *, int, caddr_t, cred_t *, int *);
 
+static uintptr_t
+lx_map_vdso(struct uarg *args, struct cred *cred)
+{
+	int err;
+	char *fpath = LX_VDSO_PATH;
+	vnode_t *vp;
+	vattr_t attr;
+	caddr_t addr;
+
+#if defined(_LP64)
+	if (args->to_model != DATAMODEL_NATIVE) {
+		fpath = LX_VDSO_PATH32;
+	}
+#endif
+
+	/*
+	 * The comm page should have been mapped in already.
+	 */
+	if (args->commpage == NULL) {
+		return (NULL);
+	}
+
+	/*
+	 * Ensure the VDSO library is present and appropriately sized.
+	 * This lookup is started at the zone root to avoid complications for
+	 * processes which have chrooted.  For the specified lookup root to be
+	 * used, the leading slash must be dropped from the path.
+	 */
+	ASSERT(fpath[0] == '/');
+	fpath++;
+	if (lookupnameat(fpath, UIO_SYSSPACE, FOLLOW, NULLVPP, &vp,
+	    curzone->zone_rootvp) != 0) {
+		return (NULL);
+	}
+
+	/*
+	 * The VDSO requires data exposed via the comm page in order to
+	 * function properly.  The VDSO is always mapped in at a fixed known
+	 * offset from the comm page, providing an easy means to locate it.
+	 */
+	addr = (caddr_t)(args->commpage - LX_VDSO_SIZE);
+	attr.va_mask = AT_SIZE;
+	if (VOP_GETATTR(vp, &attr, 0, cred, NULL) != 0 ||
+	    attr.va_size > LX_VDSO_SIZE) {
+		VN_RELE(vp);
+		return (NULL);
+	}
+
+	err = execmap(vp, addr, attr.va_size, 0, 0,
+	    PROT_USER|PROT_READ|PROT_EXEC, 1, 0);
+	VN_RELE(vp);
+	if (err != 0) {
+		return (NULL);
+	}
+	return ((uintptr_t)addr);
+}
+
 /*
  * Exec routine called by elfexec() to load either 32-bit or 64-bit Linux
  * binaries.
@@ -1989,25 +2008,26 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
     struct intpdata *idata, int level, long *execsz, int setid,
     caddr_t exec_file, struct cred *cred, int *brand_action)
 {
-	int		error;
+	int		error, i;
 	vnode_t		*nvp;
 	Ehdr		ehdr;
 	Addr		uphdr_vaddr;
 	intptr_t	voffset;
 	char		*interp = NULL;
 	uintptr_t	ldaddr = NULL;
-	int		i;
 	proc_t		*p = ttoproc(curthread);
 	klwp_t		*lwp = ttolwp(curthread);
-	struct execenv	env;
-	struct execenv	origenv;
+	lx_proc_data_t	*lxpd = ptolxproc(p);
+	struct execenv	env, origenv;
 	stack_t		orig_sigaltstack;
 	struct user	*up = PTOU(ttoproc(curthread));
 	lx_elf_data_t	edp;
-	char		*lib_path = NULL;
+	char		*lib_path = LX_LIB_PATH;
+	boolean_t	execstk = B_TRUE;
+	unsigned int	personality;
 
-	ASSERT(ttoproc(curthread)->p_brand == &lx_brand);
-	ASSERT(ttoproc(curthread)->p_brand_data != NULL);
+	ASSERT(p->p_brand == &lx_brand);
+	ASSERT(lxpd != NULL);
 
 	/*
 	 * Start with a separate struct for ELF data instead of inheriting
@@ -2017,11 +2037,8 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	 */
 	bzero(&edp, sizeof (edp));
 
-	if (args->to_model == DATAMODEL_NATIVE) {
-		lib_path = LX_LIB_PATH;
-	}
 #if defined(_LP64)
-	else {
+	if (args->to_model != DATAMODEL_NATIVE) {
 		lib_path = LX_LIB_PATH32;
 	}
 #endif
@@ -2048,6 +2065,82 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	 */
 	args->maxstack = lx_maxstack64;
 #endif
+
+	/*
+	 * Search the binary for a PT_GNU_STACK header.  The PF_X bit contained
+	 * within is used to dictate protection defaults for the stack, among
+	 * other things.
+	 */
+	if (args->to_model == DATAMODEL_NATIVE) {
+		Ehdr ehdr;
+		Phdr *phdrp;
+		caddr_t phdrbase = NULL;
+		ssize_t phdrsize = 0;
+		int nphdrs, hsize;
+
+		if ((error = elfreadhdr(vp, cred, &ehdr, &nphdrs, &phdrbase,
+		    &phdrsize)) != 0) {
+			return (error);
+		}
+
+		hsize = ehdr.e_phentsize;
+		phdrp = (Phdr *)phdrbase;
+		for (i = nphdrs; i > 0; i--) {
+			switch (phdrp->p_type) {
+			case PT_GNU_STACK:
+				if ((phdrp->p_flags & PF_X) == 0) {
+					execstk = B_FALSE;
+				}
+				break;
+			}
+			phdrp = (Phdr *)((caddr_t)phdrp + hsize);
+		}
+		kmem_free(phdrbase, phdrsize);
+	}
+#if defined(_LP64)
+	else {
+		Elf32_Ehdr ehdr;
+		Elf32_Phdr *phdrp;
+		caddr_t phdrbase = NULL;
+		ssize_t phdrsize = 0;
+		int nphdrs, hsize;
+
+		if ((error = elf32readhdr(vp, cred, &ehdr, &nphdrs, &phdrbase,
+		    &phdrsize)) != 0) {
+			return (error);
+		}
+
+		hsize = ehdr.e_phentsize;
+		phdrp = (Elf32_Phdr *)phdrbase;
+		for (i = nphdrs; i > 0; i--) {
+			switch (phdrp->p_type) {
+			case PT_GNU_STACK:
+				if ((phdrp->p_flags & PF_X) == 0) {
+					execstk = B_FALSE;
+				}
+				break;
+			}
+			phdrp = (Elf32_Phdr *)((caddr_t)phdrp + hsize);
+		}
+		kmem_free(phdrbase, phdrsize);
+	}
+#endif
+
+	/*
+	 * Revert the base personality while maintaining any existing flags.
+	 */
+	personality = LX_PER_LINUX | (lxpd->l_personality & ~LX_PER_MASK);
+
+	/*
+	 * Linux defaults to an executable stack unless the aformentioned
+	 * PT_GNU_STACK entry in the elf header dictates otherwise.  Enabling
+	 * the READ_IMPLIES_EXEC personality flag is also implied in this case.
+	 */
+	if (execstk) {
+		args->stk_prot |= PROT_EXEC;
+		args->stk_prot_override = B_TRUE;
+		personality |= LX_PER_READ_IMPLIES_EXEC;
+	}
 
 	/*
 	 * We will first exec the brand library, then map in the linux
@@ -2097,6 +2190,12 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	 * The u_auxv vectors are now setup by elfexec to point to the
 	 * brand emulation library and its linker.
 	 */
+
+	/*
+	 * After execing the brand library (which should have implicitly mapped
+	 * in the comm page), map the VDSO into the approprate place in the AS.
+	 */
+	lxpd->l_vdso = lx_map_vdso(args, cred);
 
 	bzero(&env, sizeof (env));
 
@@ -2286,11 +2385,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 		phdr_auxv[0].a_un.a_val = edp.ed_phdr;
 		phdr_auxv[1].a_un.a_val = ldaddr;
 		phdr_auxv[2].a_un.a_val = hz;
-		/*
-		 * The userspace brand library will map in the vDSO and notify
-		 * the kernel of its location during lx_init.
-		 */
-		phdr_auxv[3].a_un.a_val = 1;
+		phdr_auxv[3].a_un.a_val = lxpd->l_vdso;
 
 		if (copyout(&phdr_auxv, args->auxp_brand,
 		    sizeof (phdr_auxv)) == -1)
@@ -2307,11 +2402,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 		phdr_auxv32[0].a_un.a_val = edp.ed_phdr;
 		phdr_auxv32[1].a_un.a_val = ldaddr;
 		phdr_auxv32[2].a_un.a_val = hz;
-		/*
-		 * Unused on i386 due to lack of vDSO.
-		 * It will be cleaned up during lx_init.
-		 */
-		phdr_auxv32[3].a_un.a_val = 0;
+		phdr_auxv32[3].a_un.a_val = lxpd->l_vdso;
 
 		if (copyout(&phdr_auxv32, args->auxp_brand,
 		    sizeof (phdr_auxv32)) == -1)
@@ -2358,9 +2449,11 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 	}
 
 	/*
-	 * Record the brand ELF data now that the exec is a success.
+	 * Record the brand ELF data and new personality now that the exec has
+	 * proceeded successfully.
 	 */
-	bcopy(&edp, &ttolxproc(curthread)->l_elf_data, sizeof (edp));
+	bcopy(&edp, &lxpd->l_elf_data, sizeof (edp));
+	lxpd->l_personality = personality;
 
 	return (0);
 }

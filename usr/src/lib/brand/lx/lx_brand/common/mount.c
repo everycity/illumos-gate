@@ -226,11 +226,13 @@ i_lx_opt_verify(char *opts, mount_opt_t *mop)
 			} else if (mop[i].mo_type == MOUNT_OPT_BYTESIZE) {
 				int j;
 				int stage = 0;
+				int suffix;
 
 				/*
 				 * Verify that the value is an unsigned integer
-				 * that ends in a magnitude suffix (i.e. 'k'
-				 * or 'm') or a '%' character.
+				 * that ends in a magnitude suffix (i.e. case
+				 * insensitive 'k' 'm' or 'g') or a '%'
+				 * character.
 				 */
 				for (j = 0; j < ovalue_len; j++) {
 					switch (stage) {
@@ -256,9 +258,11 @@ i_lx_opt_verify(char *opts, mount_opt_t *mop)
 						 * Allow one (valid) byte
 						 * magnitude character.
 						 */
-						if (ovalue[j] == 'm' ||
-						    ovalue[j] == 'k' ||
-						    ovalue[j] == '\%') {
+						suffix = tolower(ovalue[j]);
+						if (suffix == 'k' ||
+						    suffix == 'm' ||
+						    suffix == 'g' ||
+						    suffix == '\%') {
 							stage = 2;
 							break;
 						}
@@ -671,32 +675,6 @@ i_make_nfs_args(lx_nfs_mount_data_t *lx_nmd, struct nfs_args *nfs_args,
 	return (0);
 }
 
-static int
-run_cgrp_mgr(char *mntpnt)
-{
-	const char *cmd = "/native/usr/lib/brand/lx/cgrpmgr";
-	char *argv[] = { "cgrpmgr", NULL, NULL };
-
-	argv[1] = mntpnt;
-
-	switch (fork1()) {
-	case 0:
-		/* child */
-		execv(cmd, argv);
-		exit(1);
-		break;
-
-	case -1:
-		return (-1);
-
-	default:
-		/* the cgroup manager process runs until we unmount */
-		break;
-	}
-
-	return (0);
-}
-
 long
 lx_mount(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
     uintptr_t p5)
@@ -715,7 +693,6 @@ lx_mount(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	int			sflags, rv;
 	long			res;
 	boolean_t		is_tmpfs = B_FALSE;
-	boolean_t		is_cgrp = B_FALSE;
 
 	/* Variable for tmpfs mounts. */
 	int			uid = -1;
@@ -752,6 +729,30 @@ lx_mount(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	lx_debug("\tlinux mount source: %s", source);
 	lx_debug("\tlinux mount target: %s", target);
 	lx_debug("\tlinux mount fstype: %s", fstype);
+
+	/*
+	 * While SunOS is picky about mount(2) target paths being absolute,
+	 * Linux is not so strict.  In order to facilitate this looser
+	 * requirement, the cwd is prepended to non-absolute target paths.
+	 */
+	if (target[0] != '/') {
+		char *cpath, *buf = NULL;
+		int len;
+
+		if ((cpath = getcwd(NULL, MAXPATHLEN)) == NULL) {
+			return (-ENOMEM);
+		}
+		len = asprintf(&buf, "%s/%s", cpath, target);
+		free(cpath);
+		if (len < 0) {
+			return (-ENOMEM);
+		} else if (len >= MAXPATHLEN) {
+			free(buf);
+			return (-ENAMETOOLONG);
+		}
+		strlcpy(target, buf, sizeof (target));
+		free(buf);
+	}
 
 	/* Make sure we support the requested mount flags. */
 	if ((flags & ~LX_MS_SUPPORTED) != 0) {
@@ -901,8 +902,6 @@ lx_mount(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 		}
 		lx_debug("\tlinux mount options: \"%s\"", options);
 
-		is_cgrp = B_TRUE;
-
 		/*
 		 * Currently don't verify Linux mount options since we can
 		 * have asubsystem string provided.
@@ -1050,15 +1049,7 @@ lx_mount(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4,
 	    options, sizeof (options));
 
 	if (res == 0) {
-		if (is_cgrp && run_cgrp_mgr(target) != 0) {
-			/*
-			 * Forking the cgrp manager failed, unmount and return
-			 * an ENOMEM error as the best approximation that we're
-			 * out of resources.
-			 */
-			(void) umount(target);
-			return (-ENOMEM);
-		} else if (is_tmpfs) {
+		if (is_tmpfs) {
 			/* Handle uid/gid mount options. */
 			if (uid != -1 || gid != -1)
 				(void) chown(target, uid, gid);

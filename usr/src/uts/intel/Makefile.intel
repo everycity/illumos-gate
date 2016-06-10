@@ -18,10 +18,13 @@
 # CDDL HEADER END
 #
 
+#
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2015 Nexenta Systems, Inc. All rights reserved.
 # Copyright (c) 2013 Andrew Stormont.  All rights reserved.
 # Copyright 2016, Joyent, Inc.
+# Copyright 2016 Garrett D'Amore <garrett@damore.org>
+# Copyright 2016 Nexenta Systems, Inc.
+#
 
 #
 #	This makefile contains the common definitions for all intel
@@ -381,8 +384,10 @@ DRV_KMODS	+= qlt
 DRV_KMODS	+= iscsit
 DRV_KMODS	+= pppt
 DRV_KMODS	+= ncall nsctl sdbc nskern sv
-DRV_KMODS	+= ii rdc rdcsrv rdcstub 
+DRV_KMODS	+= ii rdc rdcsrv rdcstub
 DRV_KMODS	+= iptun
+DRV_KMODS	+= vmxnet3s
+DRV_KMODS	+= pvscsi
 
 #
 # Common code drivers
@@ -403,6 +408,7 @@ DRV_KMODS	+= pcn
 DRV_KMODS	+= rge
 DRV_KMODS	+= rtls
 DRV_KMODS	+= sfe
+DRV_KMODS	+= sfxge
 DRV_KMODS	+= amd8111s
 DRV_KMODS	+= igb
 DRV_KMODS	+= ipmi

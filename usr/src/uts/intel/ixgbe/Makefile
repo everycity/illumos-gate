@@ -49,6 +49,9 @@ CONF_SRCDIR	= $(UTSBASE)/common/io/ixgbe
 #
 include $(UTSBASE)/intel/Makefile.intel
 
+INC_PATH	+= -I$(UTSBASE)/common/io/ixgbe
+INC_PATH	+= -I$(UTSBASE)/common/io/ixgbe/core
+
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-switch
 CERRWARN	+= -_gcc=-Wno-uninitialized
@@ -64,6 +67,7 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 # Driver depends on MAC
 #
 LDFLAGS		+= -dy -N misc/mac
+MAPFILES	+= ddi mac random kernel
 
 #
 #	Default build targets.
@@ -89,4 +93,5 @@ install:	$(INSTALL_DEPS)
 #
 #	Include common targets.
 #
+include $(UTSBASE)/Makefile.mapfile
 include $(UTSBASE)/intel/Makefile.targ

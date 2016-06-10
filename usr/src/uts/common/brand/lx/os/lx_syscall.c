@@ -649,7 +649,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"utime",	NULL,			0,		2}, /* 30 */
 	{"stty",	NULL,			NOSYS_OBSOLETE,	0}, /* 31 */
 	{"gtty",	NULL,			NOSYS_OBSOLETE,	0}, /* 32 */
-	{"access",	NULL,			0,		2}, /* 33 */
+	{"access",	lx_access,		0,		2}, /* 33 */
 	{"nice",	NULL,			0,		1}, /* 34 */
 	{"ftime",	NULL,			NOSYS_OBSOLETE,	0}, /* 35 */
 	{"sync",	NULL,			0, 		0}, /* 36 */
@@ -752,7 +752,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"fchdir",	NULL,			0,		1}, /* 133 */
 	{"bdflush",	NULL,			NOSYS_KERNEL,	0}, /* 134 */
 	{"sysfs",	NULL,			0,		3}, /* 135 */
-	{"personality",	NULL,			0,		1}, /* 136 */
+	{"personality",	lx_personality,		0,		1}, /* 136 */
 	{"afs_syscall",	NULL,			NOSYS_KERNEL,	0}, /* 137 */
 	{"setfsuid16",	NULL,			0,		1}, /* 138 */
 	{"setfsgid16",	NULL,			0,		1}, /* 139 */
@@ -799,7 +799,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"pread64",	lx_pread32,		0,		5}, /* 180 */
 	{"pwrite64",	lx_pwrite32,		0,		5}, /* 181 */
 	{"chown16",	lx_chown16,		0,		3}, /* 182 */
-	{"getcwd",	NULL,			0,		2}, /* 183 */
+	{"getcwd",	lx_getcwd,		0,		2}, /* 183 */
 	{"capget",	NULL,			0,		2}, /* 184 */
 	{"capset",	NULL,			0,		2}, /* 185 */
 	{"sigaltstack",	NULL,			0,		2}, /* 186 */
@@ -927,7 +927,7 @@ lx_sysent_t lx_sysent32[] = {
 	{"symlinkat",	NULL,			0,		3}, /* 304 */
 	{"readlinkat",	NULL,			0,		4}, /* 305 */
 	{"fchmodat",	lx_fchmodat,		0,		3}, /* 306 */
-	{"faccessat",	NULL,			0,		4}, /* 307 */
+	{"faccessat",	lx_faccessat,		0,		4}, /* 307 */
 	{"pselect6",	lx_pselect,		LX_SYS_EBPARG6,	6}, /* 308 */
 	{"ppoll",	lx_ppoll,		0,		5}, /* 309 */
 	{"unshare",	NULL,			NOSYS_NULL,	0}, /* 310 */
@@ -1008,7 +1008,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"pwrite64",	lx_pwrite,		0,		4}, /* 18 */
 	{"readv",	lx_readv,		0,		3}, /* 19 */
 	{"writev",	lx_writev,		0,		3}, /* 20 */
-	{"access",	NULL,			0,		2}, /* 21 */
+	{"access",	lx_access,		0,		2}, /* 21 */
 	{"pipe",	lx_pipe,		0,		1}, /* 22 */
 	{"select",	lx_select,		0,		5}, /* 23 */
 	{"sched_yield",	lx_sched_yield,		0,		0}, /* 24 */
@@ -1030,7 +1030,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"sendfile",	NULL,			0,		4}, /* 40 */
 	{"socket",	lx_socket,		0,		3}, /* 41 */
 	{"connect",	lx_connect,		0,		3}, /* 42 */
-	{"accept",	NULL,			0,		3}, /* 43 */
+	{"accept",	lx_accept,		0,		3}, /* 43 */
 	{"sendto",	lx_sendto,		0,		6}, /* 44 */
 	{"recvfrom",	lx_recvfrom,		0,		6}, /* 45 */
 	{"sendmsg",	lx_sendmsg,		0,		3}, /* 46 */
@@ -1038,8 +1038,8 @@ lx_sysent_t lx_sysent64[] = {
 	{"shutdown",	NULL,			0,		2}, /* 48 */
 	{"bind",	lx_bind,		0,		3}, /* 49 */
 	{"listen",	NULL,			0,		2}, /* 50 */
-	{"getsockname",	NULL,			0,		3}, /* 51 */
-	{"getpeername",	NULL,			0,		3}, /* 52 */
+	{"getsockname",	lx_getsockname,		0,		3}, /* 51 */
+	{"getpeername",	lx_getpeername,		0,		3}, /* 52 */
 	{"socketpair",	NULL,			0,		4}, /* 53 */
 	{"setsockopt",	lx_setsockopt,		0,		5}, /* 54 */
 	{"getsockopt",	lx_getsockopt,		0,		5}, /* 55 */
@@ -1066,7 +1066,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"truncate",	NULL,			0,		2}, /* 76 */
 	{"ftruncate",	NULL,			0,		2}, /* 77 */
 	{"getdents",	lx_getdents_64,		0,		3}, /* 78 */
-	{"getcwd",	NULL,			0,		2}, /* 79 */
+	{"getcwd",	lx_getcwd,		0,		2}, /* 79 */
 	{"chdir",	NULL,			0,		1}, /* 80 */
 	{"fchdir",	NULL,			0,		1}, /* 81 */
 	{"rename",	NULL,			0,		2}, /* 82 */
@@ -1122,7 +1122,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"utime",	NULL,			0,		2}, /* 132 */
 	{"mknod",	NULL,			0,		3}, /* 133 */
 	{"uselib",	NULL,			NOSYS_KERNEL,	0}, /* 134 */
-	{"personality",	NULL,			0,		1}, /* 135 */
+	{"personality",	lx_personality,		0,		1}, /* 135 */
 	{"ustat",	NULL,			NOSYS_OBSOLETE,	2}, /* 136 */
 	{"statfs",	NULL,			0,		2}, /* 137 */
 	{"fstatfs",	NULL,			0,		2}, /* 138 */
@@ -1256,7 +1256,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"symlinkat",	NULL,			0,		3}, /* 266 */
 	{"readlinkat",	NULL,			0,		4}, /* 267 */
 	{"fchmodat",	lx_fchmodat,		0,		3}, /* 268 */
-	{"faccessat",	NULL,			0,		4}, /* 269 */
+	{"faccessat",	lx_faccessat,		0,		4}, /* 269 */
 	{"pselect6",	lx_pselect,		0,		6}, /* 270 */
 	{"ppoll",	lx_ppoll,		0,		5}, /* 271 */
 	{"unshare",	NULL,			NOSYS_NULL,	0}, /* 272 */
@@ -1275,7 +1275,7 @@ lx_sysent_t lx_sysent64[] = {
 	{"fallocate",	lx_fallocate,		0,		4}, /* 285 */
 	{"timerfd_settime", NULL,		0,		4}, /* 286 */
 	{"timerfd_gettime", NULL,		0,		2}, /* 287 */
-	{"accept4",	NULL,			0,		4}, /* 288 */
+	{"accept4",	lx_accept4,		0,		4}, /* 288 */
 	{"signalfd4",	NULL,			0,		4}, /* 289 */
 	{"eventfd2",	NULL,			0,		2}, /* 290 */
 	{"epoll_create1", lx_epoll_create1,	0,		1}, /* 291 */

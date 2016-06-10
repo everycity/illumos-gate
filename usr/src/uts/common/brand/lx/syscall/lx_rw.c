@@ -67,6 +67,13 @@ lx_iovec_copyin(void *uiovp, int iovcnt, iovec_t *kiovp, ssize_t *count)
 			kiovp[i].iov_len = iovlen32;
 			kiovp[i].iov_base =
 			    (caddr_t)(uintptr_t)aiov32[i].iov_base;
+			/* Linux does a basic sanity test on the address */
+			if ((uintptr_t)kiovp[i].iov_base >= USERLIMIT32) {
+				if (aiov32len != 0) {
+					kmem_free(aiov32, aiov32len);
+				}
+				return (EFAULT);
+			}
 		}
 		*count = total32;
 
@@ -85,6 +92,10 @@ lx_iovec_copyin(void *uiovp, int iovcnt, iovec_t *kiovp, ssize_t *count)
 			total += iovlen;
 			if (iovlen < 0 || total < 0) {
 				return (EINVAL);
+			}
+			/* Linux does a basic sanity test on the address */
+			if ((uintptr_t)kiovp[i].iov_base >= USERLIMIT) {
+				return (EFAULT);
 			}
 		}
 		*count = total;
@@ -779,6 +790,9 @@ lx_preadv(int fdes, void *iovp, int iovcnt, off64_t offset)
 			count = (ssize_t)((offset_t)MAXOFFSET_T - fileoff);
 	} else if (fp->f_vnode->v_type == VDIR) {
 		error = EISDIR;
+		goto out;
+	} else if (fp->f_vnode->v_type == VFIFO) {
+		error = ESPIPE;
 		goto out;
 	}
 

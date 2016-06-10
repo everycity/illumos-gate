@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 1984, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2015, Joyent, Inc.
+ * Copyright 2016, Joyent, Inc.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -2193,8 +2193,13 @@ again:
 			goto update_inode;
 		}
 
-		if (error == 0 && vap->va_size)
-			vnevent_truncate(vp, ct);
+		if (error == 0) {
+			if (vap->va_size) {
+				vnevent_truncate(vp, ct);
+			} else {
+				vnevent_resize(vp, ct);
+			}
+		}
 	}
 
 	if (ulp) {
@@ -3710,6 +3715,9 @@ retry_firstlock:
 		goto errout;
 	}
 
+	if (error == 0 && tvp != NULL)
+		vnevent_rename_dest(tvp, tdvp, tnm, ct);
+
 	/*
 	 * Unlink the source.
 	 * Remove the source entry.  ufs_dirremove() checks that the entry
@@ -3723,8 +3731,6 @@ retry_firstlock:
 
 	if (error == 0) {
 		vnevent_rename_src(ITOV(sip), sdvp, snm, ct);
-		if (tvp != NULL)
-			vnevent_rename_dest(tvp, tdvp, tnm, ct);
 		vnevent_rename_dest_dir(tdvp, ITOV(sip), tnm, ct);
 	}
 
@@ -4472,8 +4478,13 @@ ufs_space(struct vnode *vp, int cmd, struct flock64 *bfp, int flag,
 				return (error);
 			error = ufs_freesp(vp, bfp, flag, cr);
 
-			if (error == 0 && bfp->l_start == 0)
-				vnevent_truncate(vp, ct);
+			if (error == 0) {
+				if (bfp->l_start == 0) {
+					vnevent_truncate(vp, ct);
+				} else {
+					vnevent_resize(vp, ct);
+				}
+			}
 		} else if (cmd == F_ALLOCSP) {
 			error = ufs_lockfs_begin(ufsvfsp, &ulp,
 			    ULOCKFS_FALLOCATE_MASK);

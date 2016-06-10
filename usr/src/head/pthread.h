@@ -21,6 +21,7 @@
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2016 Joyent, Inc.
  *
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -68,11 +69,6 @@ extern "C" {
 #define	PTHREAD_PROCESS_SHARED		1	/* = USYNC_PROCESS */
 #define	PTHREAD_PROCESS_PRIVATE		0	/* = USYNC_THREAD */
 
-#define	_DEFAULT_TYPE 			PTHREAD_PROCESS_PRIVATE
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-#define	DEFAULT_TYPE			_DEFAULT_TYPE
-#endif
-
 /*
  * mutex types
  * keep these in synch which sys/synch.h lock flags
@@ -112,13 +108,13 @@ extern "C" {
  * should be consistent with the definition for pthread_mutex_t).
  */
 #define	PTHREAD_MUTEX_INITIALIZER		/* = DEFAULTMUTEX */	\
-	{{0, 0, 0, _DEFAULT_TYPE, _MUTEX_MAGIC}, {{{0}}}, 0}
+	{{0, 0, 0, PTHREAD_PROCESS_PRIVATE, _MUTEX_MAGIC}, {{{0}}}, 0}
 
 #define	PTHREAD_COND_INITIALIZER		/* = DEFAULTCV */	\
-	{{{0, 0, 0, 0}, _DEFAULT_TYPE, _COND_MAGIC}, 0}
+	{{{0, 0, 0, 0}, PTHREAD_PROCESS_PRIVATE, _COND_MAGIC}, 0}
 
 #define	PTHREAD_RWLOCK_INITIALIZER		/* = DEFAULTRWLOCK */	\
-	{0, _DEFAULT_TYPE, _RWL_MAGIC, PTHREAD_MUTEX_INITIALIZER,	\
+	{0, PTHREAD_PROCESS_PRIVATE, _RWL_MAGIC, PTHREAD_MUTEX_INITIALIZER, \
 	PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER}
 
 /* cancellation type and state */
@@ -336,6 +332,14 @@ extern int pthread_mutex_consistent_np(pthread_mutex_t *);
 extern int pthread_mutexattr_setrobust_np(pthread_mutexattr_t *, int);
 extern int pthread_mutexattr_getrobust_np(
 	const pthread_mutexattr_t *_RESTRICT_KYWD, int *_RESTRICT_KYWD);
+
+/*
+ * These are non-standardized extensions that we provide. Their origins are
+ * documented in their manual pages.
+ */
+#if !defined(_STRICT_SYMBOLS) || defined(__EXTENSIONS__)
+extern int pthread_attr_get_np(pthread_t, pthread_attr_t *);
+#endif	/* !_STRICT_SYMBOLS || __EXTENSIONS__ */
 
 #endif	/* _ASM */
 

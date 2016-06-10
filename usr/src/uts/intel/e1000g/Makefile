@@ -71,6 +71,8 @@ CERRWARN	+= -_gcc=-Wno-unused-label
 CERRWARN	+= -_gcc=-Wno-unused-variable
 CERRWARN	+= -_cc=-erroff=E_STATEMENT_NOT_REACHED
 
+LINTTAGS	+= -erroff=E_CONSTANT_CONDITION
+
 #
 #	Define targets
 #
@@ -82,6 +84,7 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 # Driver depends on MAC
 #
 LDFLAGS		+= -dy -N misc/mac
+MAPFILES	+= ddi mac
 
 #
 #	Default build targets.
@@ -108,4 +111,5 @@ install:	$(INSTALL_DEPS)
 #
 #	Include common targets.
 #
+include $(UTSBASE)/Makefile.mapfile
 include $(UTSBASE)/intel/Makefile.targ

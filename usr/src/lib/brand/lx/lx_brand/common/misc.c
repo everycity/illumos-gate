@@ -49,7 +49,6 @@
 #include <sys/lx_thread.h>
 #include <sys/inotify.h>
 #include <sys/eventfd.h>
-#include <sys/timerfd.h>
 #include <thread.h>
 #include <unistd.h>
 #include <libintl.h>
@@ -173,62 +172,6 @@ lx_reboot(uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
 }
 
 /*
- * getcwd() - Linux syscall semantics are slightly different; we need to return
- * the length of the pathname copied (+ 1 for the terminating NULL byte.)
- */
-long
-lx_getcwd(uintptr_t p1, uintptr_t p2)
-{
-	char *buf;
-	size_t buflen = (size_t)p2;
-	size_t copylen, local_len;
-	size_t len = 0;
-
-	if ((getcwd((char *)p1, (size_t)p2)) == NULL)
-		return (-errno);
-
-	/*
-	 * We need the length of the pathname getcwd() copied but we never want
-	 * to dereference a Linux pointer for any reason.
-	 *
-	 * Thus, to get the string length we will uucopy() up to copylen
-	 * bytes at a time into a local buffer and will walk each chunk looking
-	 * for the string-terminating NULL byte.
-	 *
-	 * We can use strlen() to find the length of the string in the
-	 * local buffer by delimiting the buffer with a NULL byte in the
-	 * last element that will never be overwritten.
-	 */
-	copylen = min(buflen, MAXPATHLEN + 1);
-	buf = SAFE_ALLOCA(copylen + 1);
-	if (buf == NULL)
-		return (-ENOMEM);
-	buf[copylen] = '\0';
-
-	for (;;) {
-		if (uucopy((char *)p1 + len, buf, copylen) != 0)
-			return (-errno);
-
-		local_len = strlen(buf);
-		len += local_len;
-
-		/*
-		 * If the strlen() is less than copylen, we found the
-		 * real end of the string -- not the NULL byte used to
-		 * delimit the end of our buffer.
-		 */
-		if (local_len != copylen)
-			break;
-
-		/* prepare to check the next chunk of the string */
-		buflen -= copylen;
-		copylen = min(buflen, copylen);
-	}
-
-	return (len + 1);
-}
-
-/*
  * {get,set}groups16() - Handle the conversion between 16-bit Linux gids and
  * 32-bit illumos gids.
  */
@@ -305,61 +248,6 @@ lx_setgroups16(uintptr_t p1, uintptr_t p2)
 }
 
 /*
- * personality().  We don't really support Linux personalities, but we have to
- * emulate enough (or ahem, lie) to show that we support the basic personality.
- * We also allow certain (relatively) harmless bits of the personality to be
- * "set" -- keeping track of whatever lie we're telling so we don't get caught
- * out too easily.
- */
-#define	LX_PER_LINUX			0x0
-#define	LX_PER_MASK			0xff
-
-/*
- * These are for what Linux calls "bug emulation".
- */
-#define	LX_PER_UNAME26			0x0020000
-#define	LX_PER_ADDR_NO_RANDOMIZE	0x0040000
-#define	LX_PER_FDPIC_FUNCPTRS		0x0080000
-#define	LX_PER_MMAP_PAGE_ZERO		0x0100000
-#define	LX_PER_ADDR_COMPAT_LAYOUT	0x0200000
-#define	LX_PER_READ_IMPLIES_EXEC	0x0400000
-#define	LX_PER_ADDR_LIMIT_32BIT		0x0800000
-#define	LX_PER_SHORT_INODE		0x1000000
-#define	LX_PER_WHOLE_SECONDS		0x2000000
-#define	LX_PER_STICKY_TIMEOUTS		0x4000000
-#define	LX_PER_ADDR_LIMIT_3GB		0x8000000
-
-long
-lx_personality(uintptr_t p1)
-{
-	static int current = LX_PER_LINUX;
-	int per = (int)p1;
-
-	switch (per) {
-	case -1:
-		/* Request current personality */
-		return (current);
-	case LX_PER_LINUX:
-		current = per;
-		return (0);
-	default:
-		if (per & LX_PER_MASK)
-			return (-EINVAL);
-
-		/*
-		 * We allow a subset of the legacy emulation personality
-		 * attributes to be "turned on" -- which we put in quotes
-		 * because we don't actually change our behavior based on
-		 * them.  (Note that we silently ignore the others.)
-		 */
-		current = per & (LX_PER_ADDR_LIMIT_3GB |
-		    LX_PER_ADDR_NO_RANDOMIZE | LX_PER_ADDR_COMPAT_LAYOUT);
-
-		return (0);
-	}
-}
-
-/*
  * mknod() - Since we don't have the SYS_CONFIG privilege within a zone, the
  * only mode we have to support is S_IFIFO.  We also have to distinguish between
  * an invalid type and insufficient privileges.
@@ -372,9 +260,6 @@ lx_personality(uintptr_t p1)
 #define	LX_S_IFIFO	0010000
 #define	LX_S_IFLNK	0120000
 #define	LX_S_IFSOCK	0140000
-
-#define	LX_GETMAJOR(lx_dev)	((lx_dev) >> LX_MAJORSHIFT)
-#define	LX_GETMINOR(lx_dev)	((lx_dev) & LX_MINORMASK)
 
 /*ARGSUSED*/
 long
@@ -503,29 +388,6 @@ lx_execve(uintptr_t p1, uintptr_t p2, uintptr_t p3)
 	char **argv = (char **)p2;
 	char **envp = (char **)p3;
 	char *nullist[] = { NULL };
-	char path[64];
-
-	/* Get a copy of the executable we're trying to run */
-	path[0] = '\0';
-	(void) uucopystr(filename, path, sizeof (path));
-
-	/* Check if we're trying to run a native binary */
-	if (strncmp(path, "/native/usr/lib/brand/lx/lx_native",
-	    sizeof (path)) == 0) {
-		/* Skip the first element in the argv array */
-		argv++;
-
-		/*
-		 * The name of the new program to execute was the first
-		 * parameter passed to lx_native.
-		 */
-		if (uucopy(argv, &filename, sizeof (char *)) != 0)
-			return (-errno);
-
-		(void) syscall(SYS_brand, B_EXEC_NATIVE, filename, argv, envp,
-		    NULL, NULL, NULL);
-		return (-errno);
-	}
 
 	if (argv == NULL)
 		argv = nullist;
@@ -903,38 +765,6 @@ lx_eventfd2(unsigned int initval, int flags)
 	 */
 	if (r == -1 && errno == ENOENT)
 		return (-ENOTSUP);
-
-	return (r == -1 ? -errno : r);
-}
-
-long
-lx_timerfd_create(int clockid, int flags)
-{
-	int r = timerfd_create(clockid, flags);
-
-	/*
-	 * As with the eventfd case, above, we return a slightly less jarring
-	 * error condition if we cannot open /dev/timerfd.
-	 */
-	if (r == -1 && errno == ENOENT)
-		return (-ENOTSUP);
-
-	return (r == -1 ? -errno : r);
-}
-
-long
-lx_timerfd_settime(int fd, int flags, const struct itimerspec *value,
-    struct itimerspec *ovalue)
-{
-	int r = timerfd_settime(fd, flags, value, ovalue);
-
-	return (r == -1 ? -errno : r);
-}
-
-long
-lx_timerfd_gettime(int fd, struct itimerspec *value)
-{
-	int r = timerfd_gettime(fd, value);
 
 	return (r == -1 ? -errno : r);
 }

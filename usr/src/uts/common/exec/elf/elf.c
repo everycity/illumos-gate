@@ -26,7 +26,7 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 /*
- * Copyright (c) 2016, Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -65,6 +65,11 @@
 #include "elf_impl.h"
 #include <sys/sdt.h>
 #include <sys/siginfo.h>
+
+#if defined(__x86)
+#include <sys/comm_page_util.h>
+#endif /* defined(__x86) */
+
 
 extern int at_flags;
 
@@ -279,6 +284,30 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 
 		if (uphdr->p_flags == 0)
 			kmem_free(uphdr, sizeof (Phdr));
+	} else if (ehdr->e_type == ET_DYN) {
+		/*
+		 * If we don't have a uphdr, we'll apply the logic found
+		 * in mapelfexec() and use the p_vaddr of the first PT_LOAD
+		 * section as the base address of the object.
+		 */
+		Phdr *phdr = (Phdr *)phdrbase;
+		int i, hsize = ehdr->e_phentsize;
+
+		for (i = nphdrs; i > 0; i--) {
+			if (phdr->p_type == PT_LOAD) {
+				*uphdr_vaddr = (uintptr_t)phdr->p_vaddr +
+				    ehdr->e_phoff;
+				break;
+			}
+
+			phdr = (Phdr *)((caddr_t)phdr + hsize);
+		}
+
+		/*
+		 * If we don't have a PT_LOAD segment, we should have returned
+		 * ENOEXEC when elfsize() returned 0, above.
+		 */
+		VERIFY(i > 0);
 	} else {
 		*uphdr_vaddr = (Addr)-1;
 	}
@@ -376,7 +405,9 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		*execsz = btopr(SINCR) + btopr(SSIZE) + btopr(NCARGS32-1);
 	} else {
 		args->to_model = DATAMODEL_LP64;
-		args->stk_prot &= ~PROT_EXEC;
+		if (!args->stk_prot_override) {
+			args->stk_prot &= ~PROT_EXEC;
+		}
 #if defined(__i386) || defined(__amd64)
 		args->dat_prot &= ~PROT_EXEC;
 #endif
@@ -554,6 +585,16 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		args->auxsize += sizeof (aux_entry_t);
 	}
 
+
+	/*
+	 * On supported kernels (x86_64) make room in the auxv for the
+	 * AT_SUN_COMMPAGE entry.  This will go unpopulated on i86xpv systems
+	 * which do not provide such functionality.
+	 */
+#if defined(__amd64)
+	args->auxsize += sizeof (aux_entry_t);
+#endif /* defined(__amd64) */
+
 	/*
 	 * If we have user credentials, we'll supply the following entries:
 	 *	AT_SUN_UID
@@ -686,6 +727,15 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 			if (strncmp(++p, ORIGIN_STR, ORIGIN_STR_SIZE))
 				continue;
+
+			/*
+			 * We don't support $ORIGIN on setid programs to close
+			 * a potential attack vector.
+			 */
+			if ((setid & EXECSETID_SETID) != 0) {
+				error = ENOEXEC;
+				goto bad;
+			}
 
 			curlen = 0;
 			len = p - dlnp - 1;
@@ -833,6 +883,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 	if (hasauxv) {
 		int auxf = AF_SUN_HWCAPVERIFY;
+
 		/*
 		 * Note: AT_SUN_PLATFORM, AT_SUN_EXECNAME and AT_RANDOM were
 		 * filled in via exec_args()
@@ -920,6 +971,22 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			ADDAUX(aux, AT_SUN_BRAND_AUX4, 0)
 		}
 
+		/*
+		 * Add the comm page auxv entry, mapping it in if needed.
+		 */
+#if defined(__amd64)
+		if (args->commpage != NULL ||
+		    (args->commpage = (uintptr_t)comm_page_mapin()) != NULL) {
+			ADDAUX(aux, AT_SUN_COMMPAGE, args->commpage)
+		} else {
+			/*
+			 * If the comm page cannot be mapped, pad out the auxv
+			 * to satisfy later size checks.
+			 */
+			ADDAUX(aux, AT_NULL, 0)
+		}
+#endif /* defined(__amd64) */
+
 		ADDAUX(aux, AT_NULL, 0)
 		postfixsize = (char *)aux - (char *)bigwad->elfargs;
 
@@ -959,6 +1026,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	}
 
 	bzero(up->u_auxv, sizeof (up->u_auxv));
+	up->u_commpagep = args->commpage;
 	if (postfixsize) {
 		int num_auxv;
 
@@ -1293,6 +1361,29 @@ getelfshdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr,
 	return (0);
 }
 
+
+#ifdef _ELF32_COMPAT
+int
+elf32readhdr(vnode_t *vp, cred_t *credp, Ehdr *ehdrp, int *nphdrs,
+    caddr_t *phbasep, ssize_t *phsizep)
+#else
+int
+elfreadhdr(vnode_t *vp, cred_t *credp, Ehdr *ehdrp, int *nphdrs,
+    caddr_t *phbasep, ssize_t *phsizep)
+#endif
+{
+	int error, nshdrs, shstrndx;
+
+	if ((error = getelfhead(vp, credp, ehdrp, &nshdrs, &shstrndx,
+	    nphdrs)) != 0 ||
+	    (error = getelfphdr(vp, credp, ehdrp, *nphdrs, phbasep,
+	    phsizep)) != 0) {
+		return (error);
+	}
+	return (0);
+}
+
+
 static int
 mapelfexec(
 	vnode_t *vp,
@@ -1325,30 +1416,66 @@ mapelfexec(
 	extern int use_brk_lpg;
 
 	if (ehdr->e_type == ET_DYN) {
-		/*
-		 * Obtain the virtual address of a hole in the
-		 * address space to map the "interpreter".
-		 */
-		map_addr(&addr, len, (offset_t)0, 1, 0);
-		if (addr == NULL)
-			return (ENOMEM);
-		*voffset = (intptr_t)addr;
+		caddr_t vaddr;
 
 		/*
-		 * Calculate the minimum vaddr so it can be subtracted out.
-		 * According to the ELF specification, since PT_LOAD sections
-		 * must be sorted by increasing p_vaddr values, this is
-		 * guaranteed to be the first PT_LOAD section.
+		 * Despite the fact that mmapobj(2) refuses to load them, we
+		 * need to support executing ET_DYN objects that have a
+		 * non-NULL p_vaddr.  When found in the wild, these objects
+		 * are likely to be due to an old (and largely obviated) Linux
+		 * facility, prelink(8), that rewrites shared objects to
+		 * prefer specific (disjoint) virtual address ranges.  (Yes,
+		 * this is putatively for performance -- and yes, it has
+		 * limited applicability, many edge conditions and grisly
+		 * failure modes; even for Linux, it's insane.)  As ELF
+		 * mandates that the PT_LOAD segments be in p_vaddr order, we
+		 * find the lowest p_vaddr by finding the first PT_LOAD
+		 * segment.
 		 */
 		phdr = (Phdr *)phdrbase;
 		for (i = nphdrs; i > 0; i--) {
 			if (phdr->p_type == PT_LOAD) {
-				*voffset -= (uintptr_t)phdr->p_vaddr;
+				addr = (caddr_t)(uintptr_t)phdr->p_vaddr;
 				break;
 			}
 			phdr = (Phdr *)((caddr_t)phdr + hsize);
 		}
 
+		/*
+		 * We have a non-zero p_vaddr in the first PT_LOAD segment --
+		 * presumably because we're directly executing a prelink(8)'d
+		 * ld-linux.so.  While we could correctly execute such an
+		 * object without locating it at its desired p_vaddr (it is,
+		 * after all, still relocatable), our inner antiquarian
+		 * derives a perverse pleasure in accommodating the steampunk
+		 * prelink(8) contraption -- goggles on!
+		 */
+		if ((vaddr = addr) != NULL) {
+			if (as_gap(curproc->p_as, len,
+			    &addr, &len, AH_LO, NULL) == -1 || addr != vaddr) {
+				addr = NULL;
+			}
+		}
+
+		if (addr == NULL) {
+			/*
+			 * We either have a NULL p_vaddr (the common case, by
+			 * many orders of magnitude) or we have a non-NULL
+			 * p_vaddr and we were unable to obtain the specified
+			 * VA range (presumably because it's an illegal
+			 * address).  Either way, obtain an address in which
+			 * to map the interpreter.
+			 */
+			map_addr(&addr, len, (offset_t)0, 1, 0);
+			if (addr == NULL)
+				return (ENOMEM);
+		}
+
+		/*
+		 * Our voffset is the difference between where we landed and
+		 * where we wanted to be.
+		 */
+		*voffset = (uintptr_t)addr - (uintptr_t)vaddr;
 	} else {
 		*voffset = 0;
 	}

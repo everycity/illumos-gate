@@ -34,6 +34,9 @@ extern "C" {
 
 #ifdef	_KERNEL
 
+extern long lx_accept();
+extern long lx_accept4();
+extern long lx_access();
 extern long lx_arch_prctl();
 extern long lx_bind();
 extern long lx_brk();
@@ -50,6 +53,7 @@ extern long lx_epoll_create1();
 extern long lx_epoll_ctl();
 extern long lx_epoll_pwait();
 extern long lx_epoll_wait();
+extern long lx_faccessat();
 extern long lx_fallocate();
 extern long lx_fallocate32();
 extern long lx_fchmod();
@@ -70,9 +74,12 @@ extern long lx_futex();
 extern long lx_get_robust_list();
 extern long lx_get_thread_area();
 extern long lx_getcpu();
+extern long lx_getcwd();
 extern long lx_getdents_32();
 extern long lx_getdents_64();
 extern long lx_getdents64();
+extern long lx_getpeername();
+extern long lx_getsockname();
 extern long lx_getpid();
 extern long lx_getppid();
 extern long lx_getrandom();
@@ -104,6 +111,7 @@ extern long lx_nanosleep();
 extern long lx_oldgetrlimit();
 extern long lx_open();
 extern long lx_openat();
+extern long lx_personality();
 extern long lx_pipe();
 extern long lx_pipe2();
 extern long lx_poll();
@@ -176,12 +184,13 @@ extern long lx_writev();
 #define	LX_VSYSCALL_SIZE		(uintptr_t)0x1000
 #endif
 
+#endif	/* _KERNEL */
 
 /*
  * System call numbers for revectoring:
  */
 
-#if defined(_LP64)
+#if defined(__amd64)
 #define	LX_SYS_close		3
 #define	LX_SYS_gettimeofday	96
 #define	LX_SYS_time		201
@@ -195,17 +204,26 @@ extern long lx_writev();
 #define	LX_SYS32_clock_gettime	265
 #define	LX_SYS32_io_setup	245
 #define	LX_SYS32_getcpu		318
-#else
+#elif defined(__i386)
 #define	LX_SYS_close		6
 #define	LX_SYS_gettimeofday	78
 #define	LX_SYS_time		13
 #define	LX_SYS_clock_gettime	265
 #define	LX_SYS_io_setup		245
 #define	LX_SYS_getcpu		318
-#endif
+#else
+#error "Architecture not supported"
+#endif /* defined(__amd64) */
 
-
-#endif	/* _KERNEL */
+/*
+ * The current code in the VDSO operates under the expectation that it will be
+ * mapped at a fixed offset from the comm page.  This simplifies the act of
+ * locating said page without any other reference.  The VDSO must fit within
+ * this offset, matching the same value as COMM_PAGE_ALIGN.
+ * See: uts/i86pc/sys/comm_page.h
+ */
+#define	LX_VDSO_SIZE		0x4000
+#define	LX_VDSO_ADDR_MASK	~(LX_VDSO_SIZE - 1)
 
 #ifdef	__cplusplus
 }

@@ -108,6 +108,7 @@ extern "C" {
  * (directories and files contained therein).
  */
 typedef enum lxpr_nodetype {
+	LXPR_INVALID,		/* nodes start at 1	*/
 	LXPR_PROCDIR,		/* /proc		*/
 	LXPR_PIDDIR,		/* /proc/<pid>		*/
 	LXPR_PID_AUXV,		/* /proc/<pid>/auxv	*/
@@ -119,10 +120,12 @@ typedef enum lxpr_nodetype {
 	LXPR_PID_ENV,		/* /proc/<pid>/environ	*/
 	LXPR_PID_EXE,		/* /proc/<pid>/exe	*/
 	LXPR_PID_LIMITS,	/* /proc/<pid>/limits	*/
+	LXPR_PID_LOGINUID,	/* /proc/<pid>/loginuid	*/
 	LXPR_PID_MAPS,		/* /proc/<pid>/maps	*/
 	LXPR_PID_MEM,		/* /proc/<pid>/mem	*/
 	LXPR_PID_MOUNTINFO,	/* /proc/<pid>/mountinfo */
 	LXPR_PID_OOM_SCR_ADJ,	/* /proc/<pid>/oom_score_adj	*/
+	LXPR_PID_PERSONALITY,	/* /proc/<pid>/personality	*/
 	LXPR_PID_ROOTDIR,	/* /proc/<pid>/root	*/
 	LXPR_PID_STAT,		/* /proc/<pid>/stat	*/
 	LXPR_PID_STATM,		/* /proc/<pid>/statm	*/
@@ -140,10 +143,12 @@ typedef enum lxpr_nodetype {
 	LXPR_PID_TID_ENV,	/* /proc/<pid>/task/<tid>/environ	*/
 	LXPR_PID_TID_EXE,	/* /proc/<pid>/task/<tid>/exe		*/
 	LXPR_PID_TID_LIMITS,	/* /proc/<pid>/task/<tid>/limits	*/
+	LXPR_PID_TID_LOGINUID,	/* /proc/<pid>/task/<tid>/loginuid	*/
 	LXPR_PID_TID_MAPS,	/* /proc/<pid>/task/<tid>/maps		*/
 	LXPR_PID_TID_MEM,	/* /proc/<pid>/task/<tid>/mem		*/
 	LXPR_PID_TID_MOUNTINFO,	/* /proc/<pid>/task/<tid>/mountinfo	*/
 	LXPR_PID_TID_OOM_SCR_ADJ, /* /proc/<pid>/task/<tid>/oom_score_adj */
+	LXPR_PID_TID_PERSONALITY, /* /proc/<pid>/task/<tid>/personality */
 	LXPR_PID_TID_ROOTDIR,	/* /proc/<pid>/task/<tid>/root		*/
 	LXPR_PID_TID_STAT,	/* /proc/<pid>/task/<tid>/stat		*/
 	LXPR_PID_TID_STATM,	/* /proc/<pid>/task/<tid>/statm		*/
@@ -216,7 +221,15 @@ typedef enum lxpr_nodetype {
 	LXPR_SYS_NETDIR,		/* /proc/sys/net		*/
 	LXPR_SYS_NET_COREDIR,		/* /proc/sys/net/core		*/
 	LXPR_SYS_NET_CORE_SOMAXCON,	/* /proc/sys/net/core/somaxconn	*/
+	LXPR_SYS_NET_IPV4DIR,		/* /proc/sys/net/ipv4		*/
+	LXPR_SYS_NET_IPV4_IP_LPORT_RANGE, /* .../net/ipv4/ip_local_port_range */
+	LXPR_SYS_NET_IPV4_TCP_FIN_TO,	/* /proc/sys/net/ipv4/tcp_fin_timeout */
+	LXPR_SYS_NET_IPV4_TCP_KA_INT,	/* .../net/ipv4/tcp_keepalive_intvl */
+	LXPR_SYS_NET_IPV4_TCP_KA_TIM,	/* .../net/ipv4/tcp_keepalive_time */
+	LXPR_SYS_NET_IPV4_TCP_SACK,	/* /proc/sys/net/ipv4/tcp_sack */
+	LXPR_SYS_NET_IPV4_TCP_WINSCALE,	/* .../net/ipv4/tcp_window_scaling */
 	LXPR_SYS_VMDIR,			/* /proc/sys/vm			*/
+	LXPR_SYS_VM_MAX_MAP_CNT,	/* /proc/sys/vm/max_map_count	*/
 	LXPR_SYS_VM_MINFR_KB,		/* /proc/sys/vm/min_free_kbytes	*/
 	LXPR_SYS_VM_NHUGEP,		/* /proc/sys/vm/nr_hugepages	*/
 	LXPR_SYS_VM_OVERCOMMIT_MEM,	/* /proc/sys/vm/overcommit_memory */
@@ -288,6 +301,7 @@ extern void lxpr_fininodecache();
 extern void lxpr_initrootnode(lxpr_node_t **, vfs_t *);
 extern ino_t lxpr_inode(lxpr_nodetype_t, pid_t, int);
 extern ino_t lxpr_parentinode(lxpr_node_t *);
+extern boolean_t lxpr_is_writable(lxpr_nodetype_t);
 extern lxpr_node_t *lxpr_getnode(vnode_t *, lxpr_nodetype_t, proc_t *, int);
 extern void lxpr_freenode(lxpr_node_t *);
 extern vnode_t *lxpr_lookup_fdnode(vnode_t *, const char *);

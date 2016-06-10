@@ -22,6 +22,7 @@
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2016, Joyent, Inc.
+# Copyright 2016 Nexenta Systems, Inc.
 #
 
 #
@@ -35,6 +36,7 @@
 #
 CORE_OBJS +=		\
 	arch_kdi.o	\
+	comm_page_util.o \
 	copy.o		\
 	copy_subr.o	\
 	cpc_subr.o	\
@@ -290,6 +292,7 @@ IOMMULIB_OBJS = iommulib.o
 SN1_BRAND_OBJS	=	sn1_brand.o sn1_brand_asm.o
 S10_BRAND_OBJS	=	s10_brand.o s10_brand_asm.o
 LX_BRAND_OBJS  =		\
+	lx_access.o		\
 	lx_aio.o		\
 	lx_archdep.o		\
 	lx_auxv.o		\
@@ -305,6 +308,7 @@ LX_BRAND_OBJS  =		\
 	lx_fallocate.o		\
 	lx_fcntl.o		\
 	lx_futex.o		\
+	lx_getcwd.o		\
 	lx_getdents.o		\
 	lx_getpid.o		\
 	lx_getrandom.o		\
@@ -317,6 +321,7 @@ LX_BRAND_OBJS  =		\
 	lx_mkdir.o		\
 	lx_modify_ldt.o		\
 	lx_open.o		\
+	lx_personality.o	\
 	lx_pid.o		\
 	lx_pipe.o		\
 	lx_poll.o		\
@@ -383,3 +388,16 @@ INTEL_NB5000_OBJS += \
 	dimm_addr.o \
 	nb_pci_cfg.o \
 	nb5000_init.o
+
+#
+# VMware VMXNET3 virtual network device
+#
+VMXNET3S_OBJS =	vmxnet3_main.o \
+		vmxnet3_rx.o \
+		vmxnet3_tx.o \
+		vmxnet3_utils.o
+
+#
+# VMware PVSCSI SCSI Controller
+#
+PVSCSI_OBJS =	pvscsi.o
