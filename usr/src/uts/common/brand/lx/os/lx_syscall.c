@@ -208,7 +208,7 @@ lx_emulate_args(klwp_t *lwp, const lx_sysent_t *s, uintptr_t *args)
 }
 #endif
 
-int
+void
 lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 {
 	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
@@ -242,7 +242,7 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 	 * PTRACE_SYSCALL.  Note that the register state may be modified by
 	 * tracer.
 	 */
-	lx_ptrace_stop(LX_PR_SYSEXIT);
+	(void) lx_ptrace_stop(LX_PR_SYSEXIT);
 
 	/*
 	 * Fire the DTrace "lx-syscall:::return" probe:
@@ -265,8 +265,6 @@ lx_syscall_return(klwp_t *lwp, int syscall_num, long ret)
 	lwp->lwp_eosys = JUSTRETURN;
 	curthread->t_post_sys = 1;
 	aston(curthread);
-
-	return (0);
 }
 
 static void
@@ -346,7 +344,7 @@ lx_syscall_enter(void)
 	 * PTRACE_SYSCALL.  The system call number and arguments may be
 	 * modified by the tracer.
 	 */
-	lx_ptrace_stop(LX_PR_SYSENTRY);
+	(void) lx_ptrace_stop(LX_PR_SYSENTRY);
 
 	/*
 	 * Check that the system call number is within the bounds we expect.
@@ -355,7 +353,7 @@ lx_syscall_enter(void)
 	if (syscall_num < 0 || syscall_num > LX_MAX_SYSCALL(lwp)) {
 		lx_syscall_unsup_msg(NULL, syscall_num, 0);
 
-		set_errno(ENOTSUP);
+		(void) set_errno(ENOTSUP);
 		lx_syscall_return(lwp, syscall_num, -1);
 		return (0);
 	}
@@ -380,7 +378,7 @@ lx_syscall_enter(void)
 		 * Could not read and process the arguments.  Return the error
 		 * to the process.
 		 */
-		set_errno(error);
+		(void) set_errno(error);
 		lx_syscall_return(lwp, syscall_num, -1);
 		return (0);
 	}
@@ -422,7 +420,7 @@ lx_syscall_enter(void)
 		 */
 		lx_syscall_unsup_msg(s, syscall_num, unsup_reason);
 
-		set_errno(ENOTSUP);
+		(void) set_errno(ENOTSUP);
 		lx_syscall_return(lwp, syscall_num, -1);
 		return (0);
 	}
@@ -479,7 +477,7 @@ lx_vsyscall_enter(proc_t *p, klwp_t *lwp, int scnum)
 	rp->r_rip = raddr;
 	rp->r_rsp += sizeof (uintptr_t);
 
-	lx_syscall_enter();
+	(void) lx_syscall_enter();
 }
 
 boolean_t
@@ -517,99 +515,6 @@ lx_vsyscall_iscall(klwp_t *lwp, uintptr_t addr, int *scnum)
 	return (B_FALSE);
 }
 #endif
-
-/*
- * This function is used to provide a fasttrap-like interface for emulated
- * syscalls.  By skipping housekeeping such as mstate transitions, it should
- * cut down on overhead for syscalls which would normally be fasttraps in a
- * native process.
- */
-int
-lx_syscall_fast_enter(void)
-{
-	klwp_t *lwp = ttolwp(curthread);
-	lx_lwp_data_t *lwpd = lwptolxlwp(lwp);
-	struct regs *rp = lwptoregs(lwp);
-	int syscall_num, error;
-	lx_sysent_t *s;
-	uintptr_t args[6];
-	long ret = 0;
-
-	/*
-	 * If we got here, we should have an LWP-specific brand data structure.
-	 */
-	VERIFY(lwpd != NULL);
-
-	if (lwpd->br_stack_mode != LX_STACK_MODE_BRAND) {
-		/*
-		 * The lwp is not in in BRAND execution mode, so we return to
-		 * the regular native system call path.
-		 */
-		DTRACE_PROBE(brand__lx__syscall__hook__skip);
-		return (1);
-	}
-	if (lwpd->br_ptrace_tracer != NULL) {
-		/*
-		 * Given that ptrace is the antithesis of "fast", return to the
-		 * regular system call path if we are being traced.
-		 */
-		return (1);
-	}
-
-	syscall_num = (int)rp->r_r0;
-#if defined(_LP64)
-	if (get_udatamodel() != DATAMODEL_NATIVE) {
-		switch (syscall_num) {
-		case LX_SYS32_gettimeofday:
-		case LX_SYS32_time:
-		case LX_SYS32_clock_gettime:
-		case LX_SYS32_getcpu:
-			s = &lx_sysent32[syscall_num];
-			break;
-		default:
-			return (1);
-		}
-	} else
-#endif
-	{
-		switch (syscall_num) {
-		case LX_SYS_gettimeofday:
-		case LX_SYS_time:
-		case LX_SYS_clock_gettime:
-		case LX_SYS_getcpu:
-#if defined(_LP64)
-			s = &lx_sysent64[syscall_num];
-#else
-			s = &lx_sysent32[syscall_num];
-#endif
-			break;
-		default:
-			return (1);
-		}
-	}
-
-	/*
-	 * The above syscall restrictions should ensure that we do not arrive
-	 * at this point without a suitable syscall planned.  Since the
-	 * lx_emulate_args routine can only fail for 6-arg syscalls, none of
-	 * which would be performed as a fasttrap, it is assumed to succeed.
-	 */
-	VERIFY(s->sy_callc != NULL);
-	VERIFY(s->sy_narg < 6);
-	(void) lx_emulate_args(lwp, s, args);
-	lx_trace_sysenter(syscall_num, args);
-	ret = s->sy_callc(args[0], args[1], args[2], args[3], args[4],
-	    args[5]);
-
-	if ((error = lwp->lwp_errno) != 0) {
-		ret = -lx_errno(error, EINVAL);
-		lwp->lwp_errno = 0;
-	}
-	rp->r_r0 = ret;
-	lx_trace_sysreturn(syscall_num, ret);
-	lwp->lwp_eosys = JUSTRETURN;
-	return (0);
-}
 
 /*
  * Linux defines system call numbers for 32-bit x86 in the file:
@@ -1035,12 +940,12 @@ lx_sysent_t lx_sysent64[] = {
 	{"recvfrom",	lx_recvfrom,		0,		6}, /* 45 */
 	{"sendmsg",	lx_sendmsg,		0,		3}, /* 46 */
 	{"recvmsg",	lx_recvmsg,		0,		3}, /* 47 */
-	{"shutdown",	NULL,			0,		2}, /* 48 */
+	{"shutdown",	lx_shutdown,		0,		2}, /* 48 */
 	{"bind",	lx_bind,		0,		3}, /* 49 */
-	{"listen",	NULL,			0,		2}, /* 50 */
+	{"listen",	lx_listen,		0,		2}, /* 50 */
 	{"getsockname",	lx_getsockname,		0,		3}, /* 51 */
 	{"getpeername",	lx_getpeername,		0,		3}, /* 52 */
-	{"socketpair",	NULL,			0,		4}, /* 53 */
+	{"socketpair",	lx_socketpair,		0,		4}, /* 53 */
 	{"setsockopt",	lx_setsockopt,		0,		5}, /* 54 */
 	{"getsockopt",	lx_getsockopt,		0,		5}, /* 55 */
 	{"clone",	NULL,			0,		5}, /* 56 */

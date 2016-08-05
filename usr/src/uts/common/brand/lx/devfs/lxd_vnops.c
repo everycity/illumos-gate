@@ -266,6 +266,8 @@ lxd_setattr(vnode_t *vp, struct vattr *vap, int flags, struct cred *cr,
     caller_context_t *ct)
 {
 	lxd_node_t *ldn = VTOLDN(vp);
+	lxd_mnt_t *lxdm = VTOLXDM(vp);
+	int res;
 
 	if (ldn->lxdn_type == LXDNT_FRONT) {
 		int error = 0;
@@ -315,7 +317,11 @@ lxd_setattr(vnode_t *vp, struct vattr *vap, int flags, struct cred *cr,
 
 	ASSERT(ldn->lxdn_type == LXDNT_BACK);
 	vp = REALVP(vp);
-	return (VOP_SETATTR(vp, vap, flags, cr, ct));
+	res = VOP_SETATTR(vp, vap, flags, cr, ct);
+	if (res == 0 && (vap->va_mask & (AT_MODE | AT_UID | AT_GID))) {
+		lxd_save_attrs(lxdm, vp);
+	}
+	return (res);
 }
 
 static int
@@ -355,6 +361,7 @@ lxd_fsync(vnode_t *vp, int syncflag, struct cred *cr, caller_context_t *ct)
 	return (VOP_FSYNC(vp, syncflag, cr, ct));
 }
 
+/* ARGSUSED */
 static void
 lxd_front_inactive(struct vnode *vp, struct cred *cred, caller_context_t *ct)
 {
@@ -658,7 +665,7 @@ lxd_create(vnode_t *dvp, char *nm, struct vattr *va, enum vcexcl exclusive,
 		lnp = NULL;
 		rw_enter(&parent->lxdn_rwlock, RW_WRITER);
 		error = lxd_direnter(lxdm, parent, nm, DE_CREATE, NULL, NULL,
-		    va, &lnp, cr, ct);
+		    va, &lnp, cr);
 		rw_exit(&parent->lxdn_rwlock);
 
 		if (error == 0) {
@@ -677,6 +684,7 @@ lxd_create(vnode_t *dvp, char *nm, struct vattr *va, enum vcexcl exclusive,
 	return (error);
 }
 
+/* ARGSUSED */
 static int
 lxd_remove(vnode_t *dvp, char *nm, struct cred *cr, caller_context_t *ct,
     int flags)
@@ -706,6 +714,7 @@ lxd_remove(vnode_t *dvp, char *nm, struct cred *cr, caller_context_t *ct,
 	return (error);
 }
 
+/* ARGSUSED */
 static int
 lxd_link(vnode_t *tdvp, vnode_t *vp, char *tnm, struct cred *cr,
     caller_context_t *ct, int flags)
@@ -713,6 +722,7 @@ lxd_link(vnode_t *tdvp, vnode_t *vp, char *tnm, struct cred *cr,
 	return (ENOTSUP);
 }
 
+/* ARGSUSED */
 static int
 lxd_rename(vnode_t *odvp, char *onm, vnode_t *ndvp, char *nnm, struct cred *cr,
     caller_context_t *ct, int flags)
@@ -780,7 +790,7 @@ lxd_rename(vnode_t *odvp, char *onm, vnode_t *ndvp, char *nnm, struct cred *cr,
 	rw_enter(&newparent->lxdn_rwlock, RW_WRITER);
 	error = lxd_direnter(lxdm, newparent, nnm, DE_RENAME,
 	    oldparent, fromnode, (struct vattr *)NULL, (lxd_node_t **)NULL,
-	    cr, ct);
+	    cr);
 	rw_exit(&newparent->lxdn_rwlock);
 
 	if (error)
@@ -810,6 +820,7 @@ done:
 	return (error);
 }
 
+/* ARGSUSED */
 static int
 lxd_mkdir(vnode_t *dvp, char *nm, struct vattr *va, vnode_t **vpp,
     struct cred *cr, caller_context_t *ct, int flags, vsecattr_t *vsecp)
@@ -830,7 +841,7 @@ lxd_mkdir(vnode_t *dvp, char *nm, struct vattr *va, vnode_t **vpp,
 	/* make front directory */
 	rw_enter(&parent->lxdn_rwlock, RW_WRITER);
 	error = lxd_direnter(lxdm, parent, nm, DE_MKDIR, NULL, NULL,
-	    va, &ndir, cr, ct);
+	    va, &ndir, cr);
 	rw_exit(&parent->lxdn_rwlock);
 
 	if (error != 0) {
@@ -862,6 +873,7 @@ lxd_realvp(vnode_t *vp, vnode_t **vpp, caller_context_t *ct)
 	return (0);
 }
 
+/* ARGSUSED */
 static int
 lxd_rmdir(vnode_t *dvp, char *nm, vnode_t *cdir, struct cred *cr,
     caller_context_t *ct, int flags)
@@ -936,6 +948,7 @@ err:
 }
 
 /* Not static so it can be used during mount. */
+/* ARGSUSED */
 int
 lxd_symlink(vnode_t *dvp, char *nm, struct vattr *tva, char *tnm,
     struct cred *cr, caller_context_t *ct, int flags)
@@ -958,7 +971,7 @@ lxd_symlink(vnode_t *dvp, char *nm, struct vattr *tva, char *tnm,
 	/* make symlink in the front */
 	rw_enter(&parent->lxdn_rwlock, RW_WRITER);
 	error = lxd_direnter(lxdm, parent, nm, DE_CREATE, NULL, NULL,
-	    tva, &self, cr, ct);
+	    tva, &self, cr);
 	rw_exit(&parent->lxdn_rwlock);
 
 	if (error) {

@@ -127,10 +127,10 @@
  *
  * Various actions, either directly ptrace(2) related or commonly associated
  * with tracing, cause process- or thread-directed SIGSTOP signals to be sent
- * to tracees.  These signals, and indeed any signal other than SIGKILL, can
- * be suppressed by the tracer when using a restarting request (including
- * PTRACE_DETACH) on a child.  The signal may also be substituted for a
- * different signal.
+ * to tracees (a "signal-delivery-stop"). These signals, and indeed any signal
+ * other than SIGKILL, can be suppressed by the tracer when using a restarting
+ * request (including PTRACE_DETACH) on a child.  The signal may also be
+ * substituted for a different signal.
  *
  * If a SIGSTOP (or other stopping signal) is not suppressed by the tracer,
  * it will induce the regular illumos native job control stop of the entire
@@ -147,6 +147,20 @@
  * SIGCLD/waitpid(2) in the usual way.  The flag LX_PTF_SYSCALL flag is
  * cleared after each stop; for ongoing system call tracing the tracee must
  * be continuously restarted with PTRACE_SYSCALL.
+ *
+ * SPECIAL CASES FOR STOP EVENTS
+ *
+ * The strace command is one of the primary consumers of ptrace. In order for
+ * strace to properly understand what is actually happening when it receives a
+ * signal associated with a stop event, these signals must match Linux behavior
+ * exactly or the strace consumer will get out of sync and report incorrect
+ * state. There are a couple of special cases we have to handle to provide
+ * proper interaction of the syscall-entry-stop, syscall-exit-stop, and
+ * signal-delivery-stop events:
+ * 1) The child process of a clone/fork does not emit a syscall-exit-stop event.
+ * 2) A signal that arrives between syscall-enter-stop & syscall-exit-stop must
+ *    not immediately emit signal-delivery-stop. This event must be emitted
+ *    after the syscall is interrupted and syscall-exit-stop has been emitted.
  *
  * EVENT STOPS
  *
@@ -237,6 +251,11 @@ extern int lx_user_fpxregs_copyout(lx_lwp_data_t *, void *);
 #define	TRACEE_BUSY(a)	(((a)->br_ptrace_flags & LX_PTRACE_BUSY) != 0)
 
 #define	ACCORD_HELD(a)	MUTEX_HELD(&(a)->lxpa_lock)
+
+#define	LX_PID_TO_INIT(x)	((x) == curproc->p_zone->zone_proc_initpid ? \
+	1 : (x))
+#define	LX_INIT_TO_PID(x)	((x) == 1 ? \
+	curproc->p_zone->zone_proc_initpid : (x))
 
 static kcondvar_t lx_ptrace_busy_cv;
 static kmem_cache_t *lx_ptrace_accord_cache;
@@ -511,7 +530,7 @@ lx_ptrace_winfo(lx_lwp_data_t *remote, k_siginfo_t *ip, boolean_t waitflag,
 	 */
 	bzero(ip, sizeof (*ip));
 	ip->si_signo = SIGCLD;
-	ip->si_pid = remote->br_pid;
+	ip->si_pid = LX_PID_TO_INIT(remote->br_pid);
 	ip->si_code = CLD_TRAPPED;
 
 	switch (remote->br_ptrace_whatstop) {
@@ -722,9 +741,15 @@ lx_stop_notify(proc_t *p, klwp_t *lwp, ushort_t why, ushort_t what)
  * PTRACE_DETACH) to be allowed, the tracee LWP must be in "ptrace-stop".  This
  * check must ONLY be run on tracees of the current LWP.  If the check is
  * successful, we return with the tracee p_lock held.
+ *
+ * In the case of PTRACE_DETACH, we can return with the tracee locked even if
+ * it is not in "ptrace-stop". This can happen for various reasons, such as if
+ * the remote process is already job-stopped in the kernel. We must still be
+ * able to detach from this process. We return ENOENT in this case.
  */
 static int
-lx_ptrace_lock_if_stopped(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote)
+lx_ptrace_lock_if_stopped(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote,
+    boolean_t detaching)
 {
 	klwp_t *rlwp = remote->br_lwp;
 	proc_t *rproc = lwptoproc(rlwp);
@@ -759,6 +784,15 @@ lx_ptrace_lock_if_stopped(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote)
 	VERIFY(remote->br_ptrace_tracer == accord);
 
 	if (!(remote->br_ptrace_flags & LX_PTF_STOPPED)) {
+		if (detaching) {
+			/*
+			 * The tracee is not in "ptrace-stop", but we still
+			 * return with the locked process. This is indicated
+			 * by ENOENT.
+			 */
+			return (ENOENT);
+		}
+
 		/*
 		 * The tracee is not in "ptrace-stop", so we release the
 		 * process.
@@ -888,15 +922,11 @@ lx_ptrace_cont(lx_lwp_data_t *remote, lx_ptrace_cont_flags_t flags, int signo)
  * Implements the PTRACE_DETACH subcommand of the Linux ptrace(2) interface.
  *
  * The LWP identified by the Linux pid "lx_pid" will, if it as a tracee of the
- * current LWP, be detached and set runnable.  If the specified LWP is not
- * currently in the "ptrace-stop" state, the routine will return ESRCH as if
- * the LWP did not exist at all.
- *
- * The caller must not hold p_lock on any process.
+ * current LWP, be detached and (optionally) set runnable.
  */
-static int
+static void
 lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
-    boolean_t *release_hold)
+    boolean_t restart)
 {
 	klwp_t *rlwp = remote->br_lwp;
 
@@ -913,7 +943,6 @@ lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
 	remote->br_ptrace_attach = LX_PTA_NONE;
 	remote->br_ptrace_tracer = NULL;
 	remote->br_ptrace_flags = 0;
-	*release_hold = B_TRUE;
 
 	/*
 	 * Decrement traced-lwp count for the process.
@@ -928,9 +957,9 @@ lx_ptrace_detach(lx_ptrace_accord_t *accord, lx_lwp_data_t *remote, int signo,
 	remote->br_ptrace_stopsig = signo;
 	remote->br_ptrace_donesig = 0;
 
-	lx_ptrace_restart_lwp(rlwp);
-
-	return (0);
+	if (restart) {
+		lx_ptrace_restart_lwp(rlwp);
+	}
 }
 
 /*
@@ -1041,6 +1070,9 @@ lx_ptrace_attach(pid_t lx_pid)
 		VERIFY(rlwpd->br_ptrace_attach == LX_PTA_NONE);
 		rlwpd->br_ptrace_attach = LX_PTA_ATTACH;
 		rlwpd->br_ptrace_tracer = accord;
+
+		/* Don't emit ptrace syscall-stop-exit event on kernel exit. */
+		rlwpd->br_ptrace_flags |= LX_PTF_NOSTOP;
 
 		/*
 		 * We had no tracer, and are thus not in the tracees list.
@@ -1568,6 +1600,16 @@ lx_ptrace_stop(ushort_t what)
 	 * Lock this process and re-check the condition.
 	 */
 	mutex_enter(&p->p_lock);
+
+	/*
+	 * The child after a fork/clone doesn't emit syscall-exit-stop event.
+	 */
+	if (what == LX_PR_SYSEXIT && (lwpd->br_ptrace_flags & LX_PTF_NOSTOP)) {
+		lwpd->br_ptrace_flags &= ~LX_PTF_NOSTOP;
+		mutex_exit(&p->p_lock);
+		return (B_FALSE);
+	}
+
 	if (lwpd->br_ptrace_tracer == NULL) {
 		VERIFY0(lwpd->br_ptrace_flags & LX_PTF_SYSCALL);
 		mutex_exit(&p->p_lock);
@@ -1575,6 +1617,12 @@ lx_ptrace_stop(ushort_t what)
 	}
 
 	if (what == LX_PR_SYSENTRY || what == LX_PR_SYSEXIT) {
+		if (what == LX_PR_SYSENTRY) {
+			lwpd->br_ptrace_flags |= LX_PTF_INSYSCALL;
+		} else {
+			lwpd->br_ptrace_flags &= ~LX_PTF_INSYSCALL;
+		}
+
 		/*
 		 * This is a syscall-entry-stop or syscall-exit-stop point.
 		 */
@@ -1638,6 +1686,17 @@ lx_ptrace_issig_stop(proc_t *p, klwp_t *lwp)
 			 */
 			lwpd->br_ptrace_donesig = 0;
 		}
+		return (0);
+	}
+
+	/*
+	 * We can't deliver the signal-delivery-stop condition while we're
+	 * between the syscall-enter-stop and syscall-exit-stop conditions.
+	 * We must first let the signal interrupt the in-progress syscall, let
+	 * it emit syscall-exit-stop with the interrupted result, then we'll
+	 * come back here to emit signal-delivery-stop.
+	 */
+	if (lwpd->br_ptrace_flags & LX_PTF_INSYSCALL) {
 		return (0);
 	}
 
@@ -2010,7 +2069,7 @@ lx_sigcld_repost(proc_t *pp, sigqueue_t *sqp)
 		 * Check if this LWP is in "ptrace-stop".  If in the correct
 		 * stop condition, lock the process containing the tracee LWP.
 		 */
-		if (lx_ptrace_lock_if_stopped(accord, remote) != 0) {
+		if (lx_ptrace_lock_if_stopped(accord, remote, B_FALSE) != 0) {
 			continue;
 		}
 
@@ -2182,7 +2241,7 @@ lx_waitid_helper(idtype_t idtype, id_t id, k_siginfo_t *ip, int options,
 		 * Check if this LWP is in "ptrace-stop".  If in the correct
 		 * stop condition, lock the process containing the tracee LWP.
 		 */
-		if (lx_ptrace_lock_if_stopped(accord, remote) != 0) {
+		if (lx_ptrace_lock_if_stopped(accord, remote, B_FALSE) != 0) {
 			continue;
 		}
 
@@ -2354,7 +2413,7 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 	klwp_t *rlwp;
 	proc_t *rproc;
 	int error;
-	boolean_t found = B_FALSE;
+	boolean_t found = B_FALSE, restart = B_TRUE;
 
 	/*
 	 * PTRACE_TRACEME and PTRACE_ATTACH operations induce the tracing of
@@ -2401,15 +2460,34 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 		return (ESRCH);
 	}
 
+	if (ptrace_op == LX_PTRACE_DETACH) {
+		/*
+		 * We're detaching, make sure in-syscall flag is off so that
+		 * signal will stop the process directly.
+		 */
+		remote->br_ptrace_flags &= ~LX_PTF_INSYSCALL;
+	}
+
 	/*
 	 * Attempt to lock the target LWP.
 	 */
-	if ((error = lx_ptrace_lock_if_stopped(accord, remote)) != 0) {
+	if ((error = lx_ptrace_lock_if_stopped(accord, remote,
+	    (ptrace_op == LX_PTRACE_DETACH))) != 0) {
 		/*
-		 * The LWP was not in "ptrace-stop".
+		 * The LWP was not in "ptrace-stop". For detach, ENOENT
+		 * indicates that the LWP was not in "ptrace-stop", but is
+		 * still locked.
 		 */
-		mutex_exit(&accord->lxpa_tracees_lock);
-		return (error);
+		if (ptrace_op == LX_PTRACE_DETACH && error == ENOENT) {
+			/*
+			 * We're detaching, but the process was not in
+			 * ptrace_stop, so we don't want to try to restart it.
+			 */
+			restart = B_FALSE;
+		} else {
+			mutex_exit(&accord->lxpa_tracees_lock);
+			return (error);
+		}
 	}
 
 	/*
@@ -2421,25 +2499,21 @@ lx_ptrace_kernel(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 
 
 	if (ptrace_op == LX_PTRACE_DETACH) {
-		boolean_t release_hold = B_FALSE;
-		error = lx_ptrace_detach(accord, remote, (int)data,
-		    &release_hold);
+		lx_ptrace_detach(accord, remote, (int)data, restart);
 		/*
 		 * Drop the lock on both the tracee process and the tracee list.
 		 */
 		mutex_exit(&rproc->p_lock);
 		mutex_exit(&accord->lxpa_tracees_lock);
 
-		if (release_hold) {
-			/*
-			 * Release a hold from the accord.
-			 */
-			lx_ptrace_accord_enter(accord);
-			lx_ptrace_accord_rele(accord);
-			lx_ptrace_accord_exit(accord);
-		}
+		/*
+		 * Release a hold from the accord.
+		 */
+		lx_ptrace_accord_enter(accord);
+		lx_ptrace_accord_rele(accord);
+		lx_ptrace_accord_exit(accord);
 
-		return (error);
+		return (0);
 	}
 
 	/*
@@ -2539,7 +2613,7 @@ lx_ptrace(int ptrace_op, pid_t lxpid, uintptr_t addr, uintptr_t data)
 {
 	int error;
 
-	error = lx_ptrace_kernel(ptrace_op, lxpid, addr, data);
+	error = lx_ptrace_kernel(ptrace_op, LX_INIT_TO_PID(lxpid), addr, data);
 	if (error != 0) {
 		return (set_errno(error));
 	}

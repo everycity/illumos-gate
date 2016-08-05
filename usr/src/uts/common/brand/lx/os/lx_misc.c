@@ -146,7 +146,7 @@ lx_exec()
 	 * function is called that the exec has succeeded.
 	 */
 	rp->r_r0 = 0;
-	lx_ptrace_stop(LX_PR_SYSEXIT);
+	(void) lx_ptrace_stop(LX_PR_SYSEXIT);
 }
 
 static void
@@ -321,7 +321,6 @@ lx_freelwp(klwp_t *lwp)
 	 * Remove our system call interposer.
 	 */
 	lwp->lwp_brand_syscall = NULL;
-	lwp->lwp_brand_syscall_fast = NULL;
 
 	(void) removectx(lwptot(lwp), lwp, lx_save, lx_restore, NULL, NULL,
 	    lx_save, NULL);
@@ -472,7 +471,6 @@ lx_initlwp(klwp_t *lwp, void *lwpbd)
 	 * Install branded system call hooks for this LWP:
 	 */
 	lwp->lwp_brand_syscall = lx_syscall_enter;
-	lwp->lwp_brand_syscall_fast = lx_syscall_fast_enter;
 
 	/*
 	 * The new LWP inherits the parent LWP cgroup ID.
@@ -550,6 +548,11 @@ lx_forklwp(klwp_t *srclwp, klwp_t *dstlwp)
 	 */
 	dst->br_lwp_flags = src->br_lwp_flags & BR_CPU_BOUND;
 	dst->br_scall_args = NULL;
+
+	/*
+	 * Flag so child doesn't ptrace-stop on syscall exit.
+	 */
+	dst->br_ptrace_flags |= LX_PTF_NOSTOP;
 }
 
 /*
@@ -765,6 +768,7 @@ lx_exit_with_sig(proc_t *cp, sigqueue_t *sqp)
  * More information on wait in lx brands can be found at
  * usr/src/lib/brand/lx/lx_brand/common/wait.c.
  */
+/* ARGSUSED */
 boolean_t
 lx_wait_filter(proc_t *pp, proc_t *cp)
 {
@@ -1077,10 +1081,27 @@ lx_regs_location(lx_lwp_data_t *lwpd, void **ucp, boolean_t for_write)
 			/* setting registers not allowed in this state */
 			break;
 		}
-		if (lwpd->br_ptrace_whystop == PR_BRAND &&
-		    lwpd->br_ptrace_whatstop == LX_PR_EVENT) {
+		if (lwpd->br_ptrace_whystop == PR_BRAND) {
 			/* Called while ptrace-event-stopped by lx_exec. */
-			return (LX_REG_LOC_LWP);
+			if (lwpd->br_ptrace_whatstop == LX_PR_EVENT) {
+				return (LX_REG_LOC_LWP);
+			}
+
+			/* Called while ptrace-event-stopped after clone. */
+			if (lwpd->br_ptrace_whatstop == LX_PR_SIGNALLED &&
+			    lwpd->br_ptrace_stopsig == LX_SIGSTOP &&
+			    (lwpd->br_ptrace_flags & LX_PTF_STOPPED)) {
+				return (LX_REG_LOC_LWP);
+			}
+
+			/*
+			 * Called to obtain syscall exit for other cases
+			 * (e.g. pseudo return from rt_sigreturn).
+			 */
+			if (lwpd->br_ptrace_whatstop == LX_PR_SYSEXIT &&
+			    (lwpd->br_ptrace_flags & LX_PTF_STOPPED)) {
+				return (LX_REG_LOC_LWP);
+			}
 		}
 		break;
 	default:

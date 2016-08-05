@@ -60,6 +60,9 @@
 #include <sys/lx_types.h>
 #include <sys/lx_impl.h>
 
+/* From uts/common/fs/sockfs/socksyscalls.c */
+extern int listen(int, int, int);
+extern int shutdown(int, int, int);
 
 typedef struct lx_ucred {
 	pid_t		lxu_pid;
@@ -129,8 +132,8 @@ static const int ltos_family[LX_AF_MAX + 1] =  {
 	AF_NOTSUPPORTED,	/* LX_AF_PPOX		*/
 	AF_NOTSUPPORTED,	/* LX_AF_WANPIPE	*/
 	AF_NOTSUPPORTED,	/* LX_AF_LLC		*/
-	AF_NOTSUPPORTED,	/* EMPTY		*/
-	AF_NOTSUPPORTED,	/* EMPTY		*/
+	AF_NOTSUPPORTED,	/* NONE			*/
+	AF_NOTSUPPORTED,	/* NONE			*/
 	AF_NOTSUPPORTED,	/* LX_AF_CAN		*/
 	AF_NOTSUPPORTED,	/* LX_AF_TIPC		*/
 	AF_NOTSUPPORTED,	/* LX_AF_BLUETOOTH	*/
@@ -200,7 +203,7 @@ static const int stol_socktype[SOCK_SEQPACKET + 1] = {
 #define	LTOS_SOCKTYPE(t)	\
 	((t) <= LX_SOCK_PACKET ? ltos_socktype[(t)] : SOCK_INVAL)
 #define	STOL_SOCKTYPE(t)	\
-	((t) <= SOCK_SEQPACKET ? ltos_socktype[(t)] : SOCK_INVAL)
+	((t) <= SOCK_SEQPACKET ? stol_socktype[(t)] : SOCK_INVAL)
 
 
 /*
@@ -316,15 +319,15 @@ lx_xlate_sock_flags(int inflags, lx_xlate_dir_t dir)
 			break;
 		case LXFM_UNSUP:
 			if (match != 0) {
-				snprintf(buf, LX_UNSUP_BUFSZ,
+				(void) snprintf(buf, LX_UNSUP_BUFSZ,
 				    "unsupported sock flag %s", map->lxfm_name);
 				lx_unsupported(buf);
 			}
 		}
 	}
 	if (inflags != 0) {
-		snprintf(buf, LX_UNSUP_BUFSZ, "unsupported sock flags 0x%08x",
-		    inflags);
+		(void) snprintf(buf, LX_UNSUP_BUFSZ,
+		    "unsupported sock flags 0x%08x", inflags);
 		lx_unsupported(buf);
 	}
 
@@ -472,6 +475,7 @@ ltos_sockaddr_copyin(const struct sockaddr *inaddr, const socklen_t inlen,
 			*outlen = sizeof (struct sockaddr_ll);
 
 			/* sll_protocol must be translated */
+			/* LINTED: alignment */
 			sal = (struct sockaddr_ll *)laddr;
 			proto = ltos_pkt_proto(sal->sll_protocol);
 			if (proto < 0) {
@@ -726,11 +730,13 @@ stol_conv_ucred(struct cmsghdr *inmsg, struct cmsghdr *omsg)
 	 * Format the data correctly in the omsg buffer.
 	 */
 	if (omsg != NULL) {
-		struct ucred_s *scred = (struct ucred_s *)CMSG_CONTENT(inmsg);
+		struct ucred_s *scred;
 		prcred_t *cr;
 		lx_ucred_t lcred;
 
+		scred = (struct ucred_s *)CMSG_CONTENT(inmsg);
 		lcred.lxu_pid = scred->uc_pid;
+		/* LINTED: alignment */
 		cr = UCCRED(scred);
 		if (cr != NULL) {
 			lcred.lxu_uid = cr->pr_euid;
@@ -754,6 +760,7 @@ ltos_conv_ucred(struct cmsghdr *inmsg, struct cmsghdr *omsg)
 		lx_ucred_t *lcred;
 
 		uc = (struct ucred_s *)CMSG_CONTENT(omsg);
+		/* LINTED: alignment */
 		pc = (prcred_t *)((char *)uc + sizeof (struct ucred_s));
 
 		uc->uc_credoff = sizeof (struct ucred_s);
@@ -1273,17 +1280,23 @@ lx_convert_sock_args(int in_dom, int in_type, int in_proto, int *out_dom,
 		return (EINVAL);
 
 	type = LTOS_SOCKTYPE(in_type & LX_SOCK_TYPE_MASK);
-	if (type == SOCK_NOTSUPPORTED)
-		return (ESOCKTNOSUPPORT);
 	if (type == SOCK_INVAL)
 		return (EINVAL);
-
 	/*
 	 * Linux does not allow the app to specify IP Protocol for raw sockets.
 	 * SunOS does, so bail out here.
 	 */
-	if (domain == AF_INET && type == SOCK_RAW && in_proto == IPPROTO_IP)
-		return (ESOCKTNOSUPPORT);
+	if (type == SOCK_NOTSUPPORTED ||
+	    (domain == AF_INET && type == SOCK_RAW && in_proto == IPPROTO_IP)) {
+		if (lx_kern_release_cmp(curzone, "2.6.15") < 0) {
+			/*
+			 * Use error appropriate for kernel version.
+			 * See lx_socket_create for more detail.
+			 */
+			return (ESOCKTNOSUPPORT);
+		}
+		return (EPROTONOSUPPORT);
+	}
 
 	options = 0;
 	in_type &= ~(LX_SOCK_TYPE_MASK);
@@ -1311,36 +1324,47 @@ lx_convert_sock_args(int in_dom, int in_type, int in_proto, int *out_dom,
 	return (0);
 }
 
-long
-lx_socket(int domain, int type, int protocol)
+
+static int
+lx_socket_create(int domain, int type, int protocol, int options, file_t **fpp,
+    int *fdp)
 {
-	int fd, error, options;
 	sonode_t *so;
 	vnode_t *vp;
-	struct file *fp;
-
-	if ((error = lx_convert_sock_args(domain, type, protocol, &domain,
-	    &type, &options, &protocol)) != 0) {
-		return (set_errno(error));
-	}
+	file_t *fp;
+	int err, fd;
 
 	/* logic cloned from so_socket */
 	so = socket_create(domain, type, protocol, NULL, NULL, SOCKET_SLEEP,
-	    SOV_DEFAULT, CRED(), &error);
+	    SOV_DEFAULT, CRED(), &err);
 
 	if (so == NULL) {
-		if (error == EPROTOTYPE || error == EPROTONOSUPPORT) {
-			error = ESOCKTNOSUPPORT;
+		switch (err) {
+		case EPROTOTYPE:
+		case EPROTONOSUPPORT:
+			if (lx_kern_release_cmp(curzone, "2.6.15") < 0) {
+				/*
+				 * Linux changed its socket error behavior in
+				 * versions 2.6.15 and later.  See git commit
+				 * 86c8f9d158f68538a971a47206a46a22c7479bac in
+				 * the Linux repository.
+				 *
+				 * LTP presently checks for version 2.6.16.
+				 */
+				return (ESOCKTNOSUPPORT);
+			}
+			return (EPROTONOSUPPORT);
+		default:
+			return (err);
 		}
-		return (set_errno(error));
 	}
 
 	/* Allocate a file descriptor for the socket */
 	vp = SOTOV(so);
-	if ((error = falloc(vp, FWRITE|FREAD, &fp, &fd)) != 0) {
+	if ((err = falloc(vp, FWRITE|FREAD, &fp, &fd)) != 0) {
 		(void) socket_close(so, 0, CRED());
 		socket_destroy(so);
-		return (set_errno(error));
+		return (err);
 	}
 
 	/*
@@ -1356,6 +1380,41 @@ lx_socket(int domain, int type, int protocol)
 		fp->f_flag |= FNONBLOCK;
 	}
 	mutex_exit(&fp->f_tlock);
+	*fpp = fp;
+	*fdp = fd;
+	return (0);
+}
+
+static void
+lx_socket_destroy(file_t *fp, int fd)
+{
+	sonode_t *so = VTOSO(fp->f_vnode);
+
+	setf(fd, NULL);
+
+	mutex_enter(&fp->f_tlock);
+	unfalloc(fp);
+
+	(void) socket_close(so, 0, CRED());
+	socket_destroy(so);
+}
+
+long
+lx_socket(int domain, int type, int protocol)
+{
+	int error, options, fd = -1;
+	file_t *fp = NULL;
+
+	if ((error = lx_convert_sock_args(domain, type, protocol, &domain,
+	    &type, &options, &protocol)) != 0) {
+		return (set_errno(error));
+	}
+
+	error = lx_socket_create(domain, type, protocol, options, &fp, &fd);
+	if (error != 0) {
+		return (set_errno(error));
+	}
+
 	setf(fd, fp);
 	if ((options & SOCK_CLOEXEC) != 0) {
 		f_setfd(fd, FD_CLOEXEC);
@@ -2860,6 +2919,7 @@ lx_setsockopt_socket(sonode_t *so, int optname, void *optval, socklen_t optlen)
 		}
 		lbp = (struct lx_bpf_program *)optval;
 		bp.bf_len = lbp->bf_len;
+		/* LINTED: alignment */
 		bp.bf_insns = (struct bpf_insn *)lbp->bf_insns;
 		optval = &bp;
 		break;
@@ -3091,7 +3151,7 @@ lx_getsockopt_tcp(sonode_t *so, int optname, void *optval, socklen_t *optlen)
 			socklen_t len = sizeof (fi);
 
 			if ((error = socket_getsockopt(so, SOL_FILTER,
-			    FIL_LIST, fi, &len, 0, CRED()) != 0)) {
+			    FIL_LIST, fi, &len, 0, CRED())) != 0) {
 				*optlen = sizeof (int);
 				return (error);
 			}
@@ -3340,8 +3400,8 @@ lx_setsockopt(int sock, int level, int optname, void *optval, socklen_t optlen)
 	if (error == ENOPROTOOPT) {
 		char buf[LX_UNSUP_BUFSZ];
 
-		snprintf(buf, LX_UNSUP_BUFSZ, "setsockopt(%d, %d)", level,
-		    optname);
+		(void) snprintf(buf, LX_UNSUP_BUFSZ, "setsockopt(%d, %d)",
+		    level, optname);
 		lx_unsupported(buf);
 	}
 	if (buflen != 0) {
@@ -3431,8 +3491,8 @@ lx_getsockopt(int sock, int level, int optname, void *optval,
 	if (error == ENOPROTOOPT) {
 		char buf[LX_UNSUP_BUFSZ];
 
-		snprintf(buf, LX_UNSUP_BUFSZ, "getsockopt(%d, %d)", level,
-		    optname);
+		(void) snprintf(buf, LX_UNSUP_BUFSZ, "getsockopt(%d, %d)",
+		    level, optname);
 		lx_unsupported(buf);
 	}
 	if (copyout(&optlen, optlenp, sizeof (optlen)) != 0) {
@@ -3652,6 +3712,171 @@ lx_accept4(int sockfd, void *np, int *nlp, int flags)
 	    (socklen_t *)nlp, flags));
 }
 
+long
+lx_listen(int sockfd, int backlog)
+{
+	return (listen(sockfd, backlog, 0));
+}
+
+long
+lx_shutdown(int sockfd, int how)
+{
+	return (shutdown(sockfd, how, 0));
+}
+
+/*
+ * Connect two sockets together for a socketpair.  This is derived from
+ * so_socketpair, but forgoes the task of dealing with file descriptors.
+ */
+static int
+lx_socketpair_connect(file_t *fp1, file_t *fp2)
+{
+	sonode_t *so1, *so2;
+	sotpi_info_t *sti1, *sti2;
+	struct sockaddr_ux name;
+	int error;
+
+	so1 = VTOSO(fp1->f_vnode);
+	so2 = VTOSO(fp2->f_vnode);
+	sti1 = SOTOTPI(so1);
+	sti2 = SOTOTPI(so2);
+
+	VERIFY(so1->so_ops == &sotpi_sonodeops &&
+	    so2->so_ops == &sotpi_sonodeops);
+
+	if (so1->so_type == SOCK_DGRAM) {
+		/*
+		 * Bind both sockets and connect them with each other.
+		 */
+		error = socket_bind(so1, NULL, 0, _SOBIND_UNSPEC, CRED());
+		if (error) {
+			return (error);
+		}
+		error = socket_bind(so2, NULL, 0, _SOBIND_UNSPEC, CRED());
+		if (error) {
+			return (error);
+		}
+		name.sou_family = AF_UNIX;
+		name.sou_addr = sti2->sti_ux_laddr;
+		error = socket_connect(so1, (struct sockaddr *)&name,
+		    (socklen_t)sizeof (name), 0, _SOCONNECT_NOXLATE, CRED());
+		if (error) {
+			return (error);
+		}
+		name.sou_addr = sti1->sti_ux_laddr;
+		error = socket_connect(so2, (struct sockaddr *)&name,
+		    (socklen_t)sizeof (name), 0, _SOCONNECT_NOXLATE, CRED());
+		return (error);
+	} else {
+		sonode_t *nso;
+
+		/*
+		 * Bind both sockets, with 'so1' being a listener.  Connect
+		 * 'so2' to 'so1', doing so as nonblocking to avoid waiting for
+		 * soaccept to complete.  Accept the connection on 'so1',
+		 * replacing the socket/vnode in 'fp1' with the new connection.
+		 *
+		 * We could simply call socket_listen() here (which would do the
+		 * binding automatically) if the code didn't rely on passing
+		 * _SOBIND_NOXLATE to the TPI implementation of socket_bind().
+		 */
+		error = socket_bind(so1, NULL, 0, _SOBIND_UNSPEC|
+		    _SOBIND_NOXLATE|_SOBIND_LISTEN|_SOBIND_SOCKETPAIR, CRED());
+		if (error) {
+			return (error);
+		}
+		error = socket_bind(so2, NULL, 0, _SOBIND_UNSPEC, CRED());
+		if (error) {
+			return (error);
+		}
+
+		name.sou_family = AF_UNIX;
+		name.sou_addr = sti1->sti_ux_laddr;
+		error = socket_connect(so2,
+		    (struct sockaddr *)&name,
+		    (socklen_t)sizeof (name),
+		    FNONBLOCK, _SOCONNECT_NOXLATE, CRED());
+		if (error != 0 && error != EINPROGRESS) {
+			return (error);
+		}
+
+		error = socket_accept(so1, 0, CRED(), &nso);
+		if (error) {
+			return (error);
+		}
+
+		/* wait for so2 being SS_CONNECTED */
+		mutex_enter(&so2->so_lock);
+		error = sowaitconnected(so2, 0, 0);
+		mutex_exit(&so2->so_lock);
+		if (error != 0) {
+			(void) socket_close(nso, 0, CRED());
+			socket_destroy(nso);
+			return (error);
+		}
+
+		(void) socket_close(so1, 0, CRED());
+		socket_destroy(so1);
+		fp1->f_vnode = SOTOV(nso);
+	}
+	return (0);
+}
+
+long
+lx_socketpair(int domain, int type, int protocol, int *sv)
+{
+	int err, options, fds[2];
+	file_t *fps[2];
+
+	if ((err = lx_convert_sock_args(domain, type, protocol, &domain, &type,
+	    &options, &protocol)) != 0) {
+		return (set_errno(err));
+	}
+
+	if ((err = lx_socket_create(domain, type, protocol, options, &fps[0],
+	    &fds[0])) != 0) {
+		return (set_errno(err));
+	}
+
+	/*
+	 * While it seems silly to check the family after socket creation, this
+	 * is done to appease LTP when it tries some outlandish combinations of
+	 * domain/type/protocol.  The socket_create function is relied upon to
+	 * emit the expected errors.
+	 */
+	if (VTOSO(fps[0]->f_vnode)->so_family != AF_UNIX) {
+		lx_socket_destroy(fps[0], fds[0]);
+		return (set_errno(EOPNOTSUPP));
+	}
+
+	if ((err = lx_socket_create(domain, type, protocol, options, &fps[1],
+	    &fds[1])) != 0) {
+		lx_socket_destroy(fps[0], fds[0]);
+		return (set_errno(err));
+	}
+
+	err = lx_socketpair_connect(fps[0], fps[1]);
+	if (err != 0) {
+		lx_socket_destroy(fps[0], fds[0]);
+		lx_socket_destroy(fps[1], fds[1]);
+		return (set_errno(err));
+	}
+
+	setf(fds[0], fps[0]);
+	setf(fds[1], fps[1]);
+	if ((options & SOCK_CLOEXEC) != 0) {
+		f_setfd(fds[0], FD_CLOEXEC);
+		f_setfd(fds[1], FD_CLOEXEC);
+	}
+	if (copyout(fds, sv, sizeof (fds)) != 0) {
+		(void) closeandsetf(fds[0], NULL);
+		(void) closeandsetf(fds[1], NULL);
+		return (set_errno(EFAULT));
+	}
+	return (0);
+}
+
+
 #if defined(_SYSCALL32_IMPL)
 
 #define	LX_SYS_SOCKETCALL		102
@@ -3666,16 +3891,16 @@ static struct {
 	lx_socket,	3,	/* socket */
 	lx_bind,	3,	/* bind */
 	lx_connect,	3,	/* connect */
-	NULL,		2,	/* listen */
+	lx_listen,	2,	/* listen */
 	lx_accept,	3,	/* accept */
 	lx_getsockname,	3,	/* getsockname */
 	lx_getpeername,	3,	/* getpeername */
-	NULL,		4,	/* socketpair */
+	lx_socketpair,	4,	/* socketpair */
 	lx_send,	4,	/* send */
 	lx_recv,	4,	/* recv */
 	lx_sendto,	6,	/* sendto */
 	lx_recvfrom,	6,	/* recvfrom */
-	NULL,		2,	/* shutdown */
+	lx_shutdown,	2,	/* shutdown */
 	lx_setsockopt,	5,	/* setsockopt */
 	lx_getsockopt,	5,	/* getsockopt */
 	lx_sendmsg,	3,	/* sendmsg */
@@ -3690,22 +3915,13 @@ lx_socketcall(long p1, uint32_t *p2)
 {
 	int subcmd, i;
 	unsigned long args[6] = { 0, 0, 0, 0, 0, 0 };
-	lx_lwp_data_t *lwpd = ttolxlwp(curthread);
 
 	/* incoming subcmds are 1-indexed */
 	subcmd = (int)p1 - 1;
 
-	if (subcmd < 0 || subcmd >= LX_SOCKETCALL_MAX) {
-		return (-EINVAL);
-	}
-
-	/* Vector back out to userland emulation if we lack IKE */
-	if (lx_socketcall_fns[subcmd].s_fn == NULL) {
-		uintptr_t uargs[2] = {p1, (uintptr_t)p2};
-		/* The userspace emulation will handle the syscall return */
-		lwpd->br_eosys = JUSTRETURN;
-		lx_emulate_user32(ttolwp(curthread), LX_SYS_SOCKETCALL, uargs);
-		return (0);
+	if (subcmd < 0 || subcmd >= LX_SOCKETCALL_MAX ||
+	    lx_socketcall_fns[subcmd].s_fn == NULL) {
+		return (set_errno(EINVAL));
 	}
 
 	/*

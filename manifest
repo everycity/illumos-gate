@@ -9465,6 +9465,21 @@ d usr/lib/locale/zh_TW.UTF-8/LC_NUMERIC 0755 root bin
 f usr/lib/locale/zh_TW.UTF-8/LC_NUMERIC/LCL_DATA 0755 root bin
 d usr/lib/locale/zh_TW.UTF-8/LC_TIME 0755 root bin
 f usr/lib/locale/zh_TW.UTF-8/LC_TIME/LCL_DATA 0755 root bin
+d usr/lib/locale/zz_AA.UTF-8 0755 root bin
+d usr/lib/locale/zz_AA.UTF-8/LC_COLLATE 0755 root bin
+f usr/lib/locale/zz_AA.UTF-8/LC_COLLATE/LCL_DATA 0755 root bin
+d usr/lib/locale/zz_AA.UTF-8/LC_CTYPE 0755 root bin
+f usr/lib/locale/zz_AA.UTF-8/LC_CTYPE/LCL_DATA 0755 root bin
+d usr/lib/locale/zz_AA.UTF-8/LC_MESSAGES 0755 root bin
+f usr/lib/locale/zz_AA.UTF-8/LC_MESSAGES/LCL_DATA 0755 root bin
+f usr/lib/locale/zz_AA.UTF-8/LC_MESSAGES/priv_names 0755 root bin
+f usr/lib/locale/zz_AA.UTF-8/LC_MESSAGES/SUNW_OST_OSLIB.mo 0755 root bin
+d usr/lib/locale/zz_AA.UTF-8/LC_MONETARY 0755 root bin
+f usr/lib/locale/zz_AA.UTF-8/LC_MONETARY/LCL_DATA 0755 root bin
+d usr/lib/locale/zz_AA.UTF-8/LC_NUMERIC 0755 root bin
+f usr/lib/locale/zz_AA.UTF-8/LC_NUMERIC/LCL_DATA 0755 root bin
+d usr/lib/locale/zz_AA.UTF-8/LC_TIME 0755 root bin
+f usr/lib/locale/zz_AA.UTF-8/LC_TIME/LCL_DATA 0755 root bin
 d usr/lib/localedef 0755 root bin
 d usr/lib/localedef/src 0755 root bin
 f usr/lib/lslabels 0555 root bin
@@ -10247,6 +10262,8 @@ f usr/sadm/ugdates 0444 root bin
 d usr/sbin 0755 root bin
 f usr/sbin/6to4relay 0555 root bin
 f usr/sbin/acctadm 0555 root bin
+f usr/sbin/acpidump 0555 root bin
+f usr/sbin/acpixtract 0555 root bin
 h usr/sbin/add_drv=usr/lib/isaexec
 f usr/sbin/allocate 4555 root bin
 d usr/sbin/amd64 0755 root bin
@@ -11626,7 +11643,7 @@ f usr/share/man/man1/mach.1 0444 root bin
 f usr/share/man/man1/machid.1 0444 root bin
 f usr/share/man/man1/mail.1 0444 root bin
 f usr/share/man/man1/mailcompat.1 0444 root bin
-f usr/share/man/man1/mailq.1 0444 root bin
+s usr/share/man/man1/mailq.1=sendmail-mailq.1
 f usr/share/man/man1/mailstats.1 0444 root bin
 f usr/share/man/man1/mailx.1 0444 root bin
 f usr/share/man/man1/makekey.1 0444 root bin
@@ -11738,6 +11755,7 @@ f usr/share/man/man1/rusers.1 0444 root bin
 f usr/share/man/man1/script.1 0444 root bin
 f usr/share/man/man1/sdiff.1 0444 root bin
 f usr/share/man/man1/sed.1 0444 root bin
+f usr/share/man/man1/sendmail-mailq.1 0444 root bit
 f usr/share/man/man1/setfacl.1 0444 root bin
 f usr/share/man/man1/setpgrp.1 0444 root bin
 s usr/share/man/man1/settime.1=touch.1
@@ -11839,6 +11857,8 @@ d usr/share/man/man1m 0755 root bin
 f usr/share/man/man1m/6to4relay.1m 0444 root bin
 f usr/share/man/man1m/Intro.1m 0444 root bin
 f usr/share/man/man1m/acctadm.1m 0444 root bin
+f usr/share/man/man1m/acpidump.1m 0444 root bin
+f usr/share/man/man1m/acpixtract.1m 0444 root bin
 f usr/share/man/man1m/add_drv.1m 0444 root bin
 f usr/share/man/man1m/addbadsec.1m 0444 root bin
 f usr/share/man/man1m/arcstat.1m 0444 root bin
@@ -19615,6 +19635,16 @@ s usr/share/man/man9f/gld_sched.9f=gld.9f
 s usr/share/man/man9f/gld_unregister.9f=gld.9f
 f usr/share/man/man9f/hook_alloc.9f 0444 root bin
 f usr/share/man/man9f/hook_free.9f 0444 root bin
+s usr/share/man/man9f/id_alloc.9f=id_space.9f
+s usr/share/man/man9f/id_alloc_nosleep.9f=id_space.9f
+s usr/share/man/man9f/id_alloc_specific_nosleep.9f=id_space.9f
+s usr/share/man/man9f/id_allocff.9f=id_space.9f
+s usr/share/man/man9f/id_allocff_nosleep.9f=id_space.9f
+s usr/share/man/man9f/id_free.9f=id_space.9f
+f usr/share/man/man9f/id_space.9f 0444 root bin
+s usr/share/man/man9f/id_space_create.9f=id_space.9f
+s usr/share/man/man9f/id_space_destroy.9f=id_space.9f
+s usr/share/man/man9f/id_space_extend.9f=id_space.9f
 f usr/share/man/man9f/id32_alloc.9f 0444 root bin
 s usr/share/man/man9f/id32_free.9f=id32_alloc.9f
 s usr/share/man/man9f/id32_lookup.9f=id32_alloc.9f

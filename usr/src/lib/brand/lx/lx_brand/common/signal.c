@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright 2015 Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -303,14 +303,6 @@ struct lx_oldsigstack {
  * lx_sighandlers global, we automatically get the correct behavior.
  */
 static lx_sighandlers_t lx_sighandlers;
-
-/*
- * Setting LX_NO_ABORT_HANDLER in the environment will prevent the emulated
- * Linux program from modifying the signal handling disposition for SIGSEGV or
- * SIGABRT.  Useful for debugging programs which fall over themselves to
- * prevent useful core files being generated.
- */
-static int lx_no_abort_handler = 0;
 
 static void lx_sigdeliver(int, siginfo_t *, ucontext_t *, size_t, void (*)(),
     void (*)(), struct lx_sigaction *);
@@ -962,11 +954,12 @@ lx_sigreturn_find_native_context(const char *caller, ucontext_t **sigucp,
 			 */
 			if (copy_ok) {
 				lx_err_fatal("%s: sp 0x%p, expected 0x%x, "
-				    "found 0x%x!", caller, sp, LX_SIGRT_MAGIC,
-				    lxsdf.lxsdf_magic);
+				    "found 0x%lx!", caller, (void *)sp,
+				    LX_SIGRT_MAGIC,
+				    (unsigned long)lxsdf.lxsdf_magic);
 			} else {
 				lx_err_fatal("%s: sp 0x%p, could not read "
-				    "magic", caller, sp);
+				    "magic", caller, (void *)sp);
 			}
 		}
 
@@ -1056,7 +1049,7 @@ lx_sigreturn(void)
 	 */
 	lx_debug("lx_sigreturn: calling setcontext; retucp %p flags %lx "
 	    "link %p\n", retucp, retucp->uc_flags, retucp->uc_link);
-	setcontext(retucp);
+	(void) setcontext(retucp);
 	assert(0);
 
 	/*NOTREACHED*/
@@ -1076,6 +1069,12 @@ lx_rt_sigreturn(void)
 	ucontext_t *sigucp;
 	ucontext_t *retucp;
 	uintptr_t sp;
+
+	/*
+	 * Since we don't take the normal return path from this syscall, we
+	 * inform the kernel that we're returning, for the sake of ptrace.
+	 */
+	(void) syscall(SYS_brand, B_PTRACE_SIG_RETURN);
 
 	/* Get the registers at the emulated Linux rt_sigreturn syscall */
 	ucp = lx_syscall_regs();
@@ -1213,7 +1212,7 @@ lx_rt_sigreturn(void)
 	 * interrupted execution as the original Linux code would do.
 	 */
 	lx_debug("lx_rt_sigreturn: calling setcontext; retucp %p\n", retucp);
-	setcontext(retucp);
+	(void) setcontext(retucp);
 	assert(0);
 
 	/*NOTREACHED*/
@@ -1226,6 +1225,7 @@ lx_rt_sigreturn(void)
  * Build signal frame for processing for "old" (legacy) Linux signals
  * This stack-builder function is only used by 32-bit code.
  */
+/* ARGSUSED4 */
 static void
 lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
     uintptr_t *hargs)
@@ -1300,6 +1300,7 @@ lx_build_old_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
  * modern Linux signals. This is the only stack-builder function for 64-bit
  * code (32-bit code also calls this when using "modern" signals).
  */
+/* ARGSUSED4 */
 static void
 lx_build_signal_frame(int lx_sig, siginfo_t *sip, void *p, void *sp,
     uintptr_t *hargs)
@@ -1907,7 +1908,7 @@ lx_sigaction_common(int lx_sig, struct lx_sigaction *lxsp,
 			return (-errno);
 
 		if ((sig = ltos_signo[lx_sig]) != -1) {
-			if (lx_no_abort_handler != 0) {
+			if (lx_no_abort_handler) {
 				/*
 				 * If LX_NO_ABORT_HANDLER has been set, we will
 				 * not allow the emulated program to do
@@ -2175,10 +2176,6 @@ lx_siginit(void)
 	struct sigaction sa;
 	sigset_t new_set, oset;
 	int lx_sig, sig;
-
-	if (getenv("LX_NO_ABORT_HANDLER") != NULL) {
-		lx_no_abort_handler = 1;
-	}
 
 	/*
 	 * Block all signals possible while setting up the signal imposition

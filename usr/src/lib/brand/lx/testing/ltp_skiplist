@@ -74,6 +74,7 @@ remap_file_pages02
 sched_getparam01
 sched_getparam02
 sched_setscheduler01
+sched_setscheduler03	# OS-5524
 sched_setaffinity01
 sched_getaffinity01
 sched_setparam02
@@ -139,6 +140,7 @@ fanotify02
 fanotify03
 fanotify04
 fanotify05
+fanotify06
 fcntl06
 fcntl23
 fcntl23_64
@@ -171,6 +173,9 @@ io_getevents01
 io_setup01
 io_submit01
 keyctl01
+kcmp01
+kcmp02
+kcmp03
 mmap13
 mq_notify01
 mq_notify02
@@ -191,6 +196,7 @@ process_vm_readv03
 process_vm_writev01
 process_vm_writev02
 prot_hsymlinks
+pty01			# OS-5437
 read02
 readahead01
 readahead02

@@ -50,7 +50,6 @@ COBJS	=	aio.o			\
 		sched.o			\
 		sendfile.o		\
 		signal.o		\
-		socket.o		\
 		stack.o			\
 		statfs.o		\
 		sysctl.o		\
@@ -84,6 +83,9 @@ CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-D_REENTRANT -I. -I../ -I$(UTSBASE)/common/brand/lx -I$(LX_CMN)
 ASFLAGS =	-P $(ASFLAGS_$(CURTYPE)) -D_ASM -I../	\
 			-I$(UTSBASE)/common/brand/lx
+
+C99MODE=	-xc99=%all
+C99LMODE=	-Xc99=%all
 
 .KEEP_STATE:
 

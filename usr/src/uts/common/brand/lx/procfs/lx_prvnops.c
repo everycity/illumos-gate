@@ -282,7 +282,7 @@ extern rctl_hndl_t rc_zone_semmni;
 extern rctl_hndl_t rc_zone_msgmni;
 extern rctl_hndl_t rc_zone_shmmax;
 extern rctl_hndl_t rc_zone_shmmni;
-#define	FOURGB	4294967295
+#define	FOURGB	4294967295ULL
 
 /*
  * The maximum length of the concatenation of argument vector strings we
@@ -365,6 +365,7 @@ static lxpr_dirent_t piddir[] = {
 	{ LXPR_PID_MAPS,	"maps" },
 	{ LXPR_PID_MEM,		"mem" },
 	{ LXPR_PID_MOUNTINFO,	"mountinfo" },
+	{ LXPR_PID_MOUNTS,	"mounts" },
 	{ LXPR_PID_OOM_SCR_ADJ,	"oom_score_adj" },
 	{ LXPR_PID_PERSONALITY,	"personality" },
 	{ LXPR_PID_ROOTDIR,	"root" },
@@ -695,6 +696,7 @@ static int
 lxpr_close(vnode_t *vp, int flag, int count, offset_t offset, cred_t *cr,
     caller_context_t *ct)
 {
+#ifdef DEBUG
 	lxpr_node_t	*lxpr = VTOLXP(vp);
 	lxpr_nodetype_t	type = lxpr->lxpr_type;
 
@@ -706,6 +708,7 @@ lxpr_close(vnode_t *vp, int flag, int count, offset_t offset, cred_t *cr,
 	    type != LXPR_PID_CURDIR &&
 	    type != LXPR_PID_ROOTDIR &&
 	    type != LXPR_PID_EXE);
+#endif /* DEBUG */
 
 	return (0);
 }
@@ -727,6 +730,7 @@ static void (*lxpr_read_function[LXPR_NFILES])() = {
 	lxpr_read_pid_maps,		/* /proc/<pid>/maps	*/
 	lxpr_read_empty,		/* /proc/<pid>/mem	*/
 	lxpr_read_pid_mountinfo,	/* /proc/<pid>/mountinfo */
+	lxpr_read_mounts,		/* /proc/<pid>/mounts	*/
 	lxpr_read_pid_oom_scr_adj,	/* /proc/<pid>/oom_score_adj */
 	lxpr_read_pid_personality,	/* /proc/<pid>/personality */
 	lxpr_read_invalid,		/* /proc/<pid>/root	*/
@@ -862,6 +866,7 @@ static vnode_t *(*lxpr_lookup_function[LXPR_NFILES])() = {
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/maps	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/mem	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/mountinfo */
+	lxpr_lookup_not_a_dir,		/* /proc/<pid>/mounts	*/
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/oom_score_adj */
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/personality */
 	lxpr_lookup_not_a_dir,		/* /proc/<pid>/root	*/
@@ -997,6 +1002,7 @@ static int (*lxpr_readdir_function[LXPR_NFILES])() = {
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/maps	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/mem	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/mountinfo */
+	lxpr_readdir_not_a_dir,		/* /proc/<pid>/mounts	*/
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/oom_score_adj */
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/personality */
 	lxpr_readdir_not_a_dir,		/* /proc/<pid>/root	*/
@@ -1433,7 +1439,7 @@ lxpr_read_pid_comm(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		lxpr_uiobuf_seterr(uiobuf, EINVAL);
 		return;
 	}
-	strlcpy(buf, p->p_user.u_comm, sizeof (buf));
+	(void) strlcpy(buf, p->p_user.u_comm, sizeof (buf));
 	lxpr_unlock(p);
 	lxpr_uiobuf_printf(uiobuf, "%s\n", buf);
 }
@@ -2224,7 +2230,7 @@ lxpr_read_status_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	crhold(cr = p->p_cred);
 	mutex_exit(&p->p_crlock);
 
-	strlcpy(buf_comm, up->u_comm, sizeof (buf_comm));
+	(void) strlcpy(buf_comm, up->u_comm, sizeof (buf_comm));
 	fdlim = p->p_fno_ctl;
 	lwpcnt = p->p_lwpcnt;
 
@@ -2390,6 +2396,7 @@ lxpr_read_stat_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	clock_t utime, stime, cutime, cstime, ticks, boottime;
 	char buf_comm[MAXCOMLEN + 1];
 	rlim64_t vmem_ctl;
+	int exit_signal = -1;
 
 	real_pid = get_real_pid(lxpnp->lxpr_pid);
 	p = lxpr_lock(real_pid, ZOMB_OK);
@@ -2460,6 +2467,21 @@ lxpr_read_stat_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 		klwp_t *lwp = ttolwp(t);
 		struct mstate *ms = &lwp->lwp_mstate;
 		hrtime_t utm, stm;
+
+		/*
+		 * For field 38 (the exit signal), some apps explicitly use
+		 * this field in a check to distinguish processes from threads,
+		 * and assume only processes have a valid signal in this field!
+		 */
+		if (t->t_tid == 1) {
+			lx_proc_data_t *lxpd = ptolxproc(p);
+
+			if (lxpd != NULL) {
+				exit_signal = lxpd->l_signal;
+			} else {
+				exit_signal = SIGCHLD;
+			}
+		}
 
 		switch (t->t_state) {
 		case TS_SLEEP:
@@ -2533,12 +2555,13 @@ lxpr_read_stat_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 		stime = p->p_stime;
 	} else {
 		/* tid: utime & stime for the thread set in block above */
+		/* EMPTY */
 	}
 	cutime = p->p_cutime;
 	cstime = p->p_cstime;
 	lwpcnt = p->p_lwpcnt;
 	vmem_ctl = p->p_vmem_ctl;
-	strlcpy(buf_comm, p->p_user.u_comm, sizeof (buf_comm));
+	(void) strlcpy(buf_comm, p->p_user.u_comm, sizeof (buf_comm));
 	ticks = p->p_user.u_ticks;	/* lbolt at process start */
 	/* adjust ticks to account for zone boot time */
 	boottime = LXPTOZ(lxpnp)->zone_zsched->p_user.u_ticks;
@@ -2575,7 +2598,7 @@ lxpr_read_stat_common(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf,
 	    0l, 0l, 0l, 0l, /* signal, blocked, sigignore, sigcatch 31-34 */
 	    wchan,					/* 35 */
 	    0l, 0l,					/* nswap,cnswap 36-37 */
-	    0,						/* exit_signal	38 */
+	    exit_signal,				/* exit_signal	38 */
 	    cpu						/* 39 */);
 }
 
@@ -3050,21 +3073,19 @@ lxpr_read_net_sockstat(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 typedef struct lxpr_snmp_table {
 	const char *lst_proto;
-	const char *lst_fields[];
+	const char **lst_fields;
 } lxpr_snmp_table_t;
 
-static lxpr_snmp_table_t lxpr_snmp_ip = { "ip",
-	{
+static const char *lxpr_snmp_ip_fields[] = {
 	"forwarding", "defaultTTL", "inReceives", "inHdrErrors",
 	"inAddrErrors", "forwDatagrams", "inUnknownProtos", "inDiscards",
 	"inDelivers", "outRequests", "outDiscards", "outNoRoutes",
 	"reasmTimeout", "reasmReqds", "reasmOKs", "reasmFails", "fragOKs",
 	"fragFails", "fragCreates",
 	NULL
-	}
 };
-static lxpr_snmp_table_t lxpr_snmp_icmp = { "icmp",
-	{
+
+static const char *lxpr_snmp_icmp_fields[] = {
 	"inMsgs", "inErrors", "inCsumErrors", "inDestUnreachs", "inTimeExcds",
 	"inParmProbs", "inSrcQuenchs", "inRedirects", "inEchos", "inEchoReps",
 	"inTimestamps", "inTimestampReps", "inAddrMasks", "inAddrMaskReps",
@@ -3073,23 +3094,25 @@ static lxpr_snmp_table_t lxpr_snmp_icmp = { "icmp",
 	"outEchoReps", "outTimestamps", "outTimestampReps", "outAddrMasks",
 	"outAddrMaskReps",
 	NULL
-	}
 };
-static lxpr_snmp_table_t lxpr_snmp_tcp = { "tcp",
-	{
+
+static const char *lxpr_snmp_tcp_fields[] = {
 	"rtoAlgorithm", "rtoMin", "rtoMax", "maxConn", "activeOpens",
 	"passiveOpens", "attemptFails", "estabResets", "currEstab", "inSegs",
 	"outSegs", "retransSegs", "inErrs", "outRsts", "inCsumErrors",
 	NULL
-	}
 };
-static lxpr_snmp_table_t lxpr_snmp_udp = { "udp",
-	{
+
+static const char *lxpr_snmp_udp_fields[] = {
 	"inDatagrams", "noPorts", "inErrors", "outDatagrams", "rcvbufErrors",
 	"sndbufErrors", "inCsumErrors",
 	NULL
-	}
 };
+
+static lxpr_snmp_table_t lxpr_snmp_ip = { "ip", lxpr_snmp_ip_fields };
+static lxpr_snmp_table_t lxpr_snmp_icmp = { "icmp", lxpr_snmp_icmp_fields };
+static lxpr_snmp_table_t lxpr_snmp_tcp = { "tcp", lxpr_snmp_tcp_fields };
+static lxpr_snmp_table_t lxpr_snmp_udp = { "udp", lxpr_snmp_udp_fields };
 
 static lxpr_snmp_table_t *lxpr_net_snmptab[] = {
 	&lxpr_snmp_ip,
@@ -3587,6 +3610,7 @@ lxpr_read_net_unix(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 #define	LX_KMSG_PRI	"<0>"
 
+/* ARGSUSED */
 static void
 lxpr_read_kmsg(lxpr_node_t *lxpnp, struct lxpr_uiobuf *uiobuf, ldi_handle_t lh)
 {
@@ -3760,6 +3784,9 @@ lxpr_read_meminfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 /*
  * lxpr_read_mounts():
+ *
+ * Note: we currently also use this for /proc/{pid}/mounts since we don't
+ * yet support mount namespaces.
  */
 /* ARGSUSED */
 static void
@@ -3918,8 +3945,8 @@ lxpr_read_diskstats(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	 * Use the zone_vfs kstat, which is a superset of a kstat_io_t, since
 	 * it tracks IO at the zone level.
 	 */
-	strlcpy(kn.ks_module, "zone_vfs", sizeof (kn.ks_module));
-	strlcpy(kn.ks_name, zone->zone_name, sizeof (kn.ks_name));
+	(void) strlcpy(kn.ks_module, "zone_vfs", sizeof (kn.ks_module));
+	(void) strlcpy(kn.ks_name, zone->zone_name, sizeof (kn.ks_name));
 	kn.ks_instance = getzoneid();
 
 	kip = (zone_vfs_kstat_t *)lxpr_kstat_read(&kn, B_TRUE, &size, &num);
@@ -4136,6 +4163,8 @@ lxpr_read_stat(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	hrtime_t msnsecs[NCMSTATES];
 	/* is the emulated release > 2.4 */
 	boolean_t newer_than24 = lx_kern_release_cmp(LXPTOZ(lxpnp), "2.4") > 0;
+	zone_t *zone = LXPTOZ(lxpnp);
+	const char *fmtstr0, *fmtstr1;
 	/* temporary variable since scalehrtime modifies data in place */
 	hrtime_t tmptime;
 
@@ -4192,15 +4221,26 @@ lxpr_read_stat(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 			cp = cp->cpu_next;
 	} while (cp != cpstart);
 
-	if (newer_than24) {
-		lxpr_uiobuf_printf(uiobuf,
-		    "cpu %lu %lu %lu %lu %lu %lu %lu\n",
-		    user_cum, 0L, sys_cum, idle_cum, 0L, irq_cum, 0L);
+	if (lx_kern_release_cmp(zone, "2.6.33") >= 0) {
+		fmtstr0 = "cpu %lu 0 %lu %lu 0 %lu 0 0 0 0\n";
+		fmtstr1 = "cpu%d %lu 0 %lu %lu 0 %lu 0 0 0 0\n";
+	} else if (lx_kern_release_cmp(zone, "2.6.24") >= 0) {
+		fmtstr0 = "cpu %lu 0 %lu %lu 0 %lu 0 0 0\n";
+		fmtstr1 = "cpu%d %lu 0 %lu %lu 0 %lu 0 0 0\n";
+	} else if (lx_kern_release_cmp(zone, "2.6.11") >= 0) {
+		fmtstr0 = "cpu %lu 0 %lu %lu 0 %lu 0 0\n";
+		fmtstr1 = "cpu%d %lu 0 %lu %lu 0 %lu 0 0\n";
+	} else if (lx_kern_release_cmp(zone, "2.5.41") >= 0) {
+		fmtstr0 = "cpu %lu 0 %lu %lu 0 %lu 0\n";
+		fmtstr1 = "cpu%d %lu 0 %lu %lu 0 %lu 0\n";
 	} else {
-		lxpr_uiobuf_printf(uiobuf,
-		    "cpu %lu %lu %lu %lu\n",
-		    user_cum, 0L, sys_cum, idle_cum);
+		/* Note: we pass an unused param to these fmt strings */
+		fmtstr0 = "cpu %lu 0 %lu %lu\n";
+		fmtstr1 = "cpu%d %lu 0 %lu %lu\n";
 	}
+
+	lxpr_uiobuf_printf(uiobuf, fmtstr0,
+	    user_cum, sys_cum, idle_cum, irq_cum);
 
 	/* Do per processor stats */
 	do {
@@ -4231,17 +4271,8 @@ lxpr_read_stat(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 			irq_ticks += NSEC_TO_TICK(tmptime);
 		}
 
-		if (newer_than24) {
-			lxpr_uiobuf_printf(uiobuf,
-			    "cpu%d %lu %lu %lu %lu %lu %lu %lu\n",
-			    cp->cpu_id, user_ticks, 0L, sys_ticks, idle_ticks,
-			    0L, irq_ticks, 0L);
-		} else {
-			lxpr_uiobuf_printf(uiobuf,
-			    "cpu%d %lu %lu %lu %lu\n",
-			    cp->cpu_id,
-			    user_ticks, 0L, sys_ticks, idle_ticks);
-		}
+		lxpr_uiobuf_printf(uiobuf, fmtstr1,
+		    cp->cpu_id, user_ticks, sys_ticks, idle_ticks, irq_ticks);
 
 		if (pools_enabled)
 			cp = cp->cpu_next_part;
@@ -4327,6 +4358,7 @@ extern int inotify_maxevents;
 extern int inotify_maxinstances;
 extern int inotify_maxwatches;
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_fs_inotify_max_queued_events(lxpr_node_t *lxpnp,
     lxpr_uiobuf_t *uiobuf)
@@ -4335,6 +4367,7 @@ lxpr_read_sys_fs_inotify_max_queued_events(lxpr_node_t *lxpnp,
 	lxpr_uiobuf_printf(uiobuf, "%d\n", inotify_maxevents);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_fs_inotify_max_user_instances(lxpr_node_t *lxpnp,
     lxpr_uiobuf_t *uiobuf)
@@ -4343,6 +4376,7 @@ lxpr_read_sys_fs_inotify_max_user_instances(lxpr_node_t *lxpnp,
 	lxpr_uiobuf_printf(uiobuf, "%d\n", inotify_maxinstances);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_fs_inotify_max_user_watches(lxpr_node_t *lxpnp,
     lxpr_uiobuf_t *uiobuf)
@@ -4351,6 +4385,7 @@ lxpr_read_sys_fs_inotify_max_user_watches(lxpr_node_t *lxpnp,
 	lxpr_uiobuf_printf(uiobuf, "%d\n", inotify_maxwatches);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_caplcap(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4358,6 +4393,7 @@ lxpr_read_sys_kernel_caplcap(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%d\n", LX_CAP_MAX_VALID);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_corepatt(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4400,6 +4436,7 @@ lxpr_read_sys_kernel_corepatt(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%s\n", tr);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_hostname(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4407,6 +4444,7 @@ lxpr_read_sys_kernel_hostname(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%s\n", uts_nodename());
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_msgmni(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4422,6 +4460,7 @@ lxpr_read_sys_kernel_msgmni(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%u\n", (uint_t)val);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_ngroups_max(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4429,6 +4468,7 @@ lxpr_read_sys_kernel_ngroups_max(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%d\n", ngroups_max);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_osrel(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4449,6 +4489,7 @@ lxpr_read_sys_kernel_osrel(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	}
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_pid_max(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4456,6 +4497,7 @@ lxpr_read_sys_kernel_pid_max(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%d\n", maxpid);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4486,7 +4528,6 @@ lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	br_data = ztolxzd(curproc->p_zone);
 	mutex_enter(&br_data->lxzd_lock);
 	if (br_data->lxzd_bootid[0] == '\0') {
-		extern int getrandom(void *, size_t, int);
 		int i;
 
 		for (i = 0; i < 5; i++) {
@@ -4506,9 +4547,9 @@ lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 				break;
 			}
 			if (i > 0)
-				strlcat(br_data->lxzd_bootid, "-",
+				(void) strlcat(br_data->lxzd_bootid, "-",
 				    sizeof (br_data->lxzd_bootid));
-			strlcat(br_data->lxzd_bootid, s,
+			(void) strlcat(br_data->lxzd_bootid, s,
 			    sizeof (br_data->lxzd_bootid));
 		}
 	}
@@ -4519,6 +4560,7 @@ lxpr_read_sys_kernel_rand_bootid(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_sem(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4547,6 +4589,7 @@ lxpr_read_sys_kernel_sem(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	    vmsl, vmns, vopm, vmni);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_shmall(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4563,6 +4606,7 @@ lxpr_read_sys_kernel_shmall(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%u\n", (uint_t)btop(val));
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_shmmax(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4581,6 +4625,7 @@ lxpr_read_sys_kernel_shmmax(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%u\n", (uint_t)val);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_shmmni(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4599,6 +4644,7 @@ lxpr_read_sys_kernel_shmmni(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%u\n", (uint_t)val);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_kernel_threads_max(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4606,6 +4652,7 @@ lxpr_read_sys_kernel_threads_max(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%d\n", curproc->p_zone->zone_nlwps_ctl);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_net_core_somaxc(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4634,6 +4681,7 @@ lxpr_read_sys_net_core_somaxc(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  * illumos: tcp_smallest_anon_port & tcp_largest_anon_port
  * Not in tcp(7p) man page.
  */
+/* ARGSUSED */
 static void
 lxpr_read_sys_net_ipv4_ip_lport_range(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4667,6 +4715,7 @@ lxpr_read_sys_net_ipv4_ip_lport_range(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  * in the tcp_input_data() function on the use of tcp_fin_wait_2_flush_interval.
  * The value is in milliseconds.
  */
+/* ARGSUSED */
 static void
 lxpr_read_sys_net_ipv4_tcp_fin_to(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4700,6 +4749,7 @@ lxpr_read_sys_net_ipv4_tcp_fin_to(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  * 9 times (giving a total of 11.25 minutes) so we emulate this by dividing out
  * tcps_keepalive_abort_interval by 9.
  */
+/* ARGSUSED */
 static void
 lxpr_read_sys_net_ipv4_tcp_ka_int(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4730,6 +4780,7 @@ lxpr_read_sys_net_ipv4_tcp_ka_int(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  * The interval for sending out the first probe in milliseconds. The default is
  * two hours.
  */
+/* ARGSUSED */
 static void
 lxpr_read_sys_net_ipv4_tcp_ka_tim(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4759,6 +4810,7 @@ lxpr_read_sys_net_ipv4_tcp_ka_tim(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  * tcp_sack_permitted 0 == disabled, 1 == no initiate but accept,
  * 2 == initiate and accept. default is 2.
  */
+/* ARGSUSED */
 static void
 lxpr_read_sys_net_ipv4_tcp_sack(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4791,6 +4843,7 @@ lxpr_read_sys_net_ipv4_tcp_sack(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  * window scale option will be set only if the user has requested a send or
  * receive window larger than 64K. The default value of is 1.
  */
+/* ARGSUSED */
 static void
 lxpr_read_sys_net_ipv4_tcp_winscale(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4810,6 +4863,7 @@ lxpr_read_sys_net_ipv4_tcp_winscale(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	netstack_rele(ns);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_vm_max_map_cnt(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4818,6 +4872,7 @@ lxpr_read_sys_vm_max_map_cnt(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%d\n", 16777215);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_vm_minfr_kb(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4825,6 +4880,7 @@ lxpr_read_sys_vm_minfr_kb(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%d\n", 0);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_vm_nhpages(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4832,6 +4888,7 @@ lxpr_read_sys_vm_nhpages(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%d\n", 0);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_vm_overcommit_mem(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4839,6 +4896,7 @@ lxpr_read_sys_vm_overcommit_mem(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	lxpr_uiobuf_printf(uiobuf, "%d\n", 0);
 }
 
+/* ARGSUSED */
 static void
 lxpr_read_sys_vm_swappiness(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4911,67 +4969,13 @@ lxpr_read_uptime(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	    "%ld.%02d %ld.%02d\n", up_s, up_cs, idle_s, idle_cs);
 }
 
-static const char *amd_x_edx[] = {
-	NULL,	NULL,	NULL,	NULL,
-	NULL,	NULL,	NULL,	NULL,
-	NULL,	NULL,	NULL,	"syscall",
-	NULL,	NULL,	NULL,	NULL,
-	NULL,	NULL,	NULL,	"mp",
-	"nx",	NULL,	"mmxext", NULL,
-	NULL,	NULL,	NULL,	NULL,
-	NULL,	"lm",	"3dnowext", "3dnow"
-};
-
-static const char *amd_x_ecx[] = {
-	"lahf_lm", NULL, "svm", NULL,
-	"altmovcr8"
-};
-
-static const char *tm_x_edx[] = {
-	"recovery", "longrun", NULL, "lrti"
-};
-
-/*
- * Intel calls no-execute "xd" in its docs, but Linux still reports it as "nx."
- */
-static const char *intc_x_edx[] = {
-	NULL,	NULL,	NULL,	NULL,
-	NULL,	NULL,	NULL,	NULL,
-	NULL,	NULL,	NULL,	"syscall",
-	NULL,	NULL,	NULL,	NULL,
-	NULL,	NULL,	NULL,	NULL,
-	"nx",	NULL,	NULL,   NULL,
-	NULL,	NULL,	NULL,	NULL,
-	NULL,	"lm",   NULL,   NULL
-};
-
-static const char *intc_edx[] = {
-	"fpu",	"vme",	"de",	"pse",
-	"tsc",	"msr",	"pae",	"mce",
-	"cx8",	"apic",	 NULL,	"sep",
-	"mtrr",	"pge",	"mca",	"cmov",
-	"pat",	"pse36", "pn",	"clflush",
-	NULL,	"dts",	"acpi",	"mmx",
-	"fxsr",	"sse",	"sse2",	"ss",
-	"ht",	"tm",	"ia64",	"pbe"
-};
-
-/*
- * "sse3" on linux is called "pni" (Prescott New Instructions).
- */
-static const char *intc_ecx[] = {
-	"pni",	NULL,	NULL, "monitor",
-	"ds_cpl", NULL,	NULL, "est",
-	"tm2",	NULL,	"cid", NULL,
-	NULL,	"cx16",	"xtpr"
-};
-
 /*
  * Report a list of each cgroup subsystem supported by our emulated cgroup fs.
  * This needs to exist for systemd to run but for now we don't report any
  * cgroup subsystems as being installed. The commented example below shows
  * how to print a subsystem entry.
  */
+/* ARGSUSED */
 static void
 lxpr_read_cgroups(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -4984,18 +4988,286 @@ lxpr_read_cgroups(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 	 */
 }
 
+
+typedef enum {
+	LXCS_ALWAYS = 0,
+	LXCS_CPUID1_ECX,
+	LXCS_CPUID1_EDX,
+	LXCS_CPUID7_EBX,
+	LXCS_CPUIDD1_EAX,
+	LXCS_CPUIDX1_ECX,
+	LXCS_CPUIDX1_EDX,
+	LXCS_REG_MAX
+} lx_cpuinfo_source_t;
+
+typedef struct {
+	lx_cpuinfo_source_t	lxcm_source;
+	uint32_t		lxcm_flag;
+	const char		*lxcm_name;
+} lx_cpuinfo_mapping_t;
+
+/*
+ * This listing is derived from the X86_FEATURE flags data in the Linux kernel.
+ * Some entries are missing detectino routines.  They remain in the list,
+ * although commented out, to preserve proper order should they be fixed later.
+ */
+lx_cpuinfo_mapping_t lx_cpuinfo_mappings[] = {
+	/* CPUID EDX: */
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_FPU,		"fpu" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_VME,		"vme" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_DE,		"de" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_PSE,		"pse" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_TSC,		"tsc" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_MSR,		"msr" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_PAE,		"pae" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_MCE,		"mce" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_CX8,		"cx8" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_APIC,		"apic" },
+	/* reserved */
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_SEP,		"sep" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_MTRR,		"mtrr" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_PGE,		"pge" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_MCA,		"mca" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_CMOV,		"cmov" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_PAT,		"pat" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_PSE36,	"pse36" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_PSN,		"pn" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_CLFSH,	"clflush" },
+	/* reserved */
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_DS,		"dts" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_ACPI,		"acpi" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_MMX,		"mmx" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_FXSR,		"fxsr" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_SSE,		"sse" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_SSE2,		"sse2" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_SS,		"ss" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_HTT,		"ht" },
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_TM,		"tm" },
+	/* reserved */
+	{ LXCS_CPUID1_EDX, CPUID_INTC_EDX_PBE,		"pbe" },
+
+	/* AMD-defined CPU features, CPUID level 0x80000001, word 1 */
+#if defined(__amd64)
+	{ LXCS_ALWAYS, 1,				"syscall" },
+#endif
+	/* Present in the Linux listing but not in recent AMD docs: "mp" */
+	{ LXCS_CPUIDX1_EDX, CPUID_AMD_EDX_NX,		"nx" },
+	{ LXCS_CPUIDX1_EDX, CPUID_AMD_EDX_MMXamd,	"mmxext" },
+	{ LXCS_CPUIDX1_EDX, CPUID_AMD_EDX_FFXSR,	"fxsr_opt" },
+	{ LXCS_CPUIDX1_EDX, CPUID_AMD_EDX_1GPG,		"pdpe1gb" },
+	{ LXCS_CPUIDX1_EDX, CPUID_AMD_EDX_TSCP,		 "rdtscp" },
+	{ LXCS_CPUIDX1_EDX, CPUID_AMD_EDX_LM,		"lm" },
+	{ LXCS_CPUIDX1_EDX, CPUID_AMD_EDX_3DNowx,	"3dnowext" },
+	{ LXCS_CPUIDX1_EDX, CPUID_AMD_EDX_3DNow,	"3dnow" },
+
+	/* CPUID ECX: */
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_SSE3,		"pni" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_PCLMULQDQ,	"pclmulqdq" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_DTES64,	"dtes64" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_MON,		"monitor" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_DSCPL,	"ds_cpl" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_VMX,		"vmx" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_SMX,		"smx" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_EST,		"est" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_TM2,		"tm2" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_SSSE3,	"ssse3" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_CID,		"cid" },
+	{ LXCS_CPUID1_ECX, 0x00000800,			"sdbg" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_FMA,		"fma" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_CX16,		"cx16" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_ETPRD,	"xtpr" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_PDCM,		"pdcm" },
+	/* reserved */
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_PCID,		"pcid" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_DCA,		"dca" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_SSE4_1,	"sse4_1" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_SSE4_2,	"sse4_2" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_X2APIC,	"x2apic" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_MOVBE,	"movbe" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_POPCNT,	"popcnt" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_TSCDL,	"tsc_deadline_timer" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_AES,		"aes" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_XSAVE,	"xsave" },
+	/* osxsave */
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_AVX,		"avx" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_F16C,		"f16c" },
+	{ LXCS_CPUID1_ECX, CPUID_INTC_ECX_RDRAND,	"rdrand" },
+	/* not used */
+
+	/*
+	 * Other features, Linux-defined mapping
+	 * This range is used for feature bits which conflict or are synthesized
+	 * Skipped:
+	 * "recovery",
+	 * "longrun",
+	 * "lrti",
+	 * "cxmmx",
+	 * "k6_mtrr",
+	 * "cyrix_arr",
+	 * "centaur_mcr",
+	 * "constant_tsc",
+	 * "up",
+	 * "arch_perfmon",
+	 * "pebs",
+	 * "bts",
+	 * "rep_good",
+	 * "nopl",
+	 * "xtopology",
+	 * "tsc_reliable",
+	 * "nonstop_tsc",
+	 * "extd_apicid",
+	 * "amd_dcm",
+	 * "aperfmperf",
+	 * "eagerfpu",
+	 * "nonstop_tsc_s3",
+	 *
+	 * "hypervisor",
+	 * "rng",
+	 * "rng_en",
+	 * "ace",
+	 * "ace_en",
+	 * "ace2",
+	 * "ace2_en",
+	 * "phe",
+	 * "phe_en",
+	 * "pmm",
+	 * "pmm_en",
+	 */
+
+	/*
+	 * More extended AMD flags: CPUID level 0x80000001, ecx, word 6
+	 */
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_AHF64,	"lahf_lm" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_CMP_LGCY,	"cmp_legacy" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_SVM,		"svm" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_EAS,		"extapic" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_CR8D,		"cr8_legacy" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_LZCNT,	"abm" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_SSE4A,	"sse4a" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_MAS,		"misalignsse" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_3DNP,		"3dnowprefetch" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_OSVW,		"osvw" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_IBS,		"ibs" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_SSE5,		"xop" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_SKINIT,	"skinit" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_WDT,		"wdt" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_LWP,		"lwp" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_FMA4,		"fma4" },
+	{ LXCS_CPUIDX1_ECX, 0x00020000,			"tce" },
+
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_NIDMSR,	"nodeid_msr" },
+
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_TBM,		"tbm" },
+	{ LXCS_CPUIDX1_ECX, CPUID_AMD_ECX_TOPOEXT,	"topoext" },
+	{ LXCS_CPUIDX1_ECX, 0x00800000,			"perfctr_core" },
+	{ LXCS_CPUIDX1_ECX, 0x01000000,			"perfctr_nb" },
+	{ LXCS_CPUIDX1_ECX, 0x02000000,			"bpext" },
+	{ LXCS_CPUIDX1_ECX, 0x04000000,			"perfctr_l2" },
+	{ LXCS_CPUIDX1_ECX, 0x08000000,			"mwaitx" },
+
+	/*
+	 * Aux flags and virt bits.
+	 * Skipped:
+	 * "cpb",
+	 * "epb",
+	 * "hw_pstate",
+	 * "proc_feedback",
+	 * "intel_pt",
+	 * "tpr_shadow",
+	 * "vnmi",
+	 * "flexpriority",
+	 * "ept",
+	 * "vpid",
+	 * "vmmcall",
+	 */
+
+	/*
+	 * Intel-defined CPU features, CPUID level 0x00000007:0 (ebx), word 9
+	 */
+	{ LXCS_CPUID7_EBX, 0x00000001,			"fsgsbase" },
+	{ LXCS_CPUID7_EBX, 0x00000002,			"tsc_adjust" },
+	{ LXCS_CPUID7_EBX, CPUID_INTC_EBX_7_0_BMI1,	"bmi1" },
+	{ LXCS_CPUID7_EBX, 0x00000010,			"hle" },
+	{ LXCS_CPUID7_EBX, CPUID_INTC_EBX_7_0_AVX2,	"avx2" },
+	{ LXCS_CPUID7_EBX, CPUID_INTC_EBX_7_0_SMEP,	"smep" },
+	{ LXCS_CPUID7_EBX, CPUID_INTC_EBX_7_0_BMI2,	"bmi2" },
+	{ LXCS_CPUID7_EBX, 0x00000200,			"erms" },
+	{ LXCS_CPUID7_EBX, 0x00000400,			"invpcid" },
+	{ LXCS_CPUID7_EBX, 0x00000800,			"rtm" },
+	{ LXCS_CPUID7_EBX, 0x00000000,			"cqm" },
+	{ LXCS_CPUID7_EBX, 0x00004000,			"mpx" },
+	{ LXCS_CPUID7_EBX, 0x00010000,			"avx512f" },
+
+	{ LXCS_CPUID7_EBX, CPUID_INTC_EBX_7_0_RDSEED,	"rdseed" },
+	{ LXCS_CPUID7_EBX, CPUID_INTC_EBX_7_0_ADX,	"adx" },
+	{ LXCS_CPUID7_EBX, CPUID_INTC_EBX_7_0_SMAP,	"smap" },
+
+	{ LXCS_CPUID7_EBX, 0x00400000,			"pcommit" },
+	{ LXCS_CPUID7_EBX, 0x00800000,			"clflushopt" },
+	{ LXCS_CPUID7_EBX, 0x01000000,			"clwb" },
+
+	{ LXCS_CPUID7_EBX, 0x04000000,			"avx512pf" },
+	{ LXCS_CPUID7_EBX, 0x08000000,			"avx512er" },
+	{ LXCS_CPUID7_EBX, 0x10000000,			"avx512cd" },
+	{ LXCS_CPUID7_EBX, 0x20000000,			"sha_ni" },
+
+	/*
+	 * Extended state features, CPUID level 0x0000000d:1 (eax)
+	 */
+	{ LXCS_CPUIDD1_EAX, 0x00000001,			"xsaveopt" },
+	{ LXCS_CPUIDD1_EAX, 0x00000002,			"xsavec" },
+	{ LXCS_CPUIDD1_EAX, 0x00000004,			"xgetbv1" },
+	{ LXCS_CPUIDD1_EAX, 0x00000008,			"xsaves" },
+
+	/*
+	 * Skipped:
+	 * "cqm_llc",
+	 * "cqm_occup_llc",
+	 * "clzero",
+	 */
+
+	/*
+	 * Thermal and Power Management Leaf, CPUID level 0x00000006 (eax)
+	 * Skipped:
+	 * "dtherm",
+	 * "ida",
+	 * "arat",
+	 * "pln",
+	 * "pts",
+	 * "hwp",
+	 * "hwp_notify",
+	 * "hwp_act_window",
+	 * "hwp_epp",
+	 * "hwp_pkg_req",
+	 */
+
+	/*
+	 * AMD SVM Feature Identification, CPUID level 0x8000000a (edx)
+	 * Skipped:
+	 * "npt",
+	 * "lbrv",
+	 * "svm_lock",
+	 * "nrip_save",
+	 * "tsc_scale",
+	 * "vmcb_clean",
+	 * "flushbyasid",
+	 * "decodeassists",
+	 * "pausefilter",
+	 * "pfthreshold",
+	 */
+};
+
+#define	LX_CPUINFO_MAPPING_MAX	\
+	(sizeof (lx_cpuinfo_mappings) / sizeof (lx_cpuinfo_mappings[0]))
+
+/* ARGSUSED */
 static void
 lxpr_read_cpuinfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
 	int i;
-	uint32_t bits;
 	cpu_t *cp, *cpstart;
 	int pools_enabled;
-	const char **fp;
 	char brandstr[CPU_IDSTRLEN];
-	struct cpuid_regs cpr;
-	int maxeax;
-	int std_ecx, std_edx, ext_ecx, ext_edx;
 
 	ASSERT(lxpnp->lxpr_type == LXPR_CPUINFO);
 
@@ -5004,29 +5276,38 @@ lxpr_read_cpuinfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 
 	cp = cpstart = CPU->cpu_part->cp_cpulist;
 	do {
-		/*
-		 * This returns the maximum eax value for standard cpuid
-		 * functions in eax.
-		 */
+		struct cpuid_regs cpr;
+		uint32_t maxeax, xmaxeax, cpuid_res[LXCS_REG_MAX] = { 0 };
+
 		cpr.cp_eax = 0;
-		(void) cpuid_insn(cp, &cpr);
-		maxeax = cpr.cp_eax;
+		maxeax = cpuid_insn(cp, &cpr);
+		cpr.cp_eax = 0x80000000;
+		xmaxeax = cpuid_insn(cp, &cpr);
 
-		/*
-		 * Get standard x86 feature flags.
-		 */
-		cpr.cp_eax = 1;
-		(void) cpuid_insn(cp, &cpr);
-		std_ecx = cpr.cp_ecx;
-		std_edx = cpr.cp_edx;
-
-		/*
-		 * Now get extended feature flags.
-		 */
-		cpr.cp_eax = 0x80000001;
-		(void) cpuid_insn(cp, &cpr);
-		ext_ecx = cpr.cp_ecx;
-		ext_edx = cpr.cp_edx;
+		cpuid_res[LXCS_ALWAYS] = 1;
+		if (maxeax >= 1) {
+			cpr.cp_eax = 1;
+			(void) cpuid_insn(cp, &cpr);
+			cpuid_res[LXCS_CPUID1_ECX] = cpr.cp_ecx;
+			cpuid_res[LXCS_CPUID1_EDX] = cpr.cp_edx;
+		}
+		if (maxeax >= 7) {
+			cpr.cp_eax = 7;
+			(void) cpuid_insn(cp, &cpr);
+			cpuid_res[LXCS_CPUID7_EBX] = cpr.cp_ebx;
+		}
+		if (maxeax >= 0xd) {
+			cpr.cp_eax = 0xd;
+			cpr.cp_ecx = 1;
+			(void) cpuid_insn(cp, &cpr);
+			cpuid_res[LXCS_CPUIDD1_EAX] = cpr.cp_eax;
+		}
+		if (xmaxeax >= 0x80000001) {
+			cpr.cp_eax = 0x80000001;
+			(void) cpuid_insn(cp, &cpr);
+			cpuid_res[LXCS_CPUIDX1_ECX] = cpr.cp_ecx;
+			cpuid_res[LXCS_CPUIDX1_EDX] = cpr.cp_edx;
+		}
 
 		(void) cpuid_getbrandstr(cp, brandstr, CPU_IDSTRLEN);
 
@@ -5086,52 +5367,16 @@ lxpr_read_cpuinfo(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 		    fpu_exists ? "yes" : "no", fpu_exists ? "yes" : "no",
 		    maxeax);
 
-		for (bits = std_edx, fp = intc_edx, i = 0;
-		    i < sizeof (intc_edx) / sizeof (intc_edx[0]); fp++, i++)
-			if ((bits & (1 << i)) != 0 && *fp)
-				lxpr_uiobuf_printf(uiobuf, " %s", *fp);
+		/* Print CPUID feature flags */
+		for (i = 0; i < LX_CPUINFO_MAPPING_MAX; i++) {
+			lx_cpuinfo_mapping_t *lxm = &lx_cpuinfo_mappings[i];
 
-		/*
-		 * name additional features where appropriate
-		 */
-		switch (x86_vendor) {
-		case X86_VENDOR_Intel:
-			for (bits = ext_edx, fp = intc_x_edx, i = 0;
-			    i < sizeof (intc_x_edx) / sizeof (intc_x_edx[0]);
-			    fp++, i++)
-				if ((bits & (1 << i)) != 0 && *fp)
-					lxpr_uiobuf_printf(uiobuf, " %s", *fp);
-			break;
-
-		case X86_VENDOR_AMD:
-			for (bits = ext_edx, fp = amd_x_edx, i = 0;
-			    i < sizeof (amd_x_edx) / sizeof (amd_x_edx[0]);
-			    fp++, i++)
-				if ((bits & (1 << i)) != 0 && *fp)
-					lxpr_uiobuf_printf(uiobuf, " %s", *fp);
-
-			for (bits = ext_ecx, fp = amd_x_ecx, i = 0;
-			    i < sizeof (amd_x_ecx) / sizeof (amd_x_ecx[0]);
-			    fp++, i++)
-				if ((bits & (1 << i)) != 0 && *fp)
-					lxpr_uiobuf_printf(uiobuf, " %s", *fp);
-			break;
-
-		case X86_VENDOR_TM:
-			for (bits = ext_edx, fp = tm_x_edx, i = 0;
-			    i < sizeof (tm_x_edx) / sizeof (tm_x_edx[0]);
-			    fp++, i++)
-				if ((bits & (1 << i)) != 0 && *fp)
-					lxpr_uiobuf_printf(uiobuf, " %s", *fp);
-			break;
-		default:
-			break;
+			ASSERT(lxm->lxcm_source < LXCS_REG_MAX);
+			if (cpuid_res[lxm->lxcm_source] & lxm->lxcm_flag) {
+				lxpr_uiobuf_printf(uiobuf, " %s",
+				    lxm->lxcm_name);
+			}
 		}
-
-		for (bits = std_ecx, fp = intc_ecx, i = 0;
-		    i < sizeof (intc_ecx) / sizeof (intc_ecx[0]); fp++, i++)
-			if ((bits & (1 << i)) != 0 && *fp)
-				lxpr_uiobuf_printf(uiobuf, " %s", *fp);
 
 		lxpr_uiobuf_printf(uiobuf, "\n\n");
 
@@ -5157,6 +5402,7 @@ lxpr_read_fd(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
  * which we support and which may be checked by various components to see if
  * they are loaded.
  */
+/* ARGSUSED */
 static void
 lxpr_read_filesystems(lxpr_node_t *lxpnp, lxpr_uiobuf_t *uiobuf)
 {
@@ -5576,10 +5822,8 @@ lxpr_lookup_task_tid_dir(vnode_t *dp, char *comp)
 static vnode_t *
 lxpr_lookup_fddir(vnode_t *dp, char *comp)
 {
-	lxpr_node_t *dlxpnp = VTOLXP(dp);
-
-	ASSERT(dlxpnp->lxpr_type == LXPR_PID_FDDIR ||
-	    dlxpnp->lxpr_type == LXPR_PID_TID_FDDIR);
+	ASSERT(VTOLXP(dp)->lxpr_type == LXPR_PID_FDDIR ||
+	    VTOLXP(dp)->lxpr_type == LXPR_PID_TID_FDDIR);
 
 	return (lxpr_lookup_fdnode(dp, comp));
 }
@@ -5759,7 +6003,7 @@ lxpr_readdir(vnode_t *dp, uio_t *uiop, cred_t *cr, int *eofp,
 	if (uoffset % LXPR_SDSIZE)
 		return (ENOENT);
 
-	return (lxpr_readdir_function[lxpnp->lxpr_type](lxpnp, uiop, eofp));
+	return (lxpr_readdir_function[type](lxpnp, uiop, eofp));
 }
 
 /* ARGSUSED */
@@ -6580,6 +6824,7 @@ lxpr_xlate_sack(char *val, int size)
  * set two properties on the netstack_tcp, so we can't reuse
  * lxpr_write_tcp_property.
  */
+/* ARGSUSED */
 static int
 lxpr_write_sys_net_ipv4_ip_lport_range(lxpr_node_t *lxpnp, struct uio *uio,
     struct cred *cr, caller_context_t *ct)
@@ -6962,6 +7207,7 @@ lxpr_realvp(vnode_t *vp, vnode_t **vpp, caller_context_t *ct)
 	return (0);
 }
 
+/* ARGSUSED */
 static int
 lxpr_write(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
     caller_context_t *ct)
@@ -6986,6 +7232,7 @@ lxpr_write(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr,
 }
 
 /* Needed for writable files which are first "truncated" */
+/* ARGSUSED */
 static int
 lxpr_space(vnode_t *vp, int cmd, flock64_t *bfp, int flag, offset_t offset,
     cred_t *cred, caller_context_t *ct)
@@ -7004,6 +7251,7 @@ lxpr_space(vnode_t *vp, int cmd, flock64_t *bfp, int flag, offset_t offset,
  * Needed for writable files which are first "truncated". We only support
  * truncation.
  */
+/* ARGSUSED */
 static int
 lxpr_setattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
     caller_context_t *ct)
@@ -7021,7 +7269,7 @@ lxpr_setattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 /*
  * We need to allow open with O_CREAT for the writable files.
  */
-/*ARGSUSED7*/
+/* ARGSUSED */
 static int
 lxpr_create(vnode_t *dvp, char *nm, vattr_t *vap, enum vcexcl exclusive,
     int mode, vnode_t **vpp, cred_t *cr, int flag, caller_context_t *ct,

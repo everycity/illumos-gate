@@ -174,6 +174,8 @@
 #include <util/sscanf.h>
 #include <sys/lx_brand.h>
 #include <sys/zfs_ioctl.h>
+#include <inet/tcp_impl.h>
+#include <inet/udp_impl.h>
 
 int	lx_debug = 0;
 
@@ -182,8 +184,7 @@ void	lx_free_brand_data(zone_t *);
 void	lx_setbrand(proc_t *);
 int	lx_getattr(zone_t *, int, void *, size_t *);
 int	lx_setattr(zone_t *, int, void *, size_t);
-int	lx_brandsys(int, int64_t *, uintptr_t, uintptr_t, uintptr_t,
-		uintptr_t, uintptr_t);
+int	lx_brandsys(int, int64_t *, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 void	lx_set_kern_version(zone_t *, char *);
 void	lx_copy_procdata(proc_t *, proc_t *);
 
@@ -333,7 +334,7 @@ lx_proc_exit(proc_t *p)
 	proc_t *cp;
 
 	mutex_enter(&p->p_lock);
-	VERIFY(lxpd = ptolxproc(p));
+	VERIFY((lxpd = ptolxproc(p)) != NULL);
 	VERIFY(lxpd->l_ptrace == 0);
 	if ((lxpd->l_flags & LX_PROC_CHILD_DEATHSIG) == 0) {
 		mutex_exit(&p->p_lock);
@@ -471,7 +472,7 @@ lx_map32limit(proc_t *p)
 	 * This is only relevant for 64-bit processes.
 	 */
 	if (p->p_model == DATAMODEL_LP64)
-		return (1 << 31);
+		return ((uint32_t)1 << 31);
 
 	return ((uint32_t)USERLIMIT32);
 }
@@ -549,6 +550,7 @@ lx_pagefault(proc_t *p, klwp_t *lwp, caddr_t addr, enum fault_type type,
  * Critically, this routine should _not_ modify any LWP state as the
  * savecontext() does not run until after this hook.
  */
+/* ARGSUSED */
 static caddr_t
 lx_sendsig_stack(int sig)
 {
@@ -583,6 +585,7 @@ lx_sendsig_stack(int sig)
  * per-LWP mode flags for system calls and stacks.  The pre-signal
  * context has already been saved and delivered to the user at this point.
  */
+/* ARGSUSED */
 static void
 lx_sendsig(int sig)
 {
@@ -832,7 +835,7 @@ lx_zone_zfs_open(ldi_handle_t *lh, dev_t *zfs_dev)
 	}
 	ldi_ident_release(li);
 	if (ldi_get_dev(*lh, zfs_dev) != 0) {
-		ldi_close(*lh, FREAD|FWRITE, kcred);
+		(void) ldi_close(*lh, FREAD|FWRITE, kcred);
 		return (-1);
 	}
 	return (0);
@@ -990,7 +993,7 @@ lx_zone_get_zvols(zone_t *zone, ldi_handle_t lh, minor_t *emul_minor)
 				    (*emul_minor)++);
 				if (zvol_name2minor(znm, &m) != 0) {
 					(void) zvol_create_minor(znm);
-					zvol_name2minor(znm, &m);
+					VERIFY(zvol_name2minor(znm, &m) == 0);
 				}
 				if (m != 0) {
 					vd->lxvd_real_dev = makedevice(
@@ -1044,7 +1047,7 @@ lx_zone_get_zfsds(zone_t *zone, minor_t *emul_minor)
 		vd->lxvd_type = LXVD_ZFS_DS;
 		vd->lxvd_real_dev = vfsp->vfs_dev;
 		vd->lxvd_emul_dev = makedevice(LX_MAJOR_DISK, (*emul_minor)++);
-		snprintf(vd->lxvd_name, sizeof (vd->lxvd_name),
+		(void) snprintf(vd->lxvd_name, sizeof (vd->lxvd_name),
 		    "zfsds%u", 0);
 		(void) strlcpy(vd->lxvd_real_name,
 		    refstr_value(vfsp->vfs_resource),
@@ -1070,6 +1073,47 @@ lx_zone_cleanup_vdisks(lx_zone_data_t *lxzd)
 	list_destroy(lxzd->lxzd_vdisks);
 	kmem_free(lxzd->lxzd_vdisks, sizeof (list_t));
 	lxzd->lxzd_vdisks = NULL;
+}
+
+/*
+ * See mod_set_extra_privports. By default illumos restricts access to
+ * ULP_DEF_EPRIV_PORT1 and ULP_DEF_EPRIV_PORT2 for TCP and UDP, even though
+ * these ports are outside of the privileged port range. Linux does not do
+ * this, so we need to remove these defaults.
+ */
+static void
+lx_fix_netstack()
+{
+	netstack_t	*ns;
+	tcp_stack_t	*tcps;
+	udp_stack_t	*udps;
+	in_port_t	*ports;
+	uint_t		i, nports;
+	kmutex_t	*lock;
+
+	ns = netstack_get_current();
+	if (ns == NULL)
+		return;
+
+	tcps = ns->netstack_tcp;
+	ports = tcps->tcps_g_epriv_ports;
+	nports = tcps->tcps_g_num_epriv_ports;
+	lock = &tcps->tcps_epriv_port_lock;
+
+	mutex_enter(lock);
+	for (i = 0; i < nports; i++)
+		ports[i] = 0;
+	mutex_exit(lock);
+
+	udps = ns->netstack_udp;
+	ports = udps->us_epriv_ports;
+	nports = udps->us_num_epriv_ports;
+	lock = &udps->us_epriv_port_lock;
+
+	mutex_enter(lock);
+	for (i = 0; i < nports; i++)
+		ports[i] = 0;
+	mutex_exit(lock);
 }
 
 void
@@ -1121,7 +1165,7 @@ lx_init_brand_data(zone_t *zone, kmutex_t *zsl)
 
 		lx_zone_get_zfsds(zone, &emul_minor);
 		lx_zone_get_zvols(zone, lh, &emul_minor);
-		ldi_close(lh, FREAD|FWRITE, kcred);
+		(void) ldi_close(lh, FREAD|FWRITE, kcred);
 	} else {
 		/* Avoid matching any devices */
 		data->lxzd_zfs_dev = makedevice(-1, 0);
@@ -1140,7 +1184,7 @@ lx_free_brand_data(zone_t *zone)
 		 * Since zone_kcred has been cleaned up already, close the
 		 * socket using the global kcred.
 		 */
-		ksocket_close(data->lxzd_ioctl_sock, kcred);
+		(void) ksocket_close(data->lxzd_ioctl_sock, kcred);
 		data->lxzd_ioctl_sock = NULL;
 	}
 	ASSERT(data->lxzd_cgroup == NULL);
@@ -1228,7 +1272,7 @@ lx_trace_sysreturn(int syscall_num, long ret)
  */
 int
 lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
-    uintptr_t arg3, uintptr_t arg4, uintptr_t arg5)
+    uintptr_t arg3, uintptr_t arg4)
 {
 	kthread_t *t = curthread;
 	klwp_t *lwp = ttolwp(t);
@@ -1313,6 +1357,20 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		pd = p->p_brand_data;
 		pd->l_handler = (uintptr_t)reg.lxbr_handler;
 		pd->l_flags = reg.lxbr_flags & LX_PROC_ALL;
+
+		/*
+		 * We can't fix up our netstack from the lx_init_brand_data
+		 * hook since that hook is run by zoneadmd (which has the GZ's
+		 * stack). Instead, we fix it up when the init process starts
+		 * inside the zone since it will have the proper stack.
+		 * Note that it is conceivable that a Linux init could be
+		 * illumos-aware and re-enable additional privileged ports,
+		 * then exec(2) over itself. This would cause those settings to
+		 * be lost, but this scenario is considered unlikely so we
+		 * don't worry about it.
+		 */
+		if (p->p_pid == p->p_zone->zone_proc_initpid)
+			lx_fix_netstack();
 
 		return (0);
 
@@ -1433,18 +1491,19 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		 */
 
 		int native_sig = lx_ltos_signo((int)arg2, 0);
-		pid_t native_pid;
-		int native_tid;
+		pid_t spid;
+		int stid;
 		sigqueue_t *sqp;
 
 		if (native_sig == 0)
 			return (EINVAL);
 
-		lx_lpid_to_spair((pid_t)arg1, &native_pid, &native_tid);
+		if (lx_lpid_to_spair((pid_t)arg1, &spid, &stid) != 0) {
+			return (ESRCH);
+		}
 		sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
 		mutex_enter(&curproc->p_lock);
-
-		if ((t = idtot(curproc, native_tid)) == NULL) {
+		if ((t = idtot(curproc, stid)) == NULL) {
 			mutex_exit(&curproc->p_lock);
 			kmem_free(sqp, sizeof (sigqueue_t));
 			return (ESRCH);
@@ -1483,42 +1542,19 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 		return (lx_ptrace_set_clone_inherit((int)arg1, arg2 == 0 ?
 		    B_FALSE : B_TRUE));
 
-	case B_HELPER_WAITID: {
-		idtype_t idtype = (idtype_t)arg1;
-		id_t id = (id_t)arg2;
-		siginfo_t *infop = (siginfo_t *)arg3;
-		int options = (int)arg4;
-
-		lwpd = ttolxlwp(curthread);
-
+	case B_PTRACE_SIG_RETURN: {
 		/*
-		 * Our brand-specific waitid helper only understands a subset of
-		 * the possible idtypes.  Ensure we keep to that subset here:
+		 * Our ptrace emulation must emit PR_SYSEXIT for rt_sigreturn.
+		 * Since that syscall does not pass through the normal
+		 * emulation, which would call lx_syscall_return, the event is
+		 * emitted manually. A successful result of the syscall is
+		 * assumed since there is little to be done in the face of
+		 * failure.
 		 */
-		if (idtype != P_ALL && idtype != P_PID && idtype != P_PGID) {
-			return (EINVAL);
-		}
+		struct regs *rp = lwptoregs(lwp);
 
-		/*
-		 * Enable the return of emulated ptrace(2) stop conditions
-		 * through lx_waitid_helper, and stash the Linux-specific
-		 * extra waitid() flags.
-		 */
-		lwpd->br_waitid_emulate = B_TRUE;
-		lwpd->br_waitid_flags = (int)arg5;
-
-#if defined(_SYSCALL32_IMPL)
-		if (get_udatamodel() != DATAMODEL_NATIVE) {
-			return (waitsys32(idtype, id, infop, options));
-		} else
-#endif
-		{
-			return (waitsys(idtype, id, infop, options));
-		}
-
-		lwpd->br_waitid_emulate = B_FALSE;
-		lwpd->br_waitid_flags = 0;
-
+		rp->r_r0 = 0;
+		lx_ptrace_stop(LX_PR_SYSEXIT);
 		return (0);
 	}
 
@@ -1744,7 +1780,7 @@ lx_brandsys(int cmd, int64_t *rval, uintptr_t arg1, uintptr_t arg2,
 			 * lx_syscall_return() looks at the errno in the LWP,
 			 * so set it here:
 			 */
-			set_errno(error);
+			(void) set_errno(error);
 		}
 		lx_syscall_return(ttolwp(curthread), (int)arg2, (long)arg3);
 
@@ -1842,6 +1878,7 @@ lx_kern_release_cmp(zone_t *zone, const char *vers)
  * file ownership.  This brand hook overrides the illumos native behaviour,
  * which is based on the PRIV_FILE_SETID privilege.
  */
+/* ARGSUSED */
 static int
 lx_setid_clear(vattr_t *vap, cred_t *cr)
 {
@@ -1875,11 +1912,11 @@ lx_copy_procdata(proc_t *cp, proc_t *pp)
 	 * be required.
 	 */
 	VERIFY(cp->p_brand == &lx_brand);
-	VERIFY(cpd = cp->p_brand_data);
+	VERIFY((cpd = cp->p_brand_data) != NULL);
 
 	mutex_enter(&pp->p_lock);
 	VERIFY(pp->p_brand == &lx_brand);
-	VERIFY(ppd = pp->p_brand_data);
+	VERIFY((ppd = pp->p_brand_data) != NULL);
 
 	bcopy(ppd, cpd, sizeof (lx_proc_data_t));
 	mutex_exit(&pp->p_lock);
@@ -2003,6 +2040,7 @@ lx_map_vdso(struct uarg *args, struct cred *cred)
  * Exec routine called by elfexec() to load either 32-bit or 64-bit Linux
  * binaries.
  */
+/* ARGSUSED4 */
 static int
 lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
     struct intpdata *idata, int level, long *execsz, int setid,
@@ -2084,6 +2122,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 		}
 
 		hsize = ehdr.e_phentsize;
+		/* LINTED: alignment */
 		phdrp = (Phdr *)phdrbase;
 		for (i = nphdrs; i > 0; i--) {
 			switch (phdrp->p_type) {
@@ -2093,6 +2132,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 				}
 				break;
 			}
+			/* LINTED: alignment */
 			phdrp = (Phdr *)((caddr_t)phdrp + hsize);
 		}
 		kmem_free(phdrbase, phdrsize);
@@ -2111,6 +2151,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 		}
 
 		hsize = ehdr.e_phentsize;
+		/* LINTED: alignment */
 		phdrp = (Elf32_Phdr *)phdrbase;
 		for (i = nphdrs; i > 0; i--) {
 			switch (phdrp->p_type) {
@@ -2120,6 +2161,7 @@ lx_elfexec(struct vnode *vp, struct execa *uap, struct uarg *args,
 				}
 				break;
 			}
+			/* LINTED: alignment */
 			phdrp = (Elf32_Phdr *)((caddr_t)phdrp + hsize);
 		}
 		kmem_free(phdrbase, phdrsize);
